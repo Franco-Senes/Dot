@@ -15,3 +15,8 @@
   sudo eopkg install git rust cargo libgtk-4-devel libadwaita-devel webkitgtk-6.0-devel \
     libsecret-devel sqlite3-devel openssl-devel flatpak-builder xorg-server-xvfb weston socat
   ```
+
+## 2. Códecs patentados (H.264/AAC) y binario Widevine en CEF precompilado — DOCUMENTADO
+
+- **Detalle:** Por requisito expreso del usuario (*"SIN compilar nuestro propio Chromium/CEF. Usamos los binarios precompilados de CEF que descarga cef-rs"*), se emplea la distribución oficial `cef_binary_156.0.30+g6028375+chromium-156.0.8078.96_linux64_minimal` de SpotifyCDN.
+- **Estado verificado en `libcef.so`:** Incluye de serie todos los códecs abiertos modernos (**AV1, VP9, VP8, Opus, Vorbis, FLAC, PCM, WebM, Ogg**), por lo que YouTube (1080p/4K), Vimeo y la inmensa mayoría de la web moderna funcionan sin restricciones. No incluye decodificadores patentados H.264/AAC/HEVC ni el binario propietario `libwidevinecdm.so` de Google (aunque sí el adaptador `WidevineCdm` por si el usuario instala su propio CDM).
