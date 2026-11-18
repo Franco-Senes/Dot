@@ -1,0 +1,9 @@
+[package]
+name = "gnome-platform"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+bitflags.workspace = true
+libc.workspace = true

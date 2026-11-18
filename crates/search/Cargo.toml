@@ -1,0 +1,19 @@
+[package]
+name = "search"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "search"
+path = "src/main.rs"
+
+[dependencies]
+anyhow.workspace = true
+cef.workspace = true
+gnome-platform.workspace = true
+libc.workspace = true
+once_cell.workspace = true
+percent-encoding.workspace = true
+search-core.workspace = true
+url.workspace = true

@@ -1,0 +1,1041 @@
+use crate::gdk::{Display, MemoryTexture, ModifierType};
+use crate::object::{
+    connect_signal_f64_f64, connect_signal_f64_f64_bool, connect_signal_i32_f64_f64,
+    connect_signal_i32_i32, connect_signal_key_pressed, connect_signal_key_released,
+    connect_signal_notify, connect_signal_void, to_cstring, ObjectRef, SignalHandlerId,
+};
+use crate::sys;
+use bitflags::bitflags;
+use std::ffi::CStr;
+use std::ptr;
+
+pub const STYLE_PROVIDER_PRIORITY_APPLICATION: u32 = 600;
+
+#[repr(i32)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Orientation {
+    Horizontal = 0,
+    Vertical = 1,
+}
+
+#[repr(i32)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Align {
+    Fill = 0,
+    Start = 1,
+    End = 2,
+    Center = 3,
+}
+
+#[repr(i32)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ContentFit {
+    Fill = 0,
+    Contain = 1,
+    Cover = 2,
+    ScaleDown = 3,
+}
+
+#[repr(i32)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PropagationPhase {
+    None = 0,
+    Capture = 1,
+    Bubble = 2,
+    Target = 3,
+}
+
+#[repr(i32)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EllipsizeMode {
+    None = 0,
+    Start = 1,
+    Middle = 2,
+    End = 3,
+}
+
+#[repr(i32)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum InputPurpose {
+    FreeForm = 0,
+    Url = 5,
+}
+
+bitflags! {
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    pub struct InputHints: u32 {
+        const NONE = 0;
+        const NO_SPELLCHECK = 1 << 1;
+        const NO_EMOJI = 1 << 10;
+    }
+}
+
+bitflags! {
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    pub struct ScrollFlags: i32 {
+        const NONE = 0;
+        const VERTICAL = 1 << 0;
+        const HORIZONTAL = 1 << 1;
+        const DISCRETE = 1 << 2;
+        const KINETIC = 1 << 3;
+        const BOTH_AXES = (1 << 0) | (1 << 1);
+    }
+}
+
+#[repr(i32)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RevealerTransitionType {
+    None = 0,
+    Crossfade = 1,
+    SlideRight = 2,
+    SlideLeft = 3,
+    SlideUp = 4,
+    SlideDown = 5,
+}
+
+pub trait AsController {
+    fn as_controller_ptr(&self) -> *mut sys::GtkEventController;
+
+    fn set_propagation_phase(&self, phase: PropagationPhase) {
+        unsafe {
+            sys::gtk_event_controller_set_propagation_phase(self.as_controller_ptr(), phase as i32);
+        }
+    }
+
+    fn current_event_state(&self) -> ModifierType {
+        let raw =
+            unsafe { sys::gtk_event_controller_get_current_event_state(self.as_controller_ptr()) };
+        ModifierType::from_bits_truncate(raw)
+    }
+}
+
+pub trait AsWidget {
+    fn as_widget_ptr(&self) -> *mut sys::GtkWidget;
+
+    fn set_visible(&self, visible: bool) {
+        unsafe {
+            sys::gtk_widget_set_visible(
+                self.as_widget_ptr(),
+                if visible { sys::GTRUE } else { sys::GFALSE },
+            );
+        }
+    }
+
+    fn is_visible(&self) -> bool {
+        unsafe { sys::gtk_widget_get_visible(self.as_widget_ptr()) != 0 }
+    }
+
+    fn set_sensitive(&self, sensitive: bool) {
+        unsafe {
+            sys::gtk_widget_set_sensitive(
+                self.as_widget_ptr(),
+                if sensitive { sys::GTRUE } else { sys::GFALSE },
+            );
+        }
+    }
+
+    fn set_hexpand(&self, expand: bool) {
+        unsafe {
+            sys::gtk_widget_set_hexpand(
+                self.as_widget_ptr(),
+                if expand { sys::GTRUE } else { sys::GFALSE },
+            );
+        }
+    }
+
+    fn set_vexpand(&self, expand: bool) {
+        unsafe {
+            sys::gtk_widget_set_vexpand(
+                self.as_widget_ptr(),
+                if expand { sys::GTRUE } else { sys::GFALSE },
+            );
+        }
+    }
+
+    fn set_halign(&self, align: Align) {
+        unsafe {
+            sys::gtk_widget_set_halign(self.as_widget_ptr(), align as i32);
+        }
+    }
+
+    fn set_valign(&self, align: Align) {
+        unsafe {
+            sys::gtk_widget_set_valign(self.as_widget_ptr(), align as i32);
+        }
+    }
+
+    fn set_margins(&self, top: i32, bottom: i32, start: i32, end: i32) {
+        unsafe {
+            sys::gtk_widget_set_margin_top(self.as_widget_ptr(), top);
+            sys::gtk_widget_set_margin_bottom(self.as_widget_ptr(), bottom);
+            sys::gtk_widget_set_margin_start(self.as_widget_ptr(), start);
+            sys::gtk_widget_set_margin_end(self.as_widget_ptr(), end);
+        }
+    }
+
+    fn set_size_request(&self, width: i32, height: i32) {
+        unsafe {
+            sys::gtk_widget_set_size_request(self.as_widget_ptr(), width, height);
+        }
+    }
+
+    fn width(&self) -> i32 {
+        unsafe { sys::gtk_widget_get_width(self.as_widget_ptr()) }
+    }
+
+    fn height(&self) -> i32 {
+        unsafe { sys::gtk_widget_get_height(self.as_widget_ptr()) }
+    }
+
+    fn scale_factor(&self) -> i32 {
+        unsafe { sys::gtk_widget_get_scale_factor(self.as_widget_ptr()).max(1) }
+    }
+
+    fn set_focusable(&self, focusable: bool) {
+        unsafe {
+            sys::gtk_widget_set_focusable(
+                self.as_widget_ptr(),
+                if focusable { sys::GTRUE } else { sys::GFALSE },
+            );
+            sys::gtk_widget_set_can_focus(
+                self.as_widget_ptr(),
+                if focusable { sys::GTRUE } else { sys::GFALSE },
+            );
+        }
+    }
+
+    fn grab_focus(&self) -> bool {
+        unsafe { sys::gtk_widget_grab_focus(self.as_widget_ptr()) != 0 }
+    }
+
+    fn has_focus(&self) -> bool {
+        unsafe { sys::gtk_widget_has_focus(self.as_widget_ptr()) != 0 }
+    }
+
+    fn set_can_target(&self, can_target: bool) {
+        unsafe {
+            sys::gtk_widget_set_can_target(
+                self.as_widget_ptr(),
+                if can_target { sys::GTRUE } else { sys::GFALSE },
+            );
+        }
+    }
+
+    fn add_css_class(&self, css_class: &str) {
+        let c_cls = to_cstring(css_class);
+        unsafe {
+            sys::gtk_widget_add_css_class(self.as_widget_ptr(), c_cls.as_ptr());
+        }
+    }
+
+    fn remove_css_class(&self, css_class: &str) {
+        let c_cls = to_cstring(css_class);
+        unsafe {
+            sys::gtk_widget_remove_css_class(self.as_widget_ptr(), c_cls.as_ptr());
+        }
+    }
+
+    fn add_controller(&self, controller: &impl AsController) {
+        unsafe {
+            // `gtk_widget_add_controller` adopta (`transfer full`) una referencia del controlador.
+            let ctrl_ptr = controller.as_controller_ptr();
+            sys::g_object_ref(ctrl_ptr.cast());
+            sys::gtk_widget_add_controller(self.as_widget_ptr(), ctrl_ptr);
+        }
+    }
+
+    fn set_cursor_from_name(&self, name: Option<&str>) {
+        unsafe {
+            if let Some(n) = name {
+                let c_name = to_cstring(n);
+                sys::gtk_widget_set_cursor_from_name(self.as_widget_ptr(), c_name.as_ptr());
+            } else {
+                sys::gtk_widget_set_cursor_from_name(self.as_widget_ptr(), ptr::null());
+            }
+        }
+    }
+
+    fn set_tooltip_text(&self, text: Option<&str>) {
+        unsafe {
+            if let Some(t) = text {
+                let c_text = to_cstring(t);
+                sys::gtk_widget_set_tooltip_text(self.as_widget_ptr(), c_text.as_ptr());
+            } else {
+                sys::gtk_widget_set_tooltip_text(self.as_widget_ptr(), ptr::null());
+            }
+        }
+    }
+
+    fn queue_draw(&self) {
+        unsafe {
+            sys::gtk_widget_queue_draw(self.as_widget_ptr());
+        }
+    }
+
+    fn connect_scale_factor_notify<F: Fn() + 'static>(&self, callback: F) -> SignalHandlerId {
+        connect_signal_notify(self.as_widget_ptr().cast(), "scale-factor", callback)
+    }
+}
+
+pub trait AsEditable: AsWidget {
+    fn as_editable_ptr(&self) -> *mut sys::GtkEditable {
+        self.as_widget_ptr().cast()
+    }
+
+    fn text(&self) -> String {
+        unsafe {
+            let ptr = sys::gtk_editable_get_text(self.as_editable_ptr());
+            if ptr.is_null() {
+                String::new()
+            } else {
+                CStr::from_ptr(ptr).to_string_lossy().into_owned()
+            }
+        }
+    }
+
+    fn set_text(&self, text: &str) {
+        let c_text = to_cstring(text);
+        unsafe {
+            sys::gtk_editable_set_text(self.as_editable_ptr(), c_text.as_ptr());
+        }
+    }
+
+    fn select_region(&self, start_pos: i32, end_pos: i32) {
+        unsafe {
+            sys::gtk_editable_select_region(self.as_editable_ptr(), start_pos, end_pos);
+        }
+    }
+
+    fn select_all(&self) {
+        self.select_region(0, -1);
+    }
+
+    fn set_position(&self, position: i32) {
+        unsafe {
+            sys::gtk_editable_set_position(self.as_editable_ptr(), position);
+        }
+    }
+
+    fn connect_changed<F: Fn() + 'static>(&self, callback: F) -> SignalHandlerId {
+        connect_signal_void(self.as_widget_ptr().cast(), "changed", false, callback)
+    }
+}
+
+#[derive(Clone)]
+pub struct Widget {
+    pub(crate) obj: ObjectRef,
+}
+
+impl AsWidget for Widget {
+    fn as_widget_ptr(&self) -> *mut sys::GtkWidget {
+        self.obj.as_ptr().cast()
+    }
+}
+
+#[derive(Clone)]
+pub struct BoxWidget {
+    obj: ObjectRef,
+}
+
+impl BoxWidget {
+    pub fn new(orientation: Orientation, spacing: i32) -> Self {
+        let ptr = unsafe { sys::gtk_box_new(orientation as i32, spacing) };
+        let obj = unsafe { ObjectRef::from_new_ptr(ptr.cast()) };
+        Self { obj }
+    }
+
+    pub fn append(&self, child: &impl AsWidget) {
+        unsafe {
+            sys::gtk_box_append(self.obj.as_ptr().cast(), child.as_widget_ptr());
+        }
+    }
+
+    pub fn remove(&self, child: &impl AsWidget) {
+        unsafe {
+            sys::gtk_box_remove(self.obj.as_ptr().cast(), child.as_widget_ptr());
+        }
+    }
+}
+
+impl AsWidget for BoxWidget {
+    fn as_widget_ptr(&self) -> *mut sys::GtkWidget {
+        self.obj.as_ptr().cast()
+    }
+}
+
+#[derive(Clone)]
+pub struct Overlay {
+    obj: ObjectRef,
+}
+
+impl Overlay {
+    pub fn new() -> Self {
+        let ptr = unsafe { sys::gtk_overlay_new() };
+        let obj = unsafe { ObjectRef::from_new_ptr(ptr.cast()) };
+        Self { obj }
+    }
+
+    pub fn set_child(&self, child: Option<&impl AsWidget>) {
+        unsafe {
+            let ptr = child.map_or(ptr::null_mut(), AsWidget::as_widget_ptr);
+            sys::gtk_overlay_set_child(self.obj.as_ptr().cast(), ptr);
+        }
+    }
+
+    pub fn add_overlay(&self, widget: &impl AsWidget) {
+        unsafe {
+            sys::gtk_overlay_add_overlay(self.obj.as_ptr().cast(), widget.as_widget_ptr());
+        }
+    }
+
+    pub fn set_measure_overlay(&self, widget: &impl AsWidget, measure: bool) {
+        unsafe {
+            sys::gtk_overlay_set_measure_overlay(
+                self.obj.as_ptr().cast(),
+                widget.as_widget_ptr(),
+                if measure { sys::GTRUE } else { sys::GFALSE },
+            );
+        }
+    }
+
+    pub fn set_clip_overlay(&self, widget: &impl AsWidget, clip: bool) {
+        unsafe {
+            sys::gtk_overlay_set_clip_overlay(
+                self.obj.as_ptr().cast(),
+                widget.as_widget_ptr(),
+                if clip { sys::GTRUE } else { sys::GFALSE },
+            );
+        }
+    }
+}
+
+impl Default for Overlay {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl AsWidget for Overlay {
+    fn as_widget_ptr(&self) -> *mut sys::GtkWidget {
+        self.obj.as_ptr().cast()
+    }
+}
+
+#[derive(Clone)]
+pub struct Picture {
+    obj: ObjectRef,
+}
+
+impl Picture {
+    pub fn new() -> Self {
+        let ptr = unsafe { sys::gtk_picture_new() };
+        let obj = unsafe { ObjectRef::from_new_ptr(ptr.cast()) };
+        Self { obj }
+    }
+
+    pub fn set_texture(&self, texture: Option<&MemoryTexture>) {
+        unsafe {
+            let paintable = texture.map_or(ptr::null_mut(), MemoryTexture::as_paintable_ptr);
+            sys::gtk_picture_set_paintable(self.obj.as_ptr().cast(), paintable);
+        }
+    }
+
+    pub fn set_can_shrink(&self, can_shrink: bool) {
+        unsafe {
+            sys::gtk_picture_set_can_shrink(
+                self.obj.as_ptr().cast(),
+                if can_shrink { sys::GTRUE } else { sys::GFALSE },
+            );
+        }
+    }
+
+    pub fn set_content_fit(&self, fit: ContentFit) {
+        unsafe {
+            sys::gtk_picture_set_content_fit(self.obj.as_ptr().cast(), fit as i32);
+        }
+    }
+}
+
+impl Default for Picture {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl AsWidget for Picture {
+    fn as_widget_ptr(&self) -> *mut sys::GtkWidget {
+        self.obj.as_ptr().cast()
+    }
+}
+
+#[derive(Clone)]
+pub struct DrawingArea {
+    obj: ObjectRef,
+}
+
+impl DrawingArea {
+    pub fn new() -> Self {
+        let ptr = unsafe { sys::gtk_drawing_area_new() };
+        let obj = unsafe { ObjectRef::from_new_ptr(ptr.cast()) };
+        Self { obj }
+    }
+
+    pub fn connect_resize<F: Fn(i32, i32) + 'static>(&self, callback: F) -> SignalHandlerId {
+        connect_signal_i32_i32(self.obj.as_ptr(), "resize", callback)
+    }
+}
+
+impl Default for DrawingArea {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl AsWidget for DrawingArea {
+    fn as_widget_ptr(&self) -> *mut sys::GtkWidget {
+        self.obj.as_ptr().cast()
+    }
+}
+
+#[derive(Clone)]
+pub struct Entry {
+    obj: ObjectRef,
+}
+
+impl Entry {
+    pub fn new() -> Self {
+        let ptr = unsafe { sys::gtk_entry_new() };
+        let obj = unsafe { ObjectRef::from_new_ptr(ptr.cast()) };
+        Self { obj }
+    }
+
+    pub fn set_placeholder_text(&self, text: &str) {
+        let c_text = to_cstring(text);
+        unsafe {
+            sys::gtk_entry_set_placeholder_text(self.obj.as_ptr().cast(), c_text.as_ptr());
+        }
+    }
+
+    pub fn set_alignment(&self, xalign: f32) {
+        unsafe {
+            sys::gtk_entry_set_alignment(self.obj.as_ptr().cast(), xalign);
+        }
+    }
+
+    pub fn set_input_purpose(&self, purpose: InputPurpose) {
+        unsafe {
+            sys::gtk_entry_set_input_purpose(self.obj.as_ptr().cast(), purpose as i32);
+        }
+    }
+
+    pub fn set_input_hints(&self, hints: InputHints) {
+        unsafe {
+            sys::gtk_entry_set_input_hints(self.obj.as_ptr().cast(), hints.bits());
+        }
+    }
+
+    pub fn grab_focus_without_selecting(&self) -> bool {
+        unsafe { sys::gtk_entry_grab_focus_without_selecting(self.obj.as_ptr().cast()) != 0 }
+    }
+
+    pub fn connect_activate<F: Fn() + 'static>(&self, callback: F) -> SignalHandlerId {
+        connect_signal_void(self.obj.as_ptr(), "activate", false, callback)
+    }
+}
+
+impl Default for Entry {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl AsWidget for Entry {
+    fn as_widget_ptr(&self) -> *mut sys::GtkWidget {
+        self.obj.as_ptr().cast()
+    }
+}
+
+impl AsEditable for Entry {}
+
+#[derive(Clone)]
+pub struct SearchEntry {
+    obj: ObjectRef,
+}
+
+impl SearchEntry {
+    pub fn new() -> Self {
+        let ptr = unsafe { sys::gtk_search_entry_new() };
+        let obj = unsafe { ObjectRef::from_new_ptr(ptr.cast()) };
+        Self { obj }
+    }
+
+    pub fn set_placeholder_text(&self, text: &str) {
+        let c_text = to_cstring(text);
+        unsafe {
+            sys::gtk_search_entry_set_placeholder_text(self.obj.as_ptr().cast(), c_text.as_ptr());
+        }
+    }
+
+    pub fn connect_activate<F: Fn() + 'static>(&self, callback: F) -> SignalHandlerId {
+        connect_signal_void(self.obj.as_ptr(), "activate", false, callback)
+    }
+
+    pub fn connect_search_changed<F: Fn() + 'static>(&self, callback: F) -> SignalHandlerId {
+        connect_signal_void(self.obj.as_ptr(), "search-changed", false, callback)
+    }
+
+    pub fn connect_stop_search<F: Fn() + 'static>(&self, callback: F) -> SignalHandlerId {
+        connect_signal_void(self.obj.as_ptr(), "stop-search", false, callback)
+    }
+
+    pub fn connect_next_match<F: Fn() + 'static>(&self, callback: F) -> SignalHandlerId {
+        connect_signal_void(self.obj.as_ptr(), "next-match", false, callback)
+    }
+
+    pub fn connect_previous_match<F: Fn() + 'static>(&self, callback: F) -> SignalHandlerId {
+        connect_signal_void(self.obj.as_ptr(), "previous-match", false, callback)
+    }
+}
+
+impl Default for SearchEntry {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl AsWidget for SearchEntry {
+    fn as_widget_ptr(&self) -> *mut sys::GtkWidget {
+        self.obj.as_ptr().cast()
+    }
+}
+
+impl AsEditable for SearchEntry {}
+
+#[derive(Clone)]
+pub struct Label {
+    obj: ObjectRef,
+}
+
+impl Label {
+    pub fn new(text: Option<&str>) -> Self {
+        let ptr = unsafe {
+            if let Some(t) = text {
+                let c_text = to_cstring(t);
+                sys::gtk_label_new(c_text.as_ptr())
+            } else {
+                sys::gtk_label_new(ptr::null())
+            }
+        };
+        let obj = unsafe { ObjectRef::from_new_ptr(ptr.cast()) };
+        Self { obj }
+    }
+
+    pub fn set_text(&self, text: &str) {
+        let c_text = to_cstring(text);
+        unsafe {
+            sys::gtk_label_set_text(self.obj.as_ptr().cast(), c_text.as_ptr());
+        }
+    }
+
+    pub fn set_ellipsize(&self, mode: EllipsizeMode) {
+        unsafe {
+            sys::gtk_label_set_ellipsize(self.obj.as_ptr().cast(), mode as i32);
+        }
+    }
+
+    pub fn set_xalign(&self, xalign: f32) {
+        unsafe {
+            sys::gtk_label_set_xalign(self.obj.as_ptr().cast(), xalign);
+        }
+    }
+
+    pub fn set_max_width_chars(&self, chars: i32) {
+        unsafe {
+            sys::gtk_label_set_max_width_chars(self.obj.as_ptr().cast(), chars);
+        }
+    }
+
+    pub fn set_wrap(&self, wrap: bool) {
+        unsafe {
+            sys::gtk_label_set_wrap(
+                self.obj.as_ptr().cast(),
+                if wrap { sys::GTRUE } else { sys::GFALSE },
+            );
+        }
+    }
+}
+
+impl AsWidget for Label {
+    fn as_widget_ptr(&self) -> *mut sys::GtkWidget {
+        self.obj.as_ptr().cast()
+    }
+}
+
+#[derive(Clone)]
+pub struct Button {
+    obj: ObjectRef,
+}
+
+impl Button {
+    pub fn with_label(label: &str) -> Self {
+        let c_label = to_cstring(label);
+        let ptr = unsafe { sys::gtk_button_new_with_label(c_label.as_ptr()) };
+        let obj = unsafe { ObjectRef::from_new_ptr(ptr.cast()) };
+        Self { obj }
+    }
+
+    pub fn from_icon_name(icon_name: &str) -> Self {
+        let c_icon = to_cstring(icon_name);
+        let ptr = unsafe { sys::gtk_button_new_from_icon_name(c_icon.as_ptr()) };
+        let obj = unsafe { ObjectRef::from_new_ptr(ptr.cast()) };
+        Self { obj }
+    }
+
+    pub fn connect_clicked<F: Fn() + 'static>(&self, callback: F) -> SignalHandlerId {
+        connect_signal_void(self.obj.as_ptr(), "clicked", false, callback)
+    }
+}
+
+impl AsWidget for Button {
+    fn as_widget_ptr(&self) -> *mut sys::GtkWidget {
+        self.obj.as_ptr().cast()
+    }
+}
+
+#[derive(Clone)]
+pub struct ProgressBar {
+    obj: ObjectRef,
+}
+
+impl ProgressBar {
+    pub fn new() -> Self {
+        let ptr = unsafe { sys::gtk_progress_bar_new() };
+        let obj = unsafe { ObjectRef::from_new_ptr(ptr.cast()) };
+        Self { obj }
+    }
+
+    pub fn set_fraction(&self, fraction: f64) {
+        unsafe {
+            sys::gtk_progress_bar_set_fraction(self.obj.as_ptr().cast(), fraction.clamp(0.0, 1.0));
+        }
+    }
+
+    pub fn pulse(&self) {
+        unsafe {
+            sys::gtk_progress_bar_pulse(self.obj.as_ptr().cast());
+        }
+    }
+}
+
+impl Default for ProgressBar {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl AsWidget for ProgressBar {
+    fn as_widget_ptr(&self) -> *mut sys::GtkWidget {
+        self.obj.as_ptr().cast()
+    }
+}
+
+#[derive(Clone)]
+pub struct Revealer {
+    obj: ObjectRef,
+}
+
+impl Revealer {
+    pub fn new() -> Self {
+        let ptr = unsafe { sys::gtk_revealer_new() };
+        let obj = unsafe { ObjectRef::from_new_ptr(ptr.cast()) };
+        Self { obj }
+    }
+
+    pub fn set_child(&self, child: Option<&impl AsWidget>) {
+        unsafe {
+            let ptr = child.map_or(ptr::null_mut(), AsWidget::as_widget_ptr);
+            sys::gtk_revealer_set_child(self.obj.as_ptr().cast(), ptr);
+        }
+    }
+
+    pub fn set_reveal_child(&self, reveal: bool) {
+        unsafe {
+            sys::gtk_revealer_set_reveal_child(
+                self.obj.as_ptr().cast(),
+                if reveal { sys::GTRUE } else { sys::GFALSE },
+            );
+        }
+    }
+
+    pub fn reveals_child(&self) -> bool {
+        unsafe { sys::gtk_revealer_get_reveal_child(self.obj.as_ptr().cast()) != 0 }
+    }
+
+    pub fn set_transition_type(&self, transition: RevealerTransitionType) {
+        unsafe {
+            sys::gtk_revealer_set_transition_type(self.obj.as_ptr().cast(), transition as i32);
+        }
+    }
+
+    pub fn set_transition_duration(&self, ms: u32) {
+        unsafe {
+            sys::gtk_revealer_set_transition_duration(self.obj.as_ptr().cast(), ms);
+        }
+    }
+}
+
+impl Default for Revealer {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl AsWidget for Revealer {
+    fn as_widget_ptr(&self) -> *mut sys::GtkWidget {
+        self.obj.as_ptr().cast()
+    }
+}
+
+#[derive(Clone)]
+pub struct CssProvider {
+    obj: ObjectRef,
+}
+
+impl CssProvider {
+    pub fn new() -> Self {
+        let ptr = unsafe { sys::gtk_css_provider_new() };
+        let obj = unsafe { ObjectRef::from_new_ptr(ptr.cast()) };
+        Self { obj }
+    }
+
+    pub fn load_from_string(&self, css: &str) {
+        let c_css = to_cstring(css);
+        unsafe {
+            sys::gtk_css_provider_load_from_string(self.obj.as_ptr().cast(), c_css.as_ptr());
+        }
+    }
+
+    pub fn add_to_display(&self, display: &Display, priority: u32) {
+        unsafe {
+            sys::gtk_style_context_add_provider_for_display(
+                display.as_ptr(),
+                self.obj.as_ptr().cast(),
+                priority,
+            );
+        }
+    }
+}
+
+impl Default for CssProvider {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+#[derive(Clone)]
+pub struct EventControllerMotion {
+    obj: ObjectRef,
+}
+
+impl EventControllerMotion {
+    pub fn new() -> Self {
+        let ptr = unsafe { sys::gtk_event_controller_motion_new() };
+        let obj = unsafe { ObjectRef::from_new_ptr(ptr.cast()) };
+        Self { obj }
+    }
+
+    pub fn connect_enter<F: Fn(f64, f64) + 'static>(&self, callback: F) -> SignalHandlerId {
+        connect_signal_f64_f64(self.obj.as_ptr(), "enter", callback)
+    }
+
+    pub fn connect_motion<F: Fn(f64, f64) + 'static>(&self, callback: F) -> SignalHandlerId {
+        connect_signal_f64_f64(self.obj.as_ptr(), "motion", callback)
+    }
+
+    pub fn connect_leave<F: Fn() + 'static>(&self, callback: F) -> SignalHandlerId {
+        connect_signal_void(self.obj.as_ptr(), "leave", false, callback)
+    }
+}
+
+impl Default for EventControllerMotion {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl AsController for EventControllerMotion {
+    fn as_controller_ptr(&self) -> *mut sys::GtkEventController {
+        self.obj.as_ptr().cast()
+    }
+}
+
+#[derive(Clone)]
+pub struct EventControllerScroll {
+    obj: ObjectRef,
+}
+
+impl EventControllerScroll {
+    pub fn new(flags: ScrollFlags) -> Self {
+        let ptr = unsafe { sys::gtk_event_controller_scroll_new(flags.bits()) };
+        let obj = unsafe { ObjectRef::from_new_ptr(ptr.cast()) };
+        Self { obj }
+    }
+
+    pub fn connect_scroll<F: Fn(f64, f64) -> bool + 'static>(
+        &self,
+        callback: F,
+    ) -> SignalHandlerId {
+        connect_signal_f64_f64_bool(self.obj.as_ptr(), "scroll", callback)
+    }
+}
+
+impl AsController for EventControllerScroll {
+    fn as_controller_ptr(&self) -> *mut sys::GtkEventController {
+        self.obj.as_ptr().cast()
+    }
+}
+
+#[derive(Clone)]
+pub struct EventControllerKey {
+    obj: ObjectRef,
+}
+
+impl EventControllerKey {
+    pub fn new() -> Self {
+        let ptr = unsafe { sys::gtk_event_controller_key_new() };
+        let obj = unsafe { ObjectRef::from_new_ptr(ptr.cast()) };
+        Self { obj }
+    }
+
+    pub fn connect_key_pressed<F: Fn(u32, u32, u32) -> bool + 'static>(
+        &self,
+        callback: F,
+    ) -> SignalHandlerId {
+        connect_signal_key_pressed(self.obj.as_ptr(), callback)
+    }
+
+    pub fn connect_key_released<F: Fn(u32, u32, u32) + 'static>(
+        &self,
+        callback: F,
+    ) -> SignalHandlerId {
+        connect_signal_key_released(self.obj.as_ptr(), callback)
+    }
+}
+
+impl Default for EventControllerKey {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl AsController for EventControllerKey {
+    fn as_controller_ptr(&self) -> *mut sys::GtkEventController {
+        self.obj.as_ptr().cast()
+    }
+}
+
+#[derive(Clone)]
+pub struct EventControllerFocus {
+    obj: ObjectRef,
+}
+
+impl EventControllerFocus {
+    pub fn new() -> Self {
+        let ptr = unsafe { sys::gtk_event_controller_focus_new() };
+        let obj = unsafe { ObjectRef::from_new_ptr(ptr.cast()) };
+        Self { obj }
+    }
+
+    pub fn connect_enter<F: Fn() + 'static>(&self, callback: F) -> SignalHandlerId {
+        connect_signal_void(self.obj.as_ptr(), "enter", false, callback)
+    }
+
+    pub fn connect_leave<F: Fn() + 'static>(&self, callback: F) -> SignalHandlerId {
+        connect_signal_void(self.obj.as_ptr(), "leave", false, callback)
+    }
+}
+
+impl Default for EventControllerFocus {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl AsController for EventControllerFocus {
+    fn as_controller_ptr(&self) -> *mut sys::GtkEventController {
+        self.obj.as_ptr().cast()
+    }
+}
+
+#[derive(Clone)]
+pub struct GestureClick {
+    obj: ObjectRef,
+}
+
+impl GestureClick {
+    pub fn new() -> Self {
+        let ptr = unsafe { sys::gtk_gesture_click_new() };
+        let obj = unsafe { ObjectRef::from_new_ptr(ptr.cast()) };
+        Self { obj }
+    }
+
+    /// `button = 0` escucha cualquier botón del ratón (izquierdo, central, derecho).
+    pub fn set_button(&self, button: u32) {
+        unsafe {
+            sys::gtk_gesture_single_set_button(self.obj.as_ptr().cast(), button);
+        }
+    }
+
+    pub fn current_button(&self) -> u32 {
+        unsafe { sys::gtk_gesture_single_get_current_button(self.obj.as_ptr().cast()) }
+    }
+
+    pub fn connect_pressed<F: Fn(i32, f64, f64) + 'static>(&self, callback: F) -> SignalHandlerId {
+        connect_signal_i32_f64_f64(self.obj.as_ptr(), "pressed", callback)
+    }
+
+    pub fn connect_released<F: Fn(i32, f64, f64) + 'static>(&self, callback: F) -> SignalHandlerId {
+        connect_signal_i32_f64_f64(self.obj.as_ptr(), "released", callback)
+    }
+}
+
+impl Default for GestureClick {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl AsController for GestureClick {
+    fn as_controller_ptr(&self) -> *mut sys::GtkEventController {
+        self.obj.as_ptr().cast()
+    }
+}
+
+#[derive(Clone)]
+pub struct GestureSwipe {
+    obj: ObjectRef,
+}
+
+impl GestureSwipe {
+    pub fn new() -> Self {
+        let ptr = unsafe { sys::gtk_gesture_swipe_new() };
+        let obj = unsafe { ObjectRef::from_new_ptr(ptr.cast()) };
+        Self { obj }
+    }
+
+    pub fn connect_swipe<F: Fn(f64, f64) + 'static>(&self, callback: F) -> SignalHandlerId {
+        connect_signal_f64_f64(self.obj.as_ptr(), "swipe", callback)
+    }
+}
+
+impl Default for GestureSwipe {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl AsController for GestureSwipe {
+    fn as_controller_ptr(&self) -> *mut sys::GtkEventController {
+        self.obj.as_ptr().cast()
+    }
+}
