@@ -8,11 +8,16 @@ de herramientas, sin página de inicio, sin inicio de sesión.
 El código original está en `./upstream` (solo lectura, ignorado por git).
 
 ## Stack obligatorio
-- Rust estable (edición 2021 o posterior).
-- gtk4-rs, libadwaita-rs y el crate `webkit6` (WebKitGTK 6.0, la API para GTK4).
-- Build: Cargo para el código y Meson para instalar los datos (.desktop,
-  metainfo, iconos, esquema GSettings).
-- Distribución principal: Flatpak (runtime org.gnome.Platform).
+- **Todo en Rust en la máxima medida posible** (requisito explícito del usuario, prioritario sobre el kit):
+  - Rust estable (edición 2021 o posterior) en un **Cargo workspace**:
+    - `crates/search`: aplicación GUI (`gtk4`, `libadwaita`, `webkit6` — WebKitGTK 6.0).
+    - `crates/search-core`: toda la lógica de dominio sin dependencia de GTK/WebKit (rutas, URL/búsqueda, sesiones, historial, marcadores, descargas, Shield, generación de selectores CSS de Curtain, Vault, importación de contraseñas, updater, CRX3, protocolo de bench) para tests unitarios puros.
+    - `crates/search-bench`: herramientas CLI en Rust (`bench`, `test-find`), cliente del socket de bench y tests de integración/headless en Rust (incluido el port de `Tests/split_view.py` y el servidor HTTP local de pruebas en Rust).
+    - `crates/xtask`: instalador de archivos de escritorio (`.desktop`, metainfo, iconos, compilación de esquema GSettings) en Rust, sustituyendo a Meson para mantener todo el sistema de compilación en Cargo + manifiesto Flatpak (`buildsystem: simple`).
+  - Sin Python, sin C y sin Vala en la aplicación, herramientas ni tests.
+  - JavaScript **únicamente** donde debe ejecutarse dentro de la página web (scripts mínimos de recolección para Curtain, detección de formularios de Vault, shims de extensiones y `Readability.js`); toda la lógica de decisión vive en Rust.
+  - Bash **únicamente** para envoltorios mínimos (p. ej. invocar `flatpak-builder` o `xvfb-run`).
+- Distribución principal: Flatpak (runtime `org.gnome.Platform`).
 - Debe funcionar en Wayland y en X11.
 
 ## Principios que no se negocian
