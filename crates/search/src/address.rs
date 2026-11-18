@@ -14,8 +14,8 @@ use search_core::address::{display_at_rest, sanitize_url_for_ui};
 use std::cell::RefCell;
 use std::rc::Rc;
 
-type SubmitCallback = Box<dyn Fn(String)>;
-type EscapeCallback = Box<dyn Fn()>;
+type SubmitCallback = Rc<dyn Fn(String)>;
+type EscapeCallback = Rc<dyn Fn()>;
 
 #[derive(Clone)]
 pub struct AddressBar {
@@ -100,11 +100,9 @@ impl AddressBar {
             let state_act = state.clone();
             entry.connect_activate(move || {
                 let typed = entry_act.text();
-                let cb = state_act.borrow().on_submit.as_ref().map(|_| ());
-                if cb.is_some() {
-                    if let Some(ref submit) = state_act.borrow().on_submit {
-                        submit(typed);
-                    }
+                let submit = state_act.borrow().on_submit.clone();
+                if let Some(cb) = submit {
+                    cb(typed);
                 }
             });
         }
@@ -116,17 +114,17 @@ impl AddressBar {
             let state_esc = state.clone();
             key_ctrl.connect_key_pressed(move |keyval, _keycode, _mods| {
                 if keyval == gdk::keys::ESCAPE {
-                    let rest = {
+                    let (rest, on_esc) = {
                         let mut st = state_esc.borrow_mut();
                         st.editing = false;
                         st.suppress_change = true;
-                        display_at_rest(&st.committed_url)
+                        (display_at_rest(&st.committed_url), st.on_escape.clone())
                     };
                     entry_esc.set_alignment(0.5);
                     entry_esc.set_text(&rest);
                     state_esc.borrow_mut().suppress_change = false;
-                    if let Some(ref on_esc) = state_esc.borrow().on_escape {
-                        on_esc();
+                    if let Some(cb) = on_esc {
+                        cb();
                     }
                     return true;
                 }
@@ -213,11 +211,11 @@ impl AddressBar {
     }
 
     pub fn connect_submit(&self, cb: impl Fn(String) + 'static) {
-        self.state.borrow_mut().on_submit = Some(Box::new(cb));
+        self.state.borrow_mut().on_submit = Some(Rc::new(cb));
     }
 
     pub fn connect_escape(&self, cb: impl Fn() + 'static) {
-        self.state.borrow_mut().on_escape = Some(Box::new(cb));
+        self.state.borrow_mut().on_escape = Some(Rc::new(cb));
     }
 }
 

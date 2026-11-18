@@ -12,6 +12,20 @@ headerbar.search-headerbar {
     padding-bottom: 2px;
 }
 
+window.search-private-window headerbar.search-headerbar {
+    background-color: mix(@headerbar_bg_color, @accent_bg_color, 0.08);
+}
+
+label.search-private-badge {
+    font-size: 0.76rem;
+    font-weight: 600;
+    padding: 2px 8px;
+    border-radius: 999px;
+    background-color: alpha(@accent_bg_color, 0.16);
+    color: @accent_color;
+    margin-left: 4px;
+}
+
 entry.search-address-entry {
     min-height: 30px;
     border-radius: 9px;
@@ -66,6 +80,97 @@ label.search-find-count {
     opacity: 0.72;
     font-size: 0.85rem;
     min-width: 64px;
+}
+
+box.search-sidebar {
+    background-color: @sidebar_bg_color;
+    border-right: 1px solid alpha(currentColor, 0.09);
+    padding: 6px;
+}
+
+box.search-sidebar-pinned {
+    padding: 2px 2px 6px 2px;
+}
+
+button.search-pinned-pill {
+    min-width: 34px;
+    min-height: 32px;
+    padding: 4px 8px;
+    border-radius: 8px;
+    background-color: alpha(currentColor, 0.05);
+    border: 1px solid transparent;
+}
+
+button.search-pinned-pill:hover {
+    background-color: alpha(currentColor, 0.10);
+}
+
+button.search-pinned-pill.active {
+    background-color: alpha(@accent_bg_color, 0.18);
+    border-color: alpha(@accent_bg_color, 0.45);
+}
+
+listbox.search-sidebar-list {
+    background-color: transparent;
+}
+
+listbox.search-sidebar-list row.search-tab-row {
+    border-radius: 8px;
+    padding: 4px 6px;
+    margin: 1px 0;
+}
+
+listbox.search-sidebar-list row.search-tab-row:hover {
+    background-color: alpha(currentColor, 0.06);
+}
+
+listbox.search-sidebar-list row.search-tab-row.active {
+    background-color: alpha(@accent_bg_color, 0.16);
+    font-weight: 500;
+}
+
+button.search-tab-mini-btn {
+    min-width: 22px;
+    min-height: 22px;
+    padding: 0;
+    border-radius: 6px;
+    opacity: 0.65;
+}
+
+button.search-tab-mini-btn:hover {
+    opacity: 1.0;
+    background-color: alpha(currentColor, 0.10);
+}
+
+box.search-switcher-root {
+    padding: 12px;
+}
+
+listbox.search-switcher-list {
+    background-color: transparent;
+}
+
+listbox.search-switcher-list row.search-switcher-row {
+    border-radius: 8px;
+    padding: 6px 10px;
+    margin: 1px 0;
+}
+
+listbox.search-switcher-list row.search-switcher-row:selected {
+    background-color: alpha(@accent_bg_color, 0.20);
+}
+
+label.search-switcher-url {
+    font-size: 0.80rem;
+    opacity: 0.65;
+}
+
+label.search-switcher-badge {
+    font-size: 0.72rem;
+    padding: 1px 6px;
+    border-radius: 999px;
+    background-color: alpha(currentColor, 0.09);
+    opacity: 0.82;
 }
 "#;
 

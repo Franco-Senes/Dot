@@ -9,8 +9,8 @@ use gnome_platform::gtk::{
 use std::cell::RefCell;
 use std::rc::Rc;
 
-type QueryCallback = Box<dyn Fn(String, bool, bool)>;
-type CloseCallback = Box<dyn Fn()>;
+type QueryCallback = Rc<dyn Fn(String, bool, bool)>;
+type CloseCallback = Rc<dyn Fn()>;
 
 #[derive(Clone)]
 pub struct FindBar {
@@ -180,7 +180,8 @@ impl FindBar {
         self.revealer.set_reveal_child(false);
         self.count_label.set_text("");
         self.state.borrow_mut().last_query.clear();
-        if let Some(ref cb) = self.state.borrow().on_close {
+        let on_close = self.state.borrow().on_close.clone();
+        if let Some(cb) = on_close {
             cb();
         }
     }
@@ -216,25 +217,25 @@ impl FindBar {
     }
 
     pub fn connect_find(&self, cb: impl Fn(String, bool, bool) + 'static) {
-        self.state.borrow_mut().on_find = Some(Box::new(cb));
+        self.state.borrow_mut().on_find = Some(Rc::new(cb));
     }
 
     pub fn connect_close(&self, cb: impl Fn() + 'static) {
-        self.state.borrow_mut().on_close = Some(Box::new(cb));
+        self.state.borrow_mut().on_close = Some(Rc::new(cb));
     }
 
     fn trigger_search(&self, forward: bool, explicit_step: bool) {
         let query = self.entry.text();
-        let find_next = {
+        let (find_next, on_find) = {
             let mut st = self.state.borrow_mut();
             let same = st.last_query == query;
             st.last_query = query.clone();
-            explicit_step && same
+            (explicit_step && same, st.on_find.clone())
         };
         if query.is_empty() {
             self.count_label.set_text("");
         }
-        if let Some(ref cb) = self.state.borrow().on_find {
+        if let Some(cb) = on_find {
             cb(query, forward, find_next);
         }
     }

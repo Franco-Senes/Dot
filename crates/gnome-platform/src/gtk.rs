@@ -1,12 +1,17 @@
-use crate::gdk::{Display, MemoryTexture, ModifierType};
+use crate::gdk::{
+    ContentProvider, Display, DragAction, MemoryTexture, ModifierType, Rectangle, Texture,
+};
+use crate::gio::{Icon, Menu, SimpleActionGroup};
 use crate::object::{
-    connect_signal_f64_f64, connect_signal_f64_f64_bool, connect_signal_i32_f64_f64,
-    connect_signal_i32_i32, connect_signal_key_pressed, connect_signal_key_released,
-    connect_signal_notify, connect_signal_void, to_cstring, ObjectRef, SignalHandlerId,
+    connect_signal_drag_prepare, connect_signal_drop_string, connect_signal_f64_f64,
+    connect_signal_f64_f64_bool, connect_signal_i32_f64_f64, connect_signal_i32_i32,
+    connect_signal_key_pressed, connect_signal_key_released, connect_signal_notify,
+    connect_signal_ptr, connect_signal_void, to_cstring, ObjectRef, SignalHandlerId,
 };
 use crate::sys;
 use bitflags::bitflags;
-use std::ffi::CStr;
+use libc::c_char;
+use std::ffi::{CStr, CString};
 use std::ptr;
 
 pub const STYLE_PROVIDER_PRIORITY_APPLICATION: u32 = 600;
@@ -91,6 +96,33 @@ pub enum RevealerTransitionType {
     SlideLeft = 3,
     SlideUp = 4,
     SlideDown = 5,
+}
+
+#[repr(i32)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SelectionMode {
+    None = 0,
+    Single = 1,
+    Browse = 2,
+    Multiple = 3,
+}
+
+#[repr(i32)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PolicyType {
+    Always = 0,
+    Automatic = 1,
+    Never = 2,
+    External = 3,
+}
+
+#[repr(i32)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PositionType {
+    Left = 0,
+    Right = 1,
+    Top = 2,
+    Bottom = 3,
 }
 
 pub trait AsController {
@@ -232,6 +264,31 @@ pub trait AsWidget {
         let c_cls = to_cstring(css_class);
         unsafe {
             sys::gtk_widget_remove_css_class(self.as_widget_ptr(), c_cls.as_ptr());
+        }
+    }
+
+    fn has_css_class(&self, css_class: &str) -> bool {
+        let c_cls = to_cstring(css_class);
+        unsafe { sys::gtk_widget_has_css_class(self.as_widget_ptr(), c_cls.as_ptr()) != 0 }
+    }
+
+    fn set_parent(&self, parent: &impl AsWidget) {
+        unsafe {
+            sys::gtk_widget_set_parent(self.as_widget_ptr(), parent.as_widget_ptr());
+        }
+    }
+
+    fn unparent(&self) {
+        unsafe {
+            sys::gtk_widget_unparent(self.as_widget_ptr());
+        }
+    }
+
+    fn insert_action_group(&self, name: &str, group: Option<&SimpleActionGroup>) {
+        let c_name = to_cstring(name);
+        let ptr = group.map_or(ptr::null_mut(), SimpleActionGroup::as_action_group_ptr);
+        unsafe {
+            sys::gtk_widget_insert_action_group(self.as_widget_ptr(), c_name.as_ptr(), ptr);
         }
     }
 
@@ -691,6 +748,27 @@ impl Button {
         Self { obj }
     }
 
+    pub fn set_label(&self, label: &str) {
+        let c_label = to_cstring(label);
+        unsafe {
+            sys::gtk_button_set_label(self.obj.as_ptr().cast(), c_label.as_ptr());
+        }
+    }
+
+    pub fn set_icon_name(&self, icon_name: &str) {
+        let c_icon = to_cstring(icon_name);
+        unsafe {
+            sys::gtk_button_set_icon_name(self.obj.as_ptr().cast(), c_icon.as_ptr());
+        }
+    }
+
+    pub fn set_child(&self, child: Option<&impl AsWidget>) {
+        let ptr = child.map_or(ptr::null_mut(), AsWidget::as_widget_ptr);
+        unsafe {
+            sys::gtk_button_set_child(self.obj.as_ptr().cast(), ptr);
+        }
+    }
+
     pub fn connect_clicked<F: Fn() + 'static>(&self, callback: F) -> SignalHandlerId {
         connect_signal_void(self.obj.as_ptr(), "clicked", false, callback)
     }
@@ -1035,6 +1113,553 @@ impl Default for GestureSwipe {
 }
 
 impl AsController for GestureSwipe {
+    fn as_controller_ptr(&self) -> *mut sys::GtkEventController {
+        self.obj.as_ptr().cast()
+    }
+}
+
+#[derive(Clone)]
+pub struct ToggleButton {
+    obj: ObjectRef,
+}
+
+impl ToggleButton {
+    pub fn new() -> Self {
+        let ptr = unsafe { sys::gtk_toggle_button_new() };
+        let obj = unsafe { ObjectRef::from_new_ptr(ptr.cast()) };
+        Self { obj }
+    }
+
+    pub fn set_active(&self, active: bool) {
+        unsafe {
+            sys::gtk_toggle_button_set_active(
+                self.obj.as_ptr().cast(),
+                if active { sys::GTRUE } else { sys::GFALSE },
+            );
+        }
+    }
+
+    pub fn is_active(&self) -> bool {
+        unsafe { sys::gtk_toggle_button_get_active(self.obj.as_ptr().cast()) != 0 }
+    }
+
+    pub fn connect_toggled<F: Fn() + 'static>(&self, callback: F) -> SignalHandlerId {
+        connect_signal_void(self.obj.as_ptr(), "toggled", false, callback)
+    }
+}
+
+impl Default for ToggleButton {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl AsWidget for ToggleButton {
+    fn as_widget_ptr(&self) -> *mut sys::GtkWidget {
+        self.obj.as_ptr().cast()
+    }
+}
+
+#[derive(Clone)]
+pub struct ListBoxRow {
+    obj: ObjectRef,
+}
+
+impl ListBoxRow {
+    pub fn new() -> Self {
+        let ptr = unsafe { sys::gtk_list_box_row_new() };
+        let obj = unsafe { ObjectRef::from_new_ptr(ptr.cast()) };
+        Self { obj }
+    }
+
+    pub(crate) unsafe fn from_borrowed(ptr: *mut sys::GtkListBoxRow) -> Option<Self> {
+        ObjectRef::from_borrowed_ptr(ptr.cast()).map(|obj| Self { obj })
+    }
+
+    pub fn set_child(&self, child: Option<&impl AsWidget>) {
+        let ptr = child.map_or(ptr::null_mut(), AsWidget::as_widget_ptr);
+        unsafe {
+            sys::gtk_list_box_row_set_child(self.obj.as_ptr().cast(), ptr);
+        }
+    }
+
+    pub fn index(&self) -> i32 {
+        unsafe { sys::gtk_list_box_row_get_index(self.obj.as_ptr().cast()) }
+    }
+
+    pub fn set_selectable(&self, selectable: bool) {
+        unsafe {
+            sys::gtk_list_box_row_set_selectable(
+                self.obj.as_ptr().cast(),
+                if selectable { sys::GTRUE } else { sys::GFALSE },
+            );
+        }
+    }
+
+    pub fn set_activatable(&self, activatable: bool) {
+        unsafe {
+            sys::gtk_list_box_row_set_activatable(
+                self.obj.as_ptr().cast(),
+                if activatable { sys::GTRUE } else { sys::GFALSE },
+            );
+        }
+    }
+
+    pub(crate) fn as_row_ptr(&self) -> *mut sys::GtkListBoxRow {
+        self.obj.as_ptr().cast()
+    }
+}
+
+impl Default for ListBoxRow {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl AsWidget for ListBoxRow {
+    fn as_widget_ptr(&self) -> *mut sys::GtkWidget {
+        self.obj.as_ptr().cast()
+    }
+}
+
+#[derive(Clone)]
+pub struct ListBox {
+    obj: ObjectRef,
+}
+
+impl ListBox {
+    pub fn new() -> Self {
+        let ptr = unsafe { sys::gtk_list_box_new() };
+        let obj = unsafe { ObjectRef::from_new_ptr(ptr.cast()) };
+        Self { obj }
+    }
+
+    pub fn append(&self, child: &impl AsWidget) {
+        unsafe {
+            sys::gtk_list_box_append(self.obj.as_ptr().cast(), child.as_widget_ptr());
+        }
+    }
+
+    pub fn remove(&self, child: &impl AsWidget) {
+        unsafe {
+            sys::gtk_list_box_remove(self.obj.as_ptr().cast(), child.as_widget_ptr());
+        }
+    }
+
+    pub fn remove_all(&self) {
+        unsafe {
+            sys::gtk_list_box_remove_all(self.obj.as_ptr().cast());
+        }
+    }
+
+    pub fn select_row(&self, row: Option<&ListBoxRow>) {
+        let ptr = row.map_or(ptr::null_mut(), ListBoxRow::as_row_ptr);
+        unsafe {
+            sys::gtk_list_box_select_row(self.obj.as_ptr().cast(), ptr);
+        }
+    }
+
+    pub fn selected_row(&self) -> Option<ListBoxRow> {
+        unsafe {
+            let ptr = sys::gtk_list_box_get_selected_row(self.obj.as_ptr().cast());
+            ListBoxRow::from_borrowed(ptr)
+        }
+    }
+
+    pub fn row_at_index(&self, index: i32) -> Option<ListBoxRow> {
+        unsafe {
+            let ptr = sys::gtk_list_box_get_row_at_index(self.obj.as_ptr().cast(), index);
+            ListBoxRow::from_borrowed(ptr)
+        }
+    }
+
+    pub fn set_selection_mode(&self, mode: SelectionMode) {
+        unsafe {
+            sys::gtk_list_box_set_selection_mode(self.obj.as_ptr().cast(), mode as i32);
+        }
+    }
+
+    pub fn set_activate_on_single_click(&self, single: bool) {
+        unsafe {
+            sys::gtk_list_box_set_activate_on_single_click(
+                self.obj.as_ptr().cast(),
+                if single { sys::GTRUE } else { sys::GFALSE },
+            );
+        }
+    }
+
+    pub fn connect_row_activated<F: Fn(ListBoxRow) + 'static>(
+        &self,
+        callback: F,
+    ) -> SignalHandlerId {
+        connect_signal_ptr(self.obj.as_ptr(), "row-activated", move |row_ptr| {
+            if let Some(row) = unsafe { ListBoxRow::from_borrowed(row_ptr.cast()) } {
+                callback(row);
+            }
+        })
+    }
+
+    pub fn connect_row_selected<F: Fn(Option<ListBoxRow>) + 'static>(
+        &self,
+        callback: F,
+    ) -> SignalHandlerId {
+        connect_signal_ptr(self.obj.as_ptr(), "row-selected", move |row_ptr| {
+            let row = unsafe { ListBoxRow::from_borrowed(row_ptr.cast()) };
+            callback(row);
+        })
+    }
+}
+
+impl Default for ListBox {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl AsWidget for ListBox {
+    fn as_widget_ptr(&self) -> *mut sys::GtkWidget {
+        self.obj.as_ptr().cast()
+    }
+}
+
+#[derive(Clone)]
+pub struct ScrolledWindow {
+    obj: ObjectRef,
+}
+
+impl ScrolledWindow {
+    pub fn new() -> Self {
+        let ptr = unsafe { sys::gtk_scrolled_window_new() };
+        let obj = unsafe { ObjectRef::from_new_ptr(ptr.cast()) };
+        Self { obj }
+    }
+
+    pub fn set_child(&self, child: Option<&impl AsWidget>) {
+        let ptr = child.map_or(ptr::null_mut(), AsWidget::as_widget_ptr);
+        unsafe {
+            sys::gtk_scrolled_window_set_child(self.obj.as_ptr().cast(), ptr);
+        }
+    }
+
+    pub fn set_policy(&self, h: PolicyType, v: PolicyType) {
+        unsafe {
+            sys::gtk_scrolled_window_set_policy(self.obj.as_ptr().cast(), h as i32, v as i32);
+        }
+    }
+
+    pub fn set_min_content_width(&self, width: i32) {
+        unsafe {
+            sys::gtk_scrolled_window_set_min_content_width(self.obj.as_ptr().cast(), width);
+        }
+    }
+
+    pub fn set_min_content_height(&self, height: i32) {
+        unsafe {
+            sys::gtk_scrolled_window_set_min_content_height(self.obj.as_ptr().cast(), height);
+        }
+    }
+
+    pub fn set_max_content_height(&self, height: i32) {
+        unsafe {
+            sys::gtk_scrolled_window_set_max_content_height(self.obj.as_ptr().cast(), height);
+        }
+    }
+
+    pub fn set_propagate_natural_height(&self, propagate: bool) {
+        unsafe {
+            sys::gtk_scrolled_window_set_propagate_natural_height(
+                self.obj.as_ptr().cast(),
+                if propagate { sys::GTRUE } else { sys::GFALSE },
+            );
+        }
+    }
+}
+
+impl Default for ScrolledWindow {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl AsWidget for ScrolledWindow {
+    fn as_widget_ptr(&self) -> *mut sys::GtkWidget {
+        self.obj.as_ptr().cast()
+    }
+}
+
+#[derive(Clone)]
+pub struct PopoverMenu {
+    obj: ObjectRef,
+}
+
+impl PopoverMenu {
+    pub fn from_model(model: Option<&Menu>) -> Self {
+        let ptr = model.map_or(ptr::null_mut(), Menu::as_menu_model_ptr);
+        let raw = unsafe { sys::gtk_popover_menu_new_from_model(ptr) };
+        let obj = unsafe { ObjectRef::from_new_ptr(raw.cast()) };
+        Self { obj }
+    }
+
+    pub fn set_menu_model(&self, model: Option<&Menu>) {
+        let ptr = model.map_or(ptr::null_mut(), Menu::as_menu_model_ptr);
+        unsafe {
+            sys::gtk_popover_menu_set_menu_model(self.obj.as_ptr().cast(), ptr);
+        }
+    }
+
+    pub fn set_pointing_to(&self, rect: Option<Rectangle>) {
+        unsafe {
+            if let Some(r) = rect {
+                let raw = r.to_raw();
+                sys::gtk_popover_set_pointing_to(self.obj.as_ptr().cast(), &raw);
+            } else {
+                sys::gtk_popover_set_pointing_to(self.obj.as_ptr().cast(), ptr::null());
+            }
+        }
+    }
+
+    pub fn set_has_arrow(&self, has_arrow: bool) {
+        unsafe {
+            sys::gtk_popover_set_has_arrow(
+                self.obj.as_ptr().cast(),
+                if has_arrow { sys::GTRUE } else { sys::GFALSE },
+            );
+        }
+    }
+
+    pub fn set_position(&self, pos: PositionType) {
+        unsafe {
+            sys::gtk_popover_set_position(self.obj.as_ptr().cast(), pos as i32);
+        }
+    }
+
+    pub fn popup(&self) {
+        unsafe {
+            sys::gtk_popover_popup(self.obj.as_ptr().cast());
+        }
+    }
+
+    pub fn popdown(&self) {
+        unsafe {
+            sys::gtk_popover_popdown(self.obj.as_ptr().cast());
+        }
+    }
+}
+
+impl AsWidget for PopoverMenu {
+    fn as_widget_ptr(&self) -> *mut sys::GtkWidget {
+        self.obj.as_ptr().cast()
+    }
+}
+
+#[derive(Clone)]
+pub struct Image {
+    obj: ObjectRef,
+}
+
+impl Image {
+    pub fn new() -> Self {
+        let ptr = unsafe { sys::gtk_image_new() };
+        let obj = unsafe { ObjectRef::from_new_ptr(ptr.cast()) };
+        Self { obj }
+    }
+
+    pub fn from_icon_name(icon_name: &str) -> Self {
+        let c_name = to_cstring(icon_name);
+        let ptr = unsafe { sys::gtk_image_new_from_icon_name(c_name.as_ptr()) };
+        let obj = unsafe { ObjectRef::from_new_ptr(ptr.cast()) };
+        Self { obj }
+    }
+
+    pub fn set_from_icon_name(&self, icon_name: Option<&str>) {
+        unsafe {
+            if let Some(name) = icon_name {
+                let c_name = to_cstring(name);
+                sys::gtk_image_set_from_icon_name(self.obj.as_ptr().cast(), c_name.as_ptr());
+            } else {
+                sys::gtk_image_set_from_icon_name(self.obj.as_ptr().cast(), ptr::null());
+            }
+        }
+    }
+
+    pub fn set_from_gicon(&self, icon: Option<&Icon>) {
+        let ptr = icon.map_or(ptr::null_mut(), Icon::as_gicon_ptr);
+        unsafe {
+            sys::gtk_image_set_from_gicon(self.obj.as_ptr().cast(), ptr);
+        }
+    }
+
+    pub fn set_from_texture(&self, texture: Option<&Texture>) {
+        let ptr = texture.map_or(ptr::null_mut(), Texture::as_paintable_ptr);
+        unsafe {
+            sys::gtk_image_set_from_paintable(self.obj.as_ptr().cast(), ptr);
+        }
+    }
+
+    pub fn set_pixel_size(&self, size: i32) {
+        unsafe {
+            sys::gtk_image_set_pixel_size(self.obj.as_ptr().cast(), size);
+        }
+    }
+
+    pub fn clear(&self) {
+        unsafe {
+            sys::gtk_image_clear(self.obj.as_ptr().cast());
+        }
+    }
+}
+
+impl Default for Image {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl AsWidget for Image {
+    fn as_widget_ptr(&self) -> *mut sys::GtkWidget {
+        self.obj.as_ptr().cast()
+    }
+}
+
+#[derive(Clone)]
+pub struct Spinner {
+    obj: ObjectRef,
+}
+
+impl Spinner {
+    pub fn new() -> Self {
+        let ptr = unsafe { sys::gtk_spinner_new() };
+        let obj = unsafe { ObjectRef::from_new_ptr(ptr.cast()) };
+        Self { obj }
+    }
+
+    pub fn set_spinning(&self, spinning: bool) {
+        unsafe {
+            sys::gtk_spinner_set_spinning(
+                self.obj.as_ptr().cast(),
+                if spinning { sys::GTRUE } else { sys::GFALSE },
+            );
+        }
+    }
+}
+
+impl Default for Spinner {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl AsWidget for Spinner {
+    fn as_widget_ptr(&self) -> *mut sys::GtkWidget {
+        self.obj.as_ptr().cast()
+    }
+}
+
+#[derive(Clone)]
+pub struct Separator {
+    obj: ObjectRef,
+}
+
+impl Separator {
+    pub fn new(orientation: Orientation) -> Self {
+        let ptr = unsafe { sys::gtk_separator_new(orientation as i32) };
+        let obj = unsafe { ObjectRef::from_new_ptr(ptr.cast()) };
+        Self { obj }
+    }
+}
+
+impl AsWidget for Separator {
+    fn as_widget_ptr(&self) -> *mut sys::GtkWidget {
+        self.obj.as_ptr().cast()
+    }
+}
+
+#[derive(Clone)]
+pub struct StringList {
+    obj: ObjectRef,
+}
+
+impl StringList {
+    pub fn new(items: &[&str]) -> Self {
+        let c_items: Vec<CString> = items.iter().map(|s| to_cstring(s)).collect();
+        let mut ptrs: Vec<*const c_char> = c_items.iter().map(|s| s.as_ptr()).collect();
+        ptrs.push(ptr::null());
+        let ptr = unsafe { sys::gtk_string_list_new(ptrs.as_ptr()) };
+        let obj = unsafe { ObjectRef::from_new_ptr(ptr.cast()) };
+        Self { obj }
+    }
+
+    pub fn as_list_model_ptr(&self) -> *mut sys::GListModel {
+        self.obj.as_ptr().cast()
+    }
+}
+
+#[derive(Clone)]
+pub struct DragSource {
+    obj: ObjectRef,
+}
+
+impl DragSource {
+    pub fn new() -> Self {
+        let ptr = unsafe { sys::gtk_drag_source_new() };
+        let obj = unsafe { ObjectRef::from_new_ptr(ptr.cast()) };
+        Self { obj }
+    }
+
+    pub fn set_actions(&self, actions: DragAction) {
+        unsafe {
+            sys::gtk_drag_source_set_actions(self.obj.as_ptr().cast(), actions.bits());
+        }
+    }
+
+    pub fn set_content(&self, provider: Option<&ContentProvider>) {
+        let ptr = provider.map_or(ptr::null_mut(), ContentProvider::as_ptr);
+        unsafe {
+            sys::gtk_drag_source_set_content(self.obj.as_ptr().cast(), ptr);
+        }
+    }
+
+    pub fn connect_prepare<F: Fn(f64, f64) -> Option<ContentProvider> + 'static>(
+        &self,
+        callback: F,
+    ) -> SignalHandlerId {
+        connect_signal_drag_prepare(self.obj.as_ptr(), move |x, y| callback(x, y).map(|p| p.obj))
+    }
+}
+
+impl Default for DragSource {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl AsController for DragSource {
+    fn as_controller_ptr(&self) -> *mut sys::GtkEventController {
+        self.obj.as_ptr().cast()
+    }
+}
+
+#[derive(Clone)]
+pub struct DropTarget {
+    obj: ObjectRef,
+}
+
+impl DropTarget {
+    pub fn for_string(actions: DragAction) -> Self {
+        let ptr = unsafe { sys::gtk_drop_target_new(sys::G_TYPE_STRING, actions.bits()) };
+        let obj = unsafe { ObjectRef::from_new_ptr(ptr.cast()) };
+        Self { obj }
+    }
+
+    pub fn connect_drop_string<F: Fn(String, f64, f64) -> bool + 'static>(
+        &self,
+        callback: F,
+    ) -> SignalHandlerId {
+        connect_signal_drop_string(self.obj.as_ptr(), callback)
+    }
+}
+
+impl AsController for DropTarget {
     fn as_controller_ptr(&self) -> *mut sys::GtkEventController {
         self.obj.as_ptr().cast()
     }

@@ -474,3 +474,223 @@ pub(crate) fn connect_signal_app_open<F: Fn(Vec<String>) + 'static>(
     };
     SignalHandlerId(id)
 }
+
+/// Conecta una señal `(instance, GObject* arg, user_data) -> void`.
+pub(crate) fn connect_signal_ptr<F: Fn(*mut c_void) + 'static>(
+    instance: *mut c_void,
+    signal: &str,
+    callback: F,
+) -> SignalHandlerId {
+    unsafe extern "C" fn trampoline<F: Fn(*mut c_void) + 'static>(
+        _instance: *mut c_void,
+        arg: *mut c_void,
+        user_data: sys::gpointer,
+    ) {
+        let cb = &*(user_data as *const F);
+        cb(arg);
+    }
+
+    let c_sig = to_cstring(signal);
+    let data = Box::into_raw(Box::new(callback)) as sys::gpointer;
+    let cb_ptr: sys::GCallback = Some(unsafe {
+        std::mem::transmute::<*const (), unsafe extern "C" fn()>(trampoline::<F> as *const ())
+    });
+    let id = unsafe {
+        sys::g_signal_connect_data(
+            instance,
+            c_sig.as_ptr(),
+            cb_ptr,
+            data,
+            Some(drop_boxed_closure::<F>),
+            0,
+        )
+    };
+    SignalHandlerId(id)
+}
+
+/// Conecta una señal `(instance, GObject* arg, int pos, user_data) -> void`.
+pub(crate) fn connect_signal_ptr_i32<F: Fn(*mut c_void, i32) + 'static>(
+    instance: *mut c_void,
+    signal: &str,
+    callback: F,
+) -> SignalHandlerId {
+    unsafe extern "C" fn trampoline<F: Fn(*mut c_void, i32) + 'static>(
+        _instance: *mut c_void,
+        arg: *mut c_void,
+        pos: c_int,
+        user_data: sys::gpointer,
+    ) {
+        let cb = &*(user_data as *const F);
+        cb(arg, pos);
+    }
+
+    let c_sig = to_cstring(signal);
+    let data = Box::into_raw(Box::new(callback)) as sys::gpointer;
+    let cb_ptr: sys::GCallback = Some(unsafe {
+        std::mem::transmute::<*const (), unsafe extern "C" fn()>(trampoline::<F> as *const ())
+    });
+    let id = unsafe {
+        sys::g_signal_connect_data(
+            instance,
+            c_sig.as_ptr(),
+            cb_ptr,
+            data,
+            Some(drop_boxed_closure::<F>),
+            0,
+        )
+    };
+    SignalHandlerId(id)
+}
+
+/// Conecta una señal `(instance, GObject* arg, user_data) -> gboolean` (p. ej. `close-page`).
+pub(crate) fn connect_signal_ptr_bool<F: Fn(*mut c_void) -> bool + 'static>(
+    instance: *mut c_void,
+    signal: &str,
+    callback: F,
+) -> SignalHandlerId {
+    unsafe extern "C" fn trampoline<F: Fn(*mut c_void) -> bool + 'static>(
+        _instance: *mut c_void,
+        arg: *mut c_void,
+        user_data: sys::gpointer,
+    ) -> sys::gboolean {
+        let cb = &*(user_data as *const F);
+        if cb(arg) {
+            sys::GTRUE
+        } else {
+            sys::GFALSE
+        }
+    }
+
+    let c_sig = to_cstring(signal);
+    let data = Box::into_raw(Box::new(callback)) as sys::gpointer;
+    let cb_ptr: sys::GCallback = Some(unsafe {
+        std::mem::transmute::<*const (), unsafe extern "C" fn()>(trampoline::<F> as *const ())
+    });
+    let id = unsafe {
+        sys::g_signal_connect_data(
+            instance,
+            c_sig.as_ptr(),
+            cb_ptr,
+            data,
+            Some(drop_boxed_closure::<F>),
+            0,
+        )
+    };
+    SignalHandlerId(id)
+}
+
+/// Conecta `AdwTabView::create-window`: `(view, user_data) -> AdwTabView*` (transfer none).
+pub(crate) fn connect_signal_ret_ptr<F: Fn() -> *mut c_void + 'static>(
+    instance: *mut c_void,
+    signal: &str,
+    callback: F,
+) -> SignalHandlerId {
+    unsafe extern "C" fn trampoline<F: Fn() -> *mut c_void + 'static>(
+        _instance: *mut c_void,
+        user_data: sys::gpointer,
+    ) -> *mut c_void {
+        let cb = &*(user_data as *const F);
+        cb()
+    }
+
+    let c_sig = to_cstring(signal);
+    let data = Box::into_raw(Box::new(callback)) as sys::gpointer;
+    let cb_ptr: sys::GCallback = Some(unsafe {
+        std::mem::transmute::<*const (), unsafe extern "C" fn()>(trampoline::<F> as *const ())
+    });
+    let id = unsafe {
+        sys::g_signal_connect_data(
+            instance,
+            c_sig.as_ptr(),
+            cb_ptr,
+            data,
+            Some(drop_boxed_closure::<F>),
+            0,
+        )
+    };
+    SignalHandlerId(id)
+}
+
+/// Conecta `GtkDragSource::prepare`: `(source, double x, double y, user_data) -> GdkContentProvider*` (transfer full).
+pub(crate) fn connect_signal_drag_prepare<F: Fn(f64, f64) -> Option<ObjectRef> + 'static>(
+    instance: *mut c_void,
+    callback: F,
+) -> SignalHandlerId {
+    unsafe extern "C" fn trampoline<F: Fn(f64, f64) -> Option<ObjectRef> + 'static>(
+        _source: *mut c_void,
+        x: c_double,
+        y: c_double,
+        user_data: sys::gpointer,
+    ) -> *mut sys::GdkContentProvider {
+        let cb = &*(user_data as *const F);
+        if let Some(provider) = cb(x, y) {
+            sys::g_object_ref(provider.as_ptr());
+            provider.as_ptr().cast()
+        } else {
+            std::ptr::null_mut()
+        }
+    }
+
+    let c_sig = to_cstring("prepare");
+    let data = Box::into_raw(Box::new(callback)) as sys::gpointer;
+    let cb_ptr: sys::GCallback = Some(unsafe {
+        std::mem::transmute::<*const (), unsafe extern "C" fn()>(trampoline::<F> as *const ())
+    });
+    let id = unsafe {
+        sys::g_signal_connect_data(
+            instance,
+            c_sig.as_ptr(),
+            cb_ptr,
+            data,
+            Some(drop_boxed_closure::<F>),
+            0,
+        )
+    };
+    SignalHandlerId(id)
+}
+
+/// Conecta `GtkDropTarget::drop` para cadenas `G_TYPE_STRING`.
+pub(crate) fn connect_signal_drop_string<F: Fn(String, f64, f64) -> bool + 'static>(
+    instance: *mut c_void,
+    callback: F,
+) -> SignalHandlerId {
+    unsafe extern "C" fn trampoline<F: Fn(String, f64, f64) -> bool + 'static>(
+        _target: *mut c_void,
+        value: *const sys::GValue,
+        x: c_double,
+        y: c_double,
+        user_data: sys::gpointer,
+    ) -> sys::gboolean {
+        if value.is_null() {
+            return sys::GFALSE;
+        }
+        let raw = sys::g_value_get_string(value);
+        if raw.is_null() {
+            return sys::GFALSE;
+        }
+        let s = std::ffi::CStr::from_ptr(raw).to_string_lossy().into_owned();
+        let cb = &*(user_data as *const F);
+        if cb(s, x, y) {
+            sys::GTRUE
+        } else {
+            sys::GFALSE
+        }
+    }
+
+    let c_sig = to_cstring("drop");
+    let data = Box::into_raw(Box::new(callback)) as sys::gpointer;
+    let cb_ptr: sys::GCallback = Some(unsafe {
+        std::mem::transmute::<*const (), unsafe extern "C" fn()>(trampoline::<F> as *const ())
+    });
+    let id = unsafe {
+        sys::g_signal_connect_data(
+            instance,
+            c_sig.as_ptr(),
+            cb_ptr,
+            data,
+            Some(drop_boxed_closure::<F>),
+            0,
+        )
+    };
+    SignalHandlerId(id)
+}

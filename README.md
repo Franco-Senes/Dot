@@ -40,9 +40,9 @@ Sintaxis admitida en `SEARCH_CHROMIUM_FLAGS`:
 
 | Crate | Descripción |
 |---|---|
-| `crates/search-core` | Lógica pura en Rust (sin GTK4 ni CEF): `chromium_flags`, `paths` XDG + `write_atomic`, resolución de direcciones/búsqueda/anti-homógrafos (`address`), ajustes JSON (`settings`) y trazas (`trace`). |
-| `crates/gnome-platform` | Envoltorio seguro e idiomático en Rust sobre las bibliotecas C del SDK de GNOME (`gtk-4`, `libadwaita-1`, `gio-2.0`, `gobject-2.0`, `glib-2.0`). |
-| `crates/search` | Ejecutable principal `search`: aplicación `AdwApplication`, ventana minimalista, barra de direcciones, búsqueda en página (`Ctrl+F`), motor `cef_engine` y vista reutilizable `BrowserView`. |
+| `crates/search-core` | Lógica pura en Rust (sin GTK4 ni CEF): `chromium_flags`, `paths` XDG + `write_atomic`, resolución de direcciones/búsqueda/anti-homógrafos (`address`), ajustes JSON (`settings`), coincidencia difusa (`fuzzy`), sesiones y pila de cerradas (`session`) y trazas (`trace`). |
+| `crates/gnome-platform` | Envoltorio seguro e idiomático en Rust sobre las bibliotecas C del SDK de GNOME (`gtk-4`, `libadwaita-1`, `gio-2.0`, `gobject-2.0`, `glib-2.0`), incluyendo `AdwTabView`/`AdwTabBar`, `AdwPreferencesDialog`, `AdwShortcutsDialog`, `GtkDragSource`/`GtkDropTarget` y `GdkTexture`. |
+| `crates/search` | Ejecutable principal `search`: aplicación `AdwApplication` multi-ventana (normales y privadas), pestañas arriba o barra lateral vertical conmutables en vivo (`Ctrl+Shift+S`), fijadas protegidas, selector difuso `Ctrl+K`, preferencias (`Ctrl+,`), atajos (`Ctrl+?`), sesión diferida (`session.json`), búsqueda en página (`Ctrl+F`), motor `cef_engine` y vista `BrowserView`. |
 | `crates/search-bench` | Herramientas CLI de pruebas e inspección (`bench` y `test-find`). |
 | `crates/xtask` | Tareas de construcción e instalación (`compile-schemas` e `install`). |
 
@@ -74,6 +74,11 @@ En este repositorio el entorno autónomo ya incluye el SDK de GNOME 51, Rust 1.9
 
 # Ejecutar prueba de humo headless (Xvfb + D-Bus + CEF OSR)
 ./.toolchain/sdk-xvfb ./target/release/search --smoke-test "data:text/html,<title>Hola Search</title><h1>Hola CEF</h1>"
+
+# Verificar persistencia y restauración diferida de 15 pestañas (2 fijadas, solo 1 CEF activo)
+SEARCH_PROFILE_DIR=.toolchain/tmp/smoke-session ./.toolchain/sdk-xvfb ./target/release/search --smoke-test-session-create
+SEARCH_PROFILE_DIR=.toolchain/tmp/smoke-session ./.toolchain/sdk-xvfb ./target/release/search --smoke-test-session-restore
+rm -rf .toolchain/tmp/smoke-session
 
 # Ejecutar el navegador en sesión gráfica Wayland o X11
 ./.toolchain/sdk ./target/release/search

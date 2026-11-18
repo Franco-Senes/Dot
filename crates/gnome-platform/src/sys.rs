@@ -17,6 +17,23 @@ pub const GTRUE: gboolean = 1;
 pub const G_PRIORITY_HIGH_IDLE: gint = 100;
 pub const G_PRIORITY_DEFAULT: gint = 0;
 pub const G_PRIORITY_DEFAULT_IDLE: gint = 200;
+pub const G_TYPE_STRING: GType = 16 << 2;
+
+#[repr(C)]
+#[derive(Clone, Copy, Default)]
+pub struct GValue {
+    pub g_type: GType,
+    pub data: [u64; 2],
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy, Default)]
+pub struct GdkRectangle {
+    pub x: c_int,
+    pub y: c_int,
+    pub width: c_int,
+    pub height: c_int,
+}
 
 pub type GSourceFunc = Option<unsafe extern "C" fn(user_data: gpointer) -> gboolean>;
 pub type GDestroyNotify = Option<unsafe extern "C" fn(data: gpointer)>;
@@ -79,6 +96,36 @@ pub struct GActionMap {
 }
 
 #[repr(C)]
+pub struct GActionGroup {
+    _private: [u8; 0],
+}
+
+#[repr(C)]
+pub struct GSimpleActionGroup {
+    _private: [u8; 0],
+}
+
+#[repr(C)]
+pub struct GIcon {
+    _private: [u8; 0],
+}
+
+#[repr(C)]
+pub struct GMenu {
+    _private: [u8; 0],
+}
+
+#[repr(C)]
+pub struct GMenuModel {
+    _private: [u8; 0],
+}
+
+#[repr(C)]
+pub struct GListModel {
+    _private: [u8; 0],
+}
+
+#[repr(C)]
 pub struct GSettingsSchemaSource {
     _private: [u8; 0],
 }
@@ -110,6 +157,11 @@ pub struct GdkPaintable {
 
 #[repr(C)]
 pub struct GdkTexture {
+    _private: [u8; 0],
+}
+
+#[repr(C)]
+pub struct GdkContentProvider {
     _private: [u8; 0],
 }
 
@@ -170,6 +222,66 @@ pub struct GtkLabel {
 
 #[repr(C)]
 pub struct GtkButton {
+    _private: [u8; 0],
+}
+
+#[repr(C)]
+pub struct GtkToggleButton {
+    _private: [u8; 0],
+}
+
+#[repr(C)]
+pub struct GtkListBox {
+    _private: [u8; 0],
+}
+
+#[repr(C)]
+pub struct GtkListBoxRow {
+    _private: [u8; 0],
+}
+
+#[repr(C)]
+pub struct GtkScrolledWindow {
+    _private: [u8; 0],
+}
+
+#[repr(C)]
+pub struct GtkPopover {
+    _private: [u8; 0],
+}
+
+#[repr(C)]
+pub struct GtkPopoverMenu {
+    _private: [u8; 0],
+}
+
+#[repr(C)]
+pub struct GtkImage {
+    _private: [u8; 0],
+}
+
+#[repr(C)]
+pub struct GtkSpinner {
+    _private: [u8; 0],
+}
+
+#[repr(C)]
+pub struct GtkSeparator {
+    _private: [u8; 0],
+}
+
+#[repr(C)]
+pub struct GtkStringList {
+    _private: [u8; 0],
+}
+
+#[repr(C)]
+pub struct GtkDragSource {
+    _private: [u8; 0],
+}
+
+#[repr(C)]
+pub struct GtkDropTarget {
     _private: [u8; 0],
 }
 
@@ -268,6 +380,86 @@ pub struct AdwClamp {
     _private: [u8; 0],
 }
 
+#[repr(C)]
+pub struct AdwTabView {
+    _private: [u8; 0],
+}
+
+#[repr(C)]
+pub struct AdwTabPage {
+    _private: [u8; 0],
+}
+
+#[repr(C)]
+pub struct AdwTabBar {
+    _private: [u8; 0],
+}
+
+#[repr(C)]
+pub struct AdwOverlaySplitView {
+    _private: [u8; 0],
+}
+
+#[repr(C)]
+pub struct AdwDialog {
+    _private: [u8; 0],
+}
+
+#[repr(C)]
+pub struct AdwPreferencesDialog {
+    _private: [u8; 0],
+}
+
+#[repr(C)]
+pub struct AdwPreferencesPage {
+    _private: [u8; 0],
+}
+
+#[repr(C)]
+pub struct AdwPreferencesGroup {
+    _private: [u8; 0],
+}
+
+#[repr(C)]
+pub struct AdwPreferencesRow {
+    _private: [u8; 0],
+}
+
+#[repr(C)]
+pub struct AdwActionRow {
+    _private: [u8; 0],
+}
+
+#[repr(C)]
+pub struct AdwSwitchRow {
+    _private: [u8; 0],
+}
+
+#[repr(C)]
+pub struct AdwComboRow {
+    _private: [u8; 0],
+}
+
+#[repr(C)]
+pub struct AdwEntryRow {
+    _private: [u8; 0],
+}
+
+#[repr(C)]
+pub struct AdwShortcutsDialog {
+    _private: [u8; 0],
+}
+
+#[repr(C)]
+pub struct AdwShortcutsSection {
+    _private: [u8; 0],
+}
+
+#[repr(C)]
+pub struct AdwShortcutsItem {
+    _private: [u8; 0],
+}
+
 #[link(name = "glib-2.0")]
 extern "C" {
     pub fn g_free(mem: gpointer);
@@ -305,6 +497,10 @@ extern "C" {
         connect_flags: c_uint,
     ) -> gulong;
     pub fn g_signal_handler_disconnect(instance: gpointer, handler_id: gulong);
+    pub fn g_value_init(value: *mut GValue, g_type: GType) -> *mut GValue;
+    pub fn g_value_set_string(value: *mut GValue, v_string: *const c_char);
+    pub fn g_value_get_string(value: *const GValue) -> *const c_char;
+    pub fn g_value_unset(value: *mut GValue);
 }
 
 #[link(name = "gio-2.0")]
@@ -327,6 +523,15 @@ extern "C" {
     ) -> *mut GSimpleAction;
     pub fn g_simple_action_set_enabled(simple: *mut GSimpleAction, enabled: gboolean);
     pub fn g_action_map_add_action(action_map: *mut GActionMap, action: *mut GAction);
+    pub fn g_simple_action_group_new() -> *mut GSimpleActionGroup;
+
+    pub fn g_themed_icon_new(iconname: *const c_char) -> *mut GIcon;
+    pub fn g_bytes_icon_new(bytes: *mut GBytes) -> *mut GIcon;
+
+    pub fn g_menu_new() -> *mut GMenu;
+    pub fn g_menu_append(menu: *mut GMenu, label: *const c_char, detailed_action: *const c_char);
+    pub fn g_menu_append_section(menu: *mut GMenu, label: *const c_char, section: *mut GMenuModel);
+    pub fn g_menu_remove_all(menu: *mut GMenu);
 
     pub fn g_settings_schema_source_get_default() -> *mut GSettingsSchemaSource;
     pub fn g_settings_schema_source_new_from_directory(
@@ -412,6 +617,13 @@ extern "C" {
         bytes: *mut GBytes,
         stride: gsize,
     ) -> *mut GdkTexture;
+    pub fn gdk_texture_new_from_bytes(
+        bytes: *mut GBytes,
+        error: *mut *mut GError,
+    ) -> *mut GdkTexture;
+    pub fn gdk_texture_get_width(texture: *mut GdkTexture) -> c_int;
+    pub fn gdk_texture_get_height(texture: *mut GdkTexture) -> c_int;
+    pub fn gdk_content_provider_new_for_value(value: *const GValue) -> *mut GdkContentProvider;
     pub fn gdk_keyval_name(keyval: guint) -> *const c_char;
     pub fn gdk_keyval_to_lower(keyval: guint) -> guint;
     pub fn gdk_keyval_to_unicode(keyval: guint) -> u32;
@@ -457,6 +669,14 @@ extern "C" {
     pub fn gtk_widget_set_can_target(widget: *mut GtkWidget, can_target: gboolean);
     pub fn gtk_widget_add_css_class(widget: *mut GtkWidget, css_class: *const c_char);
     pub fn gtk_widget_remove_css_class(widget: *mut GtkWidget, css_class: *const c_char);
+    pub fn gtk_widget_has_css_class(widget: *mut GtkWidget, css_class: *const c_char) -> gboolean;
+    pub fn gtk_widget_set_parent(widget: *mut GtkWidget, parent: *mut GtkWidget);
+    pub fn gtk_widget_unparent(widget: *mut GtkWidget);
+    pub fn gtk_widget_insert_action_group(
+        widget: *mut GtkWidget,
+        name: *const c_char,
+        group: *mut GActionGroup,
+    );
     pub fn gtk_widget_add_controller(widget: *mut GtkWidget, controller: *mut GtkEventController);
     pub fn gtk_widget_set_cursor_from_name(widget: *mut GtkWidget, name: *const c_char);
     pub fn gtk_widget_set_tooltip_text(widget: *mut GtkWidget, text: *const c_char);
@@ -526,6 +746,91 @@ extern "C" {
     pub fn gtk_button_new_with_label(label: *const c_char) -> *mut GtkWidget;
     pub fn gtk_button_new_from_icon_name(icon_name: *const c_char) -> *mut GtkWidget;
     pub fn gtk_button_set_label(button: *mut GtkButton, label: *const c_char);
+    pub fn gtk_button_set_icon_name(button: *mut GtkButton, icon_name: *const c_char);
+    pub fn gtk_button_set_child(button: *mut GtkButton, child: *mut GtkWidget);
+
+    pub fn gtk_toggle_button_new() -> *mut GtkWidget;
+    pub fn gtk_toggle_button_set_active(toggle_button: *mut GtkToggleButton, is_active: gboolean);
+    pub fn gtk_toggle_button_get_active(toggle_button: *mut GtkToggleButton) -> gboolean;
+
+    pub fn gtk_list_box_new() -> *mut GtkWidget;
+    pub fn gtk_list_box_append(box_: *mut GtkListBox, child: *mut GtkWidget);
+    pub fn gtk_list_box_remove(box_: *mut GtkListBox, child: *mut GtkWidget);
+    pub fn gtk_list_box_remove_all(box_: *mut GtkListBox);
+    pub fn gtk_list_box_select_row(box_: *mut GtkListBox, row: *mut GtkListBoxRow);
+    pub fn gtk_list_box_get_selected_row(box_: *mut GtkListBox) -> *mut GtkListBoxRow;
+    pub fn gtk_list_box_get_row_at_index(
+        box_: *mut GtkListBox,
+        index_: c_int,
+    ) -> *mut GtkListBoxRow;
+    pub fn gtk_list_box_set_selection_mode(box_: *mut GtkListBox, mode: c_int);
+    pub fn gtk_list_box_set_activate_on_single_click(box_: *mut GtkListBox, single: gboolean);
+
+    pub fn gtk_list_box_row_new() -> *mut GtkWidget;
+    pub fn gtk_list_box_row_set_child(row: *mut GtkListBoxRow, child: *mut GtkWidget);
+    pub fn gtk_list_box_row_get_index(row: *mut GtkListBoxRow) -> c_int;
+    pub fn gtk_list_box_row_set_selectable(row: *mut GtkListBoxRow, selectable: gboolean);
+    pub fn gtk_list_box_row_set_activatable(row: *mut GtkListBoxRow, activatable: gboolean);
+
+    pub fn gtk_scrolled_window_new() -> *mut GtkWidget;
+    pub fn gtk_scrolled_window_set_child(
+        scrolled_window: *mut GtkScrolledWindow,
+        child: *mut GtkWidget,
+    );
+    pub fn gtk_scrolled_window_set_policy(
+        scrolled_window: *mut GtkScrolledWindow,
+        hscrollbar_policy: c_int,
+        vscrollbar_policy: c_int,
+    );
+    pub fn gtk_scrolled_window_set_min_content_width(
+        scrolled_window: *mut GtkScrolledWindow,
+        width: c_int,
+    );
+    pub fn gtk_scrolled_window_set_min_content_height(
+        scrolled_window: *mut GtkScrolledWindow,
+        height: c_int,
+    );
+    pub fn gtk_scrolled_window_set_max_content_height(
+        scrolled_window: *mut GtkScrolledWindow,
+        height: c_int,
+    );
+    pub fn gtk_scrolled_window_set_propagate_natural_height(
+        scrolled_window: *mut GtkScrolledWindow,
+        propagate: gboolean,
+    );
+
+    pub fn gtk_popover_menu_new_from_model(model: *mut GMenuModel) -> *mut GtkWidget;
+    pub fn gtk_popover_menu_set_menu_model(popover: *mut GtkPopoverMenu, model: *mut GMenuModel);
+    pub fn gtk_popover_set_pointing_to(popover: *mut GtkPopover, rect: *const GdkRectangle);
+    pub fn gtk_popover_set_has_arrow(popover: *mut GtkPopover, has_arrow: gboolean);
+    pub fn gtk_popover_set_position(popover: *mut GtkPopover, position: c_int);
+    pub fn gtk_popover_popup(popover: *mut GtkPopover);
+    pub fn gtk_popover_popdown(popover: *mut GtkPopover);
+
+    pub fn gtk_image_new() -> *mut GtkWidget;
+    pub fn gtk_image_new_from_icon_name(icon_name: *const c_char) -> *mut GtkWidget;
+    pub fn gtk_image_set_from_icon_name(image: *mut GtkImage, icon_name: *const c_char);
+    pub fn gtk_image_set_from_gicon(image: *mut GtkImage, icon: *mut GIcon);
+    pub fn gtk_image_set_from_paintable(image: *mut GtkImage, paintable: *mut GdkPaintable);
+    pub fn gtk_image_set_pixel_size(image: *mut GtkImage, pixel_size: c_int);
+    pub fn gtk_image_clear(image: *mut GtkImage);
+
+    pub fn gtk_spinner_new() -> *mut GtkWidget;
+    pub fn gtk_spinner_set_spinning(spinner: *mut GtkSpinner, spinning: gboolean);
+
+    pub fn gtk_separator_new(orientation: c_int) -> *mut GtkWidget;
+
+    pub fn gtk_string_list_new(strings: *const *const c_char) -> *mut GtkStringList;
+
+    pub fn gtk_drag_source_new() -> *mut GtkDragSource;
+    pub fn gtk_drag_source_set_actions(source: *mut GtkDragSource, actions: c_uint);
+    pub fn gtk_drag_source_set_content(
+        source: *mut GtkDragSource,
+        content: *mut GdkContentProvider,
+    );
+
+    pub fn gtk_drop_target_new(type_: GType, actions: c_uint) -> *mut GtkDropTarget;
+    pub fn gtk_drop_target_set_actions(self_: *mut GtkDropTarget, actions: c_uint);
 
     pub fn gtk_progress_bar_new() -> *mut GtkWidget;
     pub fn gtk_progress_bar_set_fraction(pbar: *mut GtkProgressBar, fraction: gdouble);
@@ -597,4 +902,173 @@ extern "C" {
     pub fn adw_clamp_set_child(self_: *mut AdwClamp, child: *mut GtkWidget);
     pub fn adw_clamp_set_maximum_size(self_: *mut AdwClamp, maximum_size: c_int);
     pub fn adw_clamp_set_tightening_threshold(self_: *mut AdwClamp, tightening_threshold: c_int);
+
+    pub fn adw_tab_view_new() -> *mut AdwTabView;
+    pub fn adw_tab_view_get_n_pages(self_: *mut AdwTabView) -> c_int;
+    pub fn adw_tab_view_get_n_pinned_pages(self_: *mut AdwTabView) -> c_int;
+    pub fn adw_tab_view_get_selected_page(self_: *mut AdwTabView) -> *mut AdwTabPage;
+    pub fn adw_tab_view_set_selected_page(self_: *mut AdwTabView, selected_page: *mut AdwTabPage);
+    pub fn adw_tab_view_select_previous_page(self_: *mut AdwTabView) -> gboolean;
+    pub fn adw_tab_view_select_next_page(self_: *mut AdwTabView) -> gboolean;
+    pub fn adw_tab_view_set_default_icon(self_: *mut AdwTabView, default_icon: *mut GIcon);
+    pub fn adw_tab_view_set_menu_model(self_: *mut AdwTabView, menu_model: *mut GMenuModel);
+    pub fn adw_tab_view_set_shortcuts(self_: *mut AdwTabView, shortcuts: c_uint);
+    pub fn adw_tab_view_set_page_pinned(
+        self_: *mut AdwTabView,
+        page: *mut AdwTabPage,
+        pinned: gboolean,
+    );
+    pub fn adw_tab_view_get_page(self_: *mut AdwTabView, child: *mut GtkWidget) -> *mut AdwTabPage;
+    pub fn adw_tab_view_get_nth_page(self_: *mut AdwTabView, position: c_int) -> *mut AdwTabPage;
+    pub fn adw_tab_view_get_page_position(self_: *mut AdwTabView, page: *mut AdwTabPage) -> c_int;
+    pub fn adw_tab_view_append(self_: *mut AdwTabView, child: *mut GtkWidget) -> *mut AdwTabPage;
+    pub fn adw_tab_view_insert(
+        self_: *mut AdwTabView,
+        child: *mut GtkWidget,
+        position: c_int,
+    ) -> *mut AdwTabPage;
+    pub fn adw_tab_view_append_pinned(
+        self_: *mut AdwTabView,
+        child: *mut GtkWidget,
+    ) -> *mut AdwTabPage;
+    pub fn adw_tab_view_insert_pinned(
+        self_: *mut AdwTabView,
+        child: *mut GtkWidget,
+        position: c_int,
+    ) -> *mut AdwTabPage;
+    pub fn adw_tab_view_close_page(self_: *mut AdwTabView, page: *mut AdwTabPage);
+    pub fn adw_tab_view_close_page_finish(
+        self_: *mut AdwTabView,
+        page: *mut AdwTabPage,
+        confirm: gboolean,
+    );
+    pub fn adw_tab_view_close_other_pages(self_: *mut AdwTabView, page: *mut AdwTabPage);
+    pub fn adw_tab_view_reorder_page(
+        self_: *mut AdwTabView,
+        page: *mut AdwTabPage,
+        position: c_int,
+    ) -> gboolean;
+
+    pub fn adw_tab_page_get_child(self_: *mut AdwTabPage) -> *mut GtkWidget;
+    pub fn adw_tab_page_get_selected(self_: *mut AdwTabPage) -> gboolean;
+    pub fn adw_tab_page_get_pinned(self_: *mut AdwTabPage) -> gboolean;
+    pub fn adw_tab_page_get_title(self_: *mut AdwTabPage) -> *const c_char;
+    pub fn adw_tab_page_set_title(self_: *mut AdwTabPage, title: *const c_char);
+    pub fn adw_tab_page_get_tooltip(self_: *mut AdwTabPage) -> *const c_char;
+    pub fn adw_tab_page_set_tooltip(self_: *mut AdwTabPage, tooltip: *const c_char);
+    pub fn adw_tab_page_set_icon(self_: *mut AdwTabPage, icon: *mut GIcon);
+    pub fn adw_tab_page_get_loading(self_: *mut AdwTabPage) -> gboolean;
+    pub fn adw_tab_page_set_loading(self_: *mut AdwTabPage, loading: gboolean);
+    pub fn adw_tab_page_set_indicator_icon(self_: *mut AdwTabPage, indicator_icon: *mut GIcon);
+    pub fn adw_tab_page_set_indicator_tooltip(self_: *mut AdwTabPage, tooltip: *const c_char);
+    pub fn adw_tab_page_set_indicator_activatable(self_: *mut AdwTabPage, activatable: gboolean);
+
+    pub fn adw_tab_bar_new() -> *mut AdwTabBar;
+    pub fn adw_tab_bar_set_view(self_: *mut AdwTabBar, view: *mut AdwTabView);
+    pub fn adw_tab_bar_set_autohide(self_: *mut AdwTabBar, autohide: gboolean);
+    pub fn adw_tab_bar_set_expand_tabs(self_: *mut AdwTabBar, expand_tabs: gboolean);
+
+    pub fn adw_overlay_split_view_new() -> *mut GtkWidget;
+    pub fn adw_overlay_split_view_set_sidebar(
+        self_: *mut AdwOverlaySplitView,
+        sidebar: *mut GtkWidget,
+    );
+    pub fn adw_overlay_split_view_set_content(
+        self_: *mut AdwOverlaySplitView,
+        content: *mut GtkWidget,
+    );
+    pub fn adw_overlay_split_view_set_collapsed(
+        self_: *mut AdwOverlaySplitView,
+        collapsed: gboolean,
+    );
+    pub fn adw_overlay_split_view_get_show_sidebar(self_: *mut AdwOverlaySplitView) -> gboolean;
+    pub fn adw_overlay_split_view_set_show_sidebar(
+        self_: *mut AdwOverlaySplitView,
+        show_sidebar: gboolean,
+    );
+    pub fn adw_overlay_split_view_set_pin_sidebar(
+        self_: *mut AdwOverlaySplitView,
+        pin_sidebar: gboolean,
+    );
+    pub fn adw_overlay_split_view_set_min_sidebar_width(
+        self_: *mut AdwOverlaySplitView,
+        width: gdouble,
+    );
+    pub fn adw_overlay_split_view_set_max_sidebar_width(
+        self_: *mut AdwOverlaySplitView,
+        width: gdouble,
+    );
+
+    pub fn adw_dialog_new() -> *mut AdwDialog;
+    pub fn adw_dialog_set_child(self_: *mut AdwDialog, child: *mut GtkWidget);
+    pub fn adw_dialog_set_title(self_: *mut AdwDialog, title: *const c_char);
+    pub fn adw_dialog_set_content_width(self_: *mut AdwDialog, content_width: c_int);
+    pub fn adw_dialog_set_content_height(self_: *mut AdwDialog, content_height: c_int);
+    pub fn adw_dialog_set_follows_content_size(
+        self_: *mut AdwDialog,
+        follows_content_size: gboolean,
+    );
+    pub fn adw_dialog_set_focus(self_: *mut AdwDialog, focus: *mut GtkWidget);
+    pub fn adw_dialog_close(self_: *mut AdwDialog) -> gboolean;
+    pub fn adw_dialog_force_close(self_: *mut AdwDialog);
+    pub fn adw_dialog_present(self_: *mut AdwDialog, parent: *mut GtkWidget);
+
+    pub fn adw_preferences_dialog_new() -> *mut AdwDialog;
+    pub fn adw_preferences_dialog_add(
+        self_: *mut AdwPreferencesDialog,
+        page: *mut AdwPreferencesPage,
+    );
+    pub fn adw_preferences_dialog_set_search_enabled(
+        self_: *mut AdwPreferencesDialog,
+        search_enabled: gboolean,
+    );
+
+    pub fn adw_preferences_page_new() -> *mut GtkWidget;
+    pub fn adw_preferences_page_add(
+        self_: *mut AdwPreferencesPage,
+        group: *mut AdwPreferencesGroup,
+    );
+    pub fn adw_preferences_page_set_title(self_: *mut AdwPreferencesPage, title: *const c_char);
+    pub fn adw_preferences_page_set_icon_name(
+        self_: *mut AdwPreferencesPage,
+        icon_name: *const c_char,
+    );
+
+    pub fn adw_preferences_group_new() -> *mut GtkWidget;
+    pub fn adw_preferences_group_add(self_: *mut AdwPreferencesGroup, child: *mut GtkWidget);
+    pub fn adw_preferences_group_set_title(self_: *mut AdwPreferencesGroup, title: *const c_char);
+    pub fn adw_preferences_group_set_description(
+        self_: *mut AdwPreferencesGroup,
+        description: *const c_char,
+    );
+
+    pub fn adw_preferences_row_set_title(self_: *mut AdwPreferencesRow, title: *const c_char);
+
+    pub fn adw_action_row_new() -> *mut GtkWidget;
+    pub fn adw_action_row_set_subtitle(self_: *mut AdwActionRow, subtitle: *const c_char);
+    pub fn adw_action_row_add_suffix(self_: *mut AdwActionRow, widget: *mut GtkWidget);
+
+    pub fn adw_switch_row_new() -> *mut GtkWidget;
+    pub fn adw_switch_row_get_active(self_: *mut AdwSwitchRow) -> gboolean;
+    pub fn adw_switch_row_set_active(self_: *mut AdwSwitchRow, is_active: gboolean);
+
+    pub fn adw_combo_row_new() -> *mut GtkWidget;
+    pub fn adw_combo_row_set_model(self_: *mut AdwComboRow, model: *mut GListModel);
+    pub fn adw_combo_row_get_selected(self_: *mut AdwComboRow) -> guint;
+    pub fn adw_combo_row_set_selected(self_: *mut AdwComboRow, position: guint);
+
+    pub fn adw_entry_row_new() -> *mut GtkWidget;
+    pub fn adw_entry_row_set_show_apply_button(self_: *mut AdwEntryRow, show: gboolean);
+
+    pub fn adw_shortcuts_dialog_new() -> *mut AdwDialog;
+    pub fn adw_shortcuts_dialog_add(
+        self_: *mut AdwShortcutsDialog,
+        section: *mut AdwShortcutsSection,
+    );
+    pub fn adw_shortcuts_section_new(title: *const c_char) -> *mut AdwShortcutsSection;
+    pub fn adw_shortcuts_section_add(self_: *mut AdwShortcutsSection, item: *mut AdwShortcutsItem);
+    pub fn adw_shortcuts_item_new(
+        title: *const c_char,
+        accelerator: *const c_char,
+    ) -> *mut AdwShortcutsItem;
 }

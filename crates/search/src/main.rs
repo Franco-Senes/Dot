@@ -34,7 +34,7 @@ mod vault;
 mod vault_ui;
 mod window;
 
-use app::CliOptions;
+use app::{CliOptions, SmokeMode};
 use search_core::paths::SearchPaths;
 use settings::SettingsStore;
 use std::process::ExitCode;
@@ -121,7 +121,7 @@ fn parse_cli_args() -> CliParseOutcome {
             }
             "--smoke-test" => match iter.next() {
                 Some(url) if !url.trim().is_empty() => {
-                    opts.smoke_test_url = Some(url);
+                    opts.smoke_mode = SmokeMode::SingleUrl(url);
                 }
                 _ => {
                     return CliParseOutcome::ExitError(
@@ -136,7 +136,13 @@ fn parse_cli_args() -> CliParseOutcome {
                         "la opción --smoke-test requiere una <url>".to_string(),
                     );
                 }
-                opts.smoke_test_url = Some(url.to_string());
+                opts.smoke_mode = SmokeMode::SingleUrl(url.to_string());
+            }
+            "--smoke-test-session-create" => {
+                opts.smoke_mode = SmokeMode::SessionCreate;
+            }
+            "--smoke-test-session-restore" => {
+                opts.smoke_mode = SmokeMode::SessionRestore;
             }
             _ if arg.starts_with('-') => {
                 // Ignorar flags extra de entorno/GTK/Chromium sin abortar.
@@ -155,9 +161,11 @@ fn print_help() {
         "Search {} — Navegador web minimalista, rápido y privado para Linux\n\n\
          USO:\n  search [OPCIONES] [URL...]\n\n\
          OPCIONES:\n  \
-           --smoke-test <URL>  Carga <URL>, verifica renderizado OSR en CEF y sale con código 0\n  \
-           -h, --help          Muestra esta ayuda\n  \
-           -V, --version       Muestra la versión",
+           --smoke-test <URL>            Carga <URL>, verifica renderizado OSR en CEF y sale con código 0\n  \
+           --smoke-test-session-create   Crea una sesión de prueba con 15 pestañas (2 fijadas) y la guarda\n  \
+           --smoke-test-session-restore  Restaura la sesión de 15 pestañas verificando carga diferida (1 CEF)\n  \
+           -h, --help                    Muestra esta ayuda\n  \
+           -V, --version                 Muestra la versión",
         env!("CARGO_PKG_VERSION")
     );
 }

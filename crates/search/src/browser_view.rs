@@ -27,6 +27,15 @@ use std::cell::{Cell, RefCell};
 use std::collections::HashSet;
 use std::io::Read;
 use std::rc::Rc;
+use std::sync::atomic::{AtomicUsize, Ordering};
+
+static ACTIVE_BROWSER_COUNT: AtomicUsize = AtomicUsize::new(0);
+
+/// Número actual de instancias activas de `cef::Browser` en este proceso.
+/// Sirve para verificar la carga diferida (lazy) de pestañas restauradas.
+pub fn active_browser_count() -> usize {
+    ACTIVE_BROWSER_COUNT.load(Ordering::SeqCst)
+}
 
 const CEF_EVENTFLAG_CAPS_LOCK_ON: u32 = 1 << 0;
 const CEF_EVENTFLAG_SHIFT_DOWN: u32 = 1 << 1;
@@ -49,6 +58,9 @@ pub struct BrowserCallbacks {
     pub on_loading_state_changed: Option<LoadingStateCallback>,
     pub on_progress_changed: Option<Box<dyn Fn(f64)>>,
     pub on_favicon_changed: Option<Box<dyn Fn(Option<String>)>>,
+    pub on_favicon_png: Option<Box<dyn Fn(Vec<u8>)>>,
+    pub on_audio_state_changed: Option<Box<dyn Fn(bool, bool)>>,
+    pub on_open_new_tab: Option<Box<dyn Fn(String, bool)>>,
     pub on_fullscreen_changed: Option<Box<dyn Fn(bool)>>,
     pub on_find_result: Option<Box<dyn Fn(i32, i32)>>,
     pub on_load_finished: Option<Box<dyn Fn(String, i32)>>,
@@ -67,17 +79,30 @@ struct SharedState {
     title: RefCell<String>,
     current_url: RefCell<String>,
     favicon_url: RefCell<Option<String>>,
+    last_favicon_requested: RefCell<Option<String>>,
     is_loading: Cell<bool>,
     can_go_back: Cell<bool>,
     can_go_forward: Cell<bool>,
+    is_audible: Cell<bool>,
+    is_muted: Cell<bool>,
     progress: Cell<f64>,
     zoom_factor: Cell<f64>,
     paint_frames: Cell<u64>,
     non_empty_frames: Cell<u64>,
     tls_nonce: String,
+    audio_nonce: String,
     tls_allowed_hosts: RefCell<HashSet<String>>,
     suppress_next_abort_error: Cell<bool>,
+    counted_active: Cell<bool>,
     callbacks: RefCell<BrowserCallbacks>,
+}
+
+impl Drop for SharedState {
+    fn drop(&mut self) {
+        if self.counted_active.replace(false) {
+            ACTIVE_BROWSER_COUNT.fetch_sub(1, Ordering::SeqCst);
+        }
+    }
 }
 
 /// Instancia independiente de vista web lista para alojarse en una ventana o en `AdwTabView`.
@@ -141,16 +166,21 @@ impl BrowserView {
             title: RefCell::new(String::new()),
             current_url: RefCell::new(initial_url.to_string()),
             favicon_url: RefCell::new(None),
+            last_favicon_requested: RefCell::new(None),
             is_loading: Cell::new(false),
             can_go_back: Cell::new(false),
             can_go_forward: Cell::new(false),
+            is_audible: Cell::new(false),
+            is_muted: Cell::new(false),
             progress: Cell::new(0.0),
             zoom_factor: Cell::new(initial_zoom),
             paint_frames: Cell::new(0),
             non_empty_frames: Cell::new(0),
             tls_nonce: generate_hex_nonce_128(),
+            audio_nonce: generate_hex_nonce_128(),
             tls_allowed_hosts: RefCell::new(HashSet::new()),
             suppress_next_abort_error: Cell::new(false),
+            counted_active: Cell::new(false),
             callbacks: RefCell::new(BrowserCallbacks::default()),
         });
 
@@ -195,6 +225,8 @@ impl BrowserView {
         .context("cef::browser_host_create_browser_sync no pudo crear el navegador OSR")?;
 
         *shared.browser.borrow_mut() = Some(browser);
+        shared.counted_active.set(true);
+        ACTIVE_BROWSER_COUNT.fetch_add(1, Ordering::SeqCst);
 
         let view = Self { shared };
         view.attach_gtk_controllers(&resize_sensor);
@@ -377,11 +409,46 @@ impl BrowserView {
         self.shared.non_empty_frames.get()
     }
 
+    #[allow(dead_code)]
+    pub fn is_audible(&self) -> bool {
+        self.shared.is_audible.get()
+    }
+
+    pub fn is_audio_muted(&self) -> bool {
+        if let Some(host) = self.host() {
+            let muted = host.is_audio_muted() != 0;
+            self.shared.is_muted.set(muted);
+            muted
+        } else {
+            self.shared.is_muted.get()
+        }
+    }
+
+    pub fn set_audio_muted(&self, muted: bool) {
+        self.shared.is_muted.set(muted);
+        if let Some(host) = self.host() {
+            host.set_audio_muted(i32::from(muted));
+        }
+        let audible = self.shared.is_audible.get();
+        if let Some(ref cb) = self.shared.callbacks.borrow().on_audio_state_changed {
+            cb(audible, muted);
+        }
+    }
+
+    pub fn toggle_audio_muted(&self) -> bool {
+        let next = !self.is_audio_muted();
+        self.set_audio_muted(next);
+        next
+    }
+
     pub fn close_browser(&self) {
         if let Some(host) = self.host() {
             host.close_browser(1);
         }
         *self.shared.browser.borrow_mut() = None;
+        if self.shared.counted_active.replace(false) {
+            ACTIVE_BROWSER_COUNT.fetch_sub(1, Ordering::SeqCst);
+        }
     }
 
     fn browser(&self) -> Option<Browser> {
@@ -793,6 +860,49 @@ wrap_render_handler! {
     }
 }
 
+wrap_download_image_callback! {
+    struct FaviconDownloadCallback {
+        shared: Rc<SharedState>,
+    }
+
+    impl DownloadImageCallback {
+        fn on_download_image_finished(
+            &self,
+            _image_url: Option<&CefString>,
+            http_status_code: ::std::os::raw::c_int,
+            image: Option<&mut Image>,
+        ) {
+            if http_status_code != 200 && http_status_code != 0 {
+                return;
+            }
+            let Some(img) = image else {
+                return;
+            };
+            if img.is_empty() != 0 {
+                return;
+            }
+            let mut pw = 0;
+            let mut ph = 0;
+            let Some(bin) = img.as_png(1.0, 1, Some(&mut pw), Some(&mut ph)) else {
+                return;
+            };
+            let size = bin.size();
+            if size == 0 || size > 512 * 1024 {
+                return;
+            }
+            let mut buf = vec![0u8; size];
+            let copied = bin.data(Some(&mut buf), 0);
+            buf.truncate(copied);
+            if buf.is_empty() {
+                return;
+            }
+            if let Some(ref cb) = self.shared.callbacks.borrow().on_favicon_png {
+                cb(buf);
+            }
+        }
+    }
+}
+
 wrap_display_handler! {
     struct SearchDisplayHandler {
         shared: Rc<SharedState>,
@@ -833,7 +943,7 @@ wrap_display_handler! {
 
         fn on_favicon_urlchange(
             &self,
-            _browser: Option<&mut Browser>,
+            browser: Option<&mut Browser>,
             icon_urls: Option<&mut CefStringList>,
         ) {
             let first = icon_urls
@@ -841,8 +951,45 @@ wrap_display_handler! {
                 .filter(|s| !s.is_empty());
             *self.shared.favicon_url.borrow_mut() = first.clone();
             if let Some(ref cb) = self.shared.callbacks.borrow().on_favicon_changed {
-                cb(first);
+                cb(first.clone());
             }
+            if let Some(ref url) = first {
+                let already = self.shared.last_favicon_requested.borrow().as_deref() == Some(url.as_str());
+                if !already {
+                    *self.shared.last_favicon_requested.borrow_mut() = Some(url.clone());
+                    if let Some(host) = browser.and_then(|b| b.host()) {
+                        let cef_url = CefString::from(url.as_str());
+                        let mut dl_cb = FaviconDownloadCallback::new(self.shared.clone());
+                        host.download_image(Some(&cef_url), 1, 64, 0, Some(&mut dl_cb));
+                    }
+                }
+            }
+        }
+
+        fn on_console_message(
+            &self,
+            _browser: Option<&mut Browser>,
+            _level: LogSeverity,
+            message: Option<&CefString>,
+            _source: Option<&CefString>,
+            _line: ::std::os::raw::c_int,
+        ) -> ::std::os::raw::c_int {
+            let Some(msg) = message.map(CefString::to_string) else {
+                return 0;
+            };
+            let prefix = format!("__search_audio_{}:", self.shared.audio_nonce);
+            if let Some(flag) = msg.strip_prefix(&prefix) {
+                let playing = flag.trim() == "1";
+                let changed = self.shared.is_audible.replace(playing) != playing;
+                if changed {
+                    let muted = self.shared.is_muted.get();
+                    if let Some(ref cb) = self.shared.callbacks.borrow().on_audio_state_changed {
+                        cb(playing, muted);
+                    }
+                }
+                return 1;
+            }
+            0
         }
 
         fn on_fullscreen_mode_change(
@@ -945,6 +1092,17 @@ wrap_load_handler! {
                 return;
             }
             let url = CefString::from(&frame.url()).to_string();
+            if !url.starts_with("data:text/html;charset=utf-8,<!--search-internal-->")
+                && url != "about:blank"
+            {
+                let audio_js = format!(
+                    "(()=>{{if(window.__sAud)return;window.__sAud=1;const p='__search_audio_{}:';let last=false;const chk=()=>{{const ms=document.querySelectorAll('audio,video');let a=false;for(const m of ms){{if(!m.paused&&!m.ended&&!m.muted&&m.volume>0){{a=true;break;}}}}if(a!==last){{last=a;console.debug(p+(a?'1':'0'));}}}};document.addEventListener('play',chk,true);document.addEventListener('pause',chk,true);document.addEventListener('ended',chk,true);document.addEventListener('volumechange',chk,true);chk();}})();",
+                    self.shared.audio_nonce
+                );
+                let cef_js = CefString::from(audio_js.as_str());
+                let src = CefString::from("search://audio");
+                frame.execute_java_script(Some(&cef_js), Some(&src), 1);
+            }
             if let Some(ref cb) = self.shared.callbacks.borrow().on_load_finished {
                 cb(url, http_status_code);
             }
@@ -1006,7 +1164,7 @@ wrap_life_span_handler! {
             _popup_id: ::std::os::raw::c_int,
             target_url: Option<&CefString>,
             _target_frame_name: Option<&CefString>,
-            _target_disposition: WindowOpenDisposition,
+            target_disposition: WindowOpenDisposition,
             user_gesture: ::std::os::raw::c_int,
             _popup_features: Option<&PopupFeatures>,
             _window_info: Option<&mut WindowInfo>,
@@ -1015,19 +1173,27 @@ wrap_life_span_handler! {
             _extra_info: Option<&mut Option<DictionaryValue>>,
             _no_javascript_access: Option<&mut ::std::os::raw::c_int>,
         ) -> ::std::os::raw::c_int {
-            // En Fase 1 (una vista sin pestañas aún), abrimos popups iniciados por gesto
-            // explícito del usuario en la vista actual y bloqueamos popups no solicitados.
+            // Bloquea popups no solicitados; los iniciados por gesto (`target=_blank`,
+            // `window.open` de OAuth, clic central) se abren en una nueva pestaña de la
+            // misma ventana conservando el mismo `RequestContext`.
             if user_gesture != 0 {
-                if let (Some(browser), Some(url)) = (browser, target_url) {
+                if let Some(url) = target_url {
                     let url_s = url.to_string();
                     if !url_s.is_empty() {
-                        if let Some(main_frame) = browser.main_frame() {
-                            let clean = if self.shared.settings.with(|s| s.strip_click_ids) {
-                                CefString::from(strip_click_ids(&url_s).as_str())
-                            } else {
-                                url.clone()
-                            };
-                            main_frame.load_url(Some(&clean));
+                        let clean = if self.shared.settings.with(|s| s.strip_click_ids) {
+                            strip_click_ids(&url_s)
+                        } else {
+                            url_s
+                        };
+                        let background =
+                            target_disposition == WindowOpenDisposition::NEW_BACKGROUND_TAB;
+                        if let Some(ref open_cb) = self.shared.callbacks.borrow().on_open_new_tab {
+                            open_cb(clean, background);
+                            return 1;
+                        }
+                        if let Some(main_frame) = browser.and_then(|b| b.main_frame()) {
+                            let cs = CefString::from(clean.as_str());
+                            main_frame.load_url(Some(&cs));
                         }
                     }
                 }
@@ -1223,6 +1389,43 @@ wrap_request_handler! {
                 }
             }
 
+            0
+        }
+
+        fn on_open_urlfrom_tab(
+            &self,
+            _browser: Option<&mut Browser>,
+            _frame: Option<&mut Frame>,
+            target_url: Option<&CefString>,
+            target_disposition: WindowOpenDisposition,
+            _user_gesture: ::std::os::raw::c_int,
+        ) -> ::std::os::raw::c_int {
+            let opens_tab = matches!(
+                target_disposition,
+                WindowOpenDisposition::NEW_BACKGROUND_TAB
+                    | WindowOpenDisposition::NEW_FOREGROUND_TAB
+                    | WindowOpenDisposition::NEW_WINDOW
+                    | WindowOpenDisposition::NEW_POPUP
+            );
+            if !opens_tab {
+                return 0;
+            }
+            let Some(url) = target_url.map(CefString::to_string) else {
+                return 0;
+            };
+            if url.is_empty() {
+                return 0;
+            }
+            let clean = if self.shared.settings.with(|s| s.strip_click_ids) {
+                strip_click_ids(&url)
+            } else {
+                url
+            };
+            let background = target_disposition == WindowOpenDisposition::NEW_BACKGROUND_TAB;
+            if let Some(ref open_cb) = self.shared.callbacks.borrow().on_open_new_tab {
+                open_cb(clean, background);
+                return 1;
+            }
             0
         }
 
@@ -1556,10 +1759,20 @@ fn should_propagate_shortcut_to_window(keyval: u32, mods: ModifierType, is_loadi
 
     if ctrl && !alt {
         match lower {
-            // Ctrl+L, Ctrl+F, Ctrl+G, Ctrl+R, Ctrl+Q
-            0x6c | 0x66 | 0x67 | 0x72 | 0x71 => return true,
-            // Ctrl+Shift+I, Ctrl+Shift+C, Ctrl+Shift+V
-            0x69 | 0x63 | 0x76 if shift => return true,
+            // Ctrl+L, Ctrl+F, Ctrl+G, Ctrl+R, Ctrl+Q, Ctrl+T, Ctrl+W, Ctrl+K, Ctrl+N, Ctrl+S
+            0x6c | 0x66 | 0x67 | 0x72 | 0x71 | 0x74 | 0x77 | 0x6b | 0x6e | 0x73 => return true,
+            // Ctrl+Shift+I, Ctrl+Shift+C, Ctrl+Shift+V, Ctrl+Shift+M
+            0x69 | 0x63 | 0x76 | 0x6d if shift => return true,
+            // Ctrl+1..9
+            gdk::keys::KEY_1..=gdk::keys::KEY_9 => return true,
+            // Cambio de pestañas, preferencias y atajos
+            gdk::keys::TAB
+            | gdk::keys::ISO_LEFT_TAB
+            | gdk::keys::PAGE_UP
+            | gdk::keys::PAGE_DOWN
+            | gdk::keys::COMMA
+            | gdk::keys::QUESTION => return true,
+            gdk::keys::SLASH if shift => return true,
             // Zoom y navegación Ctrl+[ / Ctrl+]
             gdk::keys::PLUS
             | gdk::keys::EQUAL
@@ -1574,8 +1787,8 @@ fn should_propagate_shortcut_to_window(keyval: u32, mods: ModifierType, is_loadi
         }
     }
 
-    if ctrl && alt && !shift && lower == 0x72 {
-        // Ctrl+Alt+R
+    if ctrl && alt && !shift && matches!(lower, 0x72 | 0x64) {
+        // Ctrl+Alt+R, Ctrl+Alt+D (duplicar pestaña)
         return true;
     }
 

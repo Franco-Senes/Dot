@@ -338,8 +338,7 @@ impl CefEngine {
     }
 
     /// Crea un `RequestContext` efímero aislado en memoria (`cache_path = ""`, sin tocar disco),
-    /// listo para ventanas privadas en la Fase 2 con las mismas preferencias de privacidad aplicadas.
-    #[allow(dead_code)]
+    /// usado por las ventanas privadas con las mismas preferencias de privacidad aplicadas.
     pub fn create_ephemeral_context(&self) -> Option<RequestContext> {
         let settings = RequestContextSettings {
             cache_path: CefString::default(),

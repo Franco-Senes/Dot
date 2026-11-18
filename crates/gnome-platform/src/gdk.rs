@@ -29,6 +29,97 @@ pub enum MemoryFormat {
     R8g8b8a8 = 5,
 }
 
+bitflags! {
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    pub struct DragAction: u32 {
+        const NONE = 0;
+        const COPY = 1 << 0;
+        const MOVE = 1 << 1;
+        const LINK = 1 << 2;
+        const ASK = 1 << 3;
+    }
+}
+
+#[derive(Debug, Clone, Copy, Default)]
+pub struct Rectangle {
+    pub x: i32,
+    pub y: i32,
+    pub width: i32,
+    pub height: i32,
+}
+
+impl Rectangle {
+    pub(crate) fn to_raw(self) -> sys::GdkRectangle {
+        sys::GdkRectangle {
+            x: self.x,
+            y: self.y,
+            width: self.width,
+            height: self.height,
+        }
+    }
+}
+
+#[derive(Clone)]
+pub struct Texture {
+    obj: ObjectRef,
+}
+
+impl Texture {
+    pub fn from_bytes(bytes: &Bytes) -> Option<Self> {
+        unsafe {
+            let mut err: *mut sys::GError = std::ptr::null_mut();
+            let ptr = sys::gdk_texture_new_from_bytes(bytes.as_ptr(), &mut err);
+            if !err.is_null() {
+                sys::g_error_free(err);
+            }
+            if ptr.is_null() {
+                None
+            } else {
+                Some(Self {
+                    obj: ObjectRef::from_new_ptr(ptr.cast()),
+                })
+            }
+        }
+    }
+
+    pub fn width(&self) -> i32 {
+        unsafe { sys::gdk_texture_get_width(self.obj.as_ptr().cast()) }
+    }
+
+    pub fn height(&self) -> i32 {
+        unsafe { sys::gdk_texture_get_height(self.obj.as_ptr().cast()) }
+    }
+
+    pub fn as_paintable_ptr(&self) -> *mut sys::GdkPaintable {
+        self.obj.as_ptr().cast()
+    }
+}
+
+#[derive(Clone)]
+pub struct ContentProvider {
+    pub(crate) obj: ObjectRef,
+}
+
+impl ContentProvider {
+    pub fn for_string(value: &str) -> Self {
+        let c_str = to_cstring(value);
+        unsafe {
+            let mut gval = sys::GValue::default();
+            sys::g_value_init(&mut gval, sys::G_TYPE_STRING);
+            sys::g_value_set_string(&mut gval, c_str.as_ptr());
+            let ptr = sys::gdk_content_provider_new_for_value(&gval);
+            sys::g_value_unset(&mut gval);
+            Self {
+                obj: ObjectRef::from_new_ptr(ptr.cast()),
+            }
+        }
+    }
+
+    pub fn as_ptr(&self) -> *mut sys::GdkContentProvider {
+        self.obj.as_ptr().cast()
+    }
+}
+
 #[derive(Clone)]
 pub struct MemoryTexture {
     obj: ObjectRef,
@@ -188,6 +279,11 @@ pub mod keys {
     pub const MINUS: u32 = 0x002d;
     pub const EQUAL: u32 = 0x003d;
     pub const ZERO: u32 = 0x0030;
+    pub const KEY_1: u32 = 0x0031;
+    pub const KEY_9: u32 = 0x0039;
+    pub const COMMA: u32 = 0x002c;
+    pub const SLASH: u32 = 0x002f;
+    pub const QUESTION: u32 = 0x003f;
     pub const BRACKET_LEFT: u32 = 0x005b;
     pub const BRACKET_RIGHT: u32 = 0x005d;
     pub const KP_ADD: u32 = 0xffab;

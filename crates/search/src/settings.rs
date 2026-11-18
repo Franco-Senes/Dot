@@ -11,7 +11,7 @@ use std::rc::Rc;
 
 pub const GSETTINGS_SCHEMA_ID: &str = "io.github.searchlinux.Search";
 
-type Listener = Box<dyn Fn(&AppSettings)>;
+type Listener = Rc<dyn Fn(&AppSettings)>;
 
 #[derive(Clone)]
 pub struct SettingsStore {
@@ -79,14 +79,14 @@ impl SettingsStore {
             inner.settings.clone()
         };
 
-        let inner = self.inner.borrow();
-        for listener in &inner.listeners {
+        let listeners: Vec<Listener> = self.inner.borrow().listeners.clone();
+        for listener in listeners {
             listener(&snapshot);
         }
     }
 
     pub fn subscribe(&self, listener: impl Fn(&AppSettings) + 'static) {
-        self.inner.borrow_mut().listeners.push(Box::new(listener));
+        self.inner.borrow_mut().listeners.push(Rc::new(listener));
     }
 }
 

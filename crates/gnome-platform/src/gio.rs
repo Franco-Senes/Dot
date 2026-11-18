@@ -1,3 +1,4 @@
+use crate::glib::Bytes;
 use crate::object::{connect_signal_action_activate, to_cstring, ObjectRef, SignalHandlerId};
 use crate::sys;
 use bitflags::bitflags;
@@ -43,6 +44,111 @@ impl SimpleAction {
 
     pub fn as_action_ptr(&self) -> *mut sys::GAction {
         self.obj.as_ptr().cast()
+    }
+}
+
+#[derive(Clone)]
+pub struct SimpleActionGroup {
+    obj: ObjectRef,
+}
+
+impl SimpleActionGroup {
+    pub fn new() -> Self {
+        let ptr = unsafe { sys::g_simple_action_group_new() };
+        let obj = unsafe { ObjectRef::from_new_ptr(ptr.cast()) };
+        Self { obj }
+    }
+
+    pub fn add_action(&self, action: &SimpleAction) {
+        unsafe {
+            sys::g_action_map_add_action(self.obj.as_ptr().cast(), action.as_action_ptr());
+        }
+    }
+
+    pub fn as_action_group_ptr(&self) -> *mut sys::GActionGroup {
+        self.obj.as_ptr().cast()
+    }
+}
+
+impl Default for SimpleActionGroup {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+#[derive(Clone)]
+pub struct Icon {
+    obj: ObjectRef,
+}
+
+impl Icon {
+    pub fn themed(icon_name: &str) -> Self {
+        let c_name = to_cstring(icon_name);
+        let ptr = unsafe { sys::g_themed_icon_new(c_name.as_ptr()) };
+        let obj = unsafe { ObjectRef::from_new_ptr(ptr.cast()) };
+        Self { obj }
+    }
+
+    pub fn from_bytes(bytes: &Bytes) -> Self {
+        let ptr = unsafe { sys::g_bytes_icon_new(bytes.as_ptr()) };
+        let obj = unsafe { ObjectRef::from_new_ptr(ptr.cast()) };
+        Self { obj }
+    }
+
+    pub fn as_gicon_ptr(&self) -> *mut sys::GIcon {
+        self.obj.as_ptr().cast()
+    }
+}
+
+#[derive(Clone)]
+pub struct Menu {
+    obj: ObjectRef,
+}
+
+impl Menu {
+    pub fn new() -> Self {
+        let ptr = unsafe { sys::g_menu_new() };
+        let obj = unsafe { ObjectRef::from_new_ptr(ptr.cast()) };
+        Self { obj }
+    }
+
+    pub fn append(&self, label: &str, detailed_action: Option<&str>) {
+        let c_label = to_cstring(label);
+        let c_action = detailed_action.map(to_cstring);
+        unsafe {
+            sys::g_menu_append(
+                self.obj.as_ptr().cast(),
+                c_label.as_ptr(),
+                c_action.as_ref().map_or(ptr::null(), |s| s.as_ptr()),
+            );
+        }
+    }
+
+    pub fn append_section(&self, label: Option<&str>, section: &Menu) {
+        let c_label = label.map(to_cstring);
+        unsafe {
+            sys::g_menu_append_section(
+                self.obj.as_ptr().cast(),
+                c_label.as_ref().map_or(ptr::null(), |s| s.as_ptr()),
+                section.as_menu_model_ptr(),
+            );
+        }
+    }
+
+    pub fn remove_all(&self) {
+        unsafe {
+            sys::g_menu_remove_all(self.obj.as_ptr().cast());
+        }
+    }
+
+    pub fn as_menu_model_ptr(&self) -> *mut sys::GMenuModel {
+        self.obj.as_ptr().cast()
+    }
+}
+
+impl Default for Menu {
+    fn default() -> Self {
+        Self::new()
     }
 }
 

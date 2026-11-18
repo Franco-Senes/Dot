@@ -82,6 +82,10 @@ impl SearchPaths {
         self.config_dir.join("settings.json")
     }
 
+    pub fn session_file(&self) -> PathBuf {
+        self.data_dir.join("session.json")
+    }
+
     pub fn cef_cache_dir(&self) -> PathBuf {
         self.cache_dir.join("cef")
     }
