@@ -101,6 +101,40 @@ impl Icon {
 }
 
 #[derive(Clone)]
+pub struct Notification {
+    obj: ObjectRef,
+}
+
+impl Notification {
+    pub fn new(title: &str) -> Self {
+        let c_title = to_cstring(title);
+        let ptr = unsafe { sys::g_notification_new(c_title.as_ptr()) };
+        let obj = unsafe { ObjectRef::from_new_ptr(ptr.cast()) };
+        Self { obj }
+    }
+
+    pub fn set_body(&self, body: Option<&str>) {
+        let c_body = body.map(to_cstring);
+        unsafe {
+            sys::g_notification_set_body(
+                self.obj.as_ptr().cast(),
+                c_body.as_ref().map_or(ptr::null(), |s| s.as_ptr()),
+            );
+        }
+    }
+
+    pub fn set_icon(&self, icon: &Icon) {
+        unsafe {
+            sys::g_notification_set_icon(self.obj.as_ptr().cast(), icon.as_gicon_ptr());
+        }
+    }
+
+    pub fn as_notification_ptr(&self) -> *mut sys::GNotification {
+        self.obj.as_ptr().cast()
+    }
+}
+
+#[derive(Clone)]
 pub struct Menu {
     obj: ObjectRef,
 }

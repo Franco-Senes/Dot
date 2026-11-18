@@ -1,6 +1,37 @@
 use crate::sys;
+use std::ffi::CStr;
+use std::path::PathBuf;
 use std::ptr::NonNull;
 use std::time::Duration;
+
+#[repr(i32)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum UserDirectory {
+    Desktop = 0,
+    Documents = 1,
+    Download = 2,
+    Music = 3,
+    Pictures = 4,
+    PublicShare = 5,
+    Templates = 6,
+    Videos = 7,
+}
+
+/// Obtiene el directorio especial XDG del usuario (`g_get_user_special_dir`).
+pub fn user_special_dir(dir: UserDirectory) -> Option<PathBuf> {
+    unsafe {
+        let ptr = sys::g_get_user_special_dir(dir as libc::c_int);
+        if ptr.is_null() {
+            return None;
+        }
+        let s = CStr::from_ptr(ptr).to_string_lossy();
+        if s.is_empty() {
+            None
+        } else {
+            Some(PathBuf::from(s.into_owned()))
+        }
+    }
+}
 
 pub struct Bytes {
     ptr: NonNull<sys::GBytes>,

@@ -100,8 +100,8 @@ Estados: `pendiente` · `directo` · `adaptado` · `diferido` · `imposible` · 
 | `Sources/Search/Bench.swift` | Servidor en socket Unix `bench.sock` para pruebas y automatización | `crates/search/src/bench.rs` | `UnixListener` (`0600`, `SO_PEERCRED`), `glib`, `cef::Browser` | adaptado | 7 |
 | `Sources/Search/BlockedPopups.swift` | Control de ventanas emergentes bloqueadas por pestaña | `crates/search/src/browser_view.rs` | `cef::LifeSpanHandler::on_before_popup` | hecho | 2 |
 | `Sources/Search/BookmarksBar.swift` | Barra horizontal opcional de marcadores | `crates/search/src/bookmarks_ui.rs` | `gtk4::Box`, `gtk4::PopoverMenu` | diferido | 3 |
-| `Sources/Search/BookmarksFile.swift` | Importador/exportador HTML Netscape de marcadores | `crates/search-core/src/bookmarks.rs` | Rust puro (`BufRead` / generador HTML) | directo | 3 |
-| `Sources/Search/Bookmarks.swift` | Modelo de árbol `bookmarks.json`, búsqueda y gestión de marcadores | `crates/search-core/src/bookmarks.rs` + `crates/search/src/bookmarks_ui.rs` | `serde_json`, `adw::OverlaySplitView`, `gtk4::Popover` | adaptado | 3 |
+| `Sources/Search/BookmarksFile.swift` | Importador/exportador HTML Netscape de marcadores | `crates/search-core/src/bookmarks.rs` | Rust puro (`BufRead` / generador HTML) | hecho | 3 |
+| `Sources/Search/Bookmarks.swift` | Modelo de árbol `bookmarks.json`, búsqueda y gestión de marcadores | `crates/search-core/src/bookmarks.rs` + `crates/search/src/bookmarks_ui.rs` | `serde_json`, `adw::OverlaySplitView`, `gtk4::Popover` | hecho | 3 |
 | `Sources/Search/BrowserPinFolders.swift` | Operaciones sobre carpetas de pestañas fijadas | `crates/search-core/src/session.rs` | Rust puro | diferido | 2 |
 | `Sources/Search/Browser.swift` | Coordinador por ventana de pestañas, navegación, privacidad y paneles | `crates/search/src/window.rs` | `adw::ApplicationWindow`, `adw::TabView`, `cef::RequestContext` | hecho | 1 |
 | `Sources/Search/CaptureChoices.swift` | Permisos recordados por origen (cámara, micro, ubicación, notif.) | `crates/search-core/src/settings.rs` | `cef::PermissionHandler`, `serde_json` | adaptado | 4 |
@@ -112,7 +112,7 @@ Estados: `pendiente` · `directo` · `adaptado` · `diferido` · `imposible` · 
 | `Sources/Search/Curtain.swift` | Selector visual para ocultar elementos DOM y persistencia por dominio | `crates/search-core/src/curtain.rs` + `crates/search/src/curtain.rs` | `cef::Frame::execute_java_script`, puente IPC, Rust | adaptado | 4 |
 | `Sources/Search/Design.swift` | Paleta claro/oscuro, métricas y CSS base | `crates/search/src/style.rs` | `adw::StyleManager`, `gtk4::CssProvider` | hecho | 1 |
 | `Sources/Search/Dialogs.swift` | Diálogos JS (`alert`/`confirm`/`prompt`), archivos, HTTP Auth y TLS | `crates/search/src/browser_view.rs` | `cef::JSDialogHandler`, `cef::DialogHandler`, `on_certificate_error` | hecho | 1 |
-| `Sources/Search/DownloadsFloat.swift` | Popover/panel discreto de descargas | `crates/search/src/downloads_ui.rs` | `gtk4::Popover` / `adw::OverlaySplitView` | adaptado | 3 |
+| `Sources/Search/DownloadsFloat.swift` | Popover/panel discreto de descargas | `crates/search/src/downloads_ui.rs` | `gtk4::Popover` / `adw::OverlaySplitView` | hecho | 3 |
 | `Sources/Search/DuskColours.swift` | Motor CSSOM de modo oscuro forzado para sitios claros | — | Función extra no requerida en `PLAN.md` | diferido | — |
 | `Sources/Search/Dusk.swift` | Coordinador de oscurecimiento automático por sitio | — | Función extra no requerida en `PLAN.md` | diferido | — |
 | `Sources/Search/EngineSuggest.swift` | Sugerencias remotas opcionales del buscador (`off` por defecto) | — | Desactivado por principio de cero peticiones no pedidas | diferido | — |
@@ -134,7 +134,7 @@ Estados: `pendiente` · `directo` · `adaptado` · `diferido` · `imposible` · 
 | `Sources/Search/ExtensionsUI.swift` | Interfaz de gestión de extensiones | `crates/search/src/extensions.rs` | `adw::PreferencesGroup` | adaptado | 9 |
 | `Sources/Search/ExtensionWatch.swift` | Eventos `groups` e `idle` para extensiones | `crates/search/src/extensions.rs` | Según soporte Alloy/Chrome en Fase 9 | diferido | 9 |
 | `Sources/Search/ExtensionWorkerRecovery.swift` | Recuperación de workers MV3 en `WKWebExtensionContext` | — | Específico de `WKWebExtensionContext` de Apple | imposible | 9 |
-| `Sources/Search/Fetching.swift` | Descargas en curso, progreso, velocidad, cancelar y reintentar | `crates/search/src/downloads.rs` | `cef::DownloadHandler`, `cef::DownloadItem` | adaptado | 3 |
+| `Sources/Search/Fetching.swift` | Descargas en curso, progreso, velocidad, cancelar y reintentar | `crates/search/src/downloads.rs` | `cef::DownloadHandler`, `cef::DownloadItem` | hecho | 3 |
 | `Sources/Search/Find.swift` | Barra simple de búsqueda en la página (`Ctrl+F`) | `crates/search/src/find_bar.rs` | `cef::BrowserHost::find`, `cef::FindHandler`, `gtk4::SearchEntry` | hecho | 1 |
 | `Sources/Search/Float.swift` | Ventana flotante propia sin decoraciones para vídeo (PiP) | `crates/search/src/pip.rs` | `gtk4::Window` (`decorated(false)`), `BrowserView` / controles | adaptado | 6 |
 | `Sources/Search/Fold.swift` | Plegado de la barra lateral o superior (`Ctrl+S`) | `crates/search/src/window.rs` | `gtk4::Revealer` / `adw::OverlaySplitView` | hecho | 2 |
@@ -143,7 +143,7 @@ Estados: `pendiente` · `directo` · `adaptado` · `diferido` · `imposible` · 
 | `Sources/Search/FullScreenEscape.swift` | Salida de pantalla completa con `Escape` | `crates/search/src/window.rs` | `cef::DisplayHandler::on_fullscreen_mode_change` | hecho | 1 |
 | `Sources/Search/Fuzzy.swift` | Coincidencia difusa rápida para autocompletado y `Ctrl+K` | `crates/search-core/src/fuzzy.rs` | `memchr` + subsecuencia + Damerau-Levenshtein (`strsim`) en Rust puro | hecho | 2 |
 | `Sources/Search/Hidden.swift` | Panel para inspeccionar y borrar reglas de Curtain por sitio o global | `crates/search/src/curtain.rs` | `adw::OverlaySplitView` / `gtk4::Popover`, `gtk4::ListBox` | adaptado | 4 |
-| `Sources/Search/History.swift` | Historial `history.json`, puntuación frecencia y autocompletado `<16ms` | `crates/search-core/src/history.rs` + `crates/search/src/history_ui.rs` | Rust puro (`serde_json`, índice en RAM) + `gtk4::ListView` | directo | 3 |
+| `Sources/Search/History.swift` | Historial `history.json`, puntuación frecencia y autocompletado `<16ms` | `crates/search-core/src/history.rs` + `crates/search/src/history_ui.rs` | Rust puro (`serde_json`, índice en RAM) + `gtk4::ListView` | hecho | 3 |
 | `Sources/Search/HotKey.swift` | Atajo global de sistema Carbon (`RegisterEventHotKey`) | — | API Carbon exclusiva de macOS | imposible | — |
 | `Sources/Search/Icons.swift` | Obtención y caché de favicons | `crates/search/src/browser_view.rs` | `cef::DisplayHandler::on_favicon_urlchange` + `BrowserHost::download_image` | hecho | 2 |
 | `Sources/Search/ImageMenu.swift` | Acciones de menú contextual sobre imágenes | `crates/search/src/browser_view.rs` | `cef::ContextMenuHandler` | adaptado | 2 |
@@ -165,12 +165,12 @@ Estados: `pendiente` · `directo` · `adaptado` · `diferido` · `imposible` · 
 | `Sources/Search/LiveFolders.swift` | Carpetas RSS dinámicas en barra lateral | — | Prohibidas peticiones periódicas no pedidas (`AGENTS.md`) | diferido | — |
 | `Sources/Search/LiveRate.swift` | Workaround de audio CoreMedia en macOS (`playbackRate = 1.0001`) | — | Bug específico de CoreMedia en macOS | imposible | — |
 | `Sources/Search/LocalText.swift` | Renderizado seguro de archivos de texto locales `file://` | `crates/search-core/src/address.rs` | `std::fs` + validación UTF-8 | hecho | 1 |
-| `Sources/Search/Loot.swift` | Historial persistente de descargas (`downloads.json`) y renombrado sin sobrescribir | `crates/search-core/src/downloads.rs` | `serde_json`, `gtk4::FileLauncher` | adaptado | 3 |
+| `Sources/Search/Loot.swift` | Historial persistente de descargas (`downloads.json`) y renombrado sin sobrescribir | `crates/search-core/src/downloads.rs` | `serde_json`, `gtk4::FileLauncher` | hecho | 3 |
 | `Sources/Search/Markdown.swift` | Renderizador Markdown opcional para modo lectura | `crates/search-core/src/reader.rs` | Rust puro | diferido | 4 |
 | `Sources/Search/MeCard.swift` | Autocompletado desde `Contacts.framework` de Apple | — | `Contacts.framework` exclusivo de macOS | imposible | — |
 | `Sources/Search/MediaKeys.swift` | Estado de reproducción de audio/vídeo en pestañas | `crates/search/src/browser_view.rs` | Observador de audio autenticado + `BrowserHost::set_audio_muted` / `is_audio_muted` | hecho | 2 |
 | `Sources/Search/NativePiP.swift` | PiP privado de WKPreferences en macOS | `crates/search/src/pip.rs` | Reemplazado en Linux por ventana flotante propia (`Float.swift`) | imposible | 6 |
-| `Sources/Search/Notifications.swift` | Notificaciones del sistema (fin de descarga / permisos web) | `crates/search/src/downloads.rs` | `gio::Notification`, `cef::PermissionHandler` | adaptado | 3 |
+| `Sources/Search/Notifications.swift` | Notificaciones del sistema (fin de descarga / permisos web) | `crates/search/src/downloads.rs` | `gio::Notification`, `cef::PermissionHandler` | hecho | 3 |
 | `Sources/Search/Omnibox.swift` | Campo único de dirección/búsqueda con autocompletado inline y sugerencias | `crates/search/src/address.rs` | `gtk4::Entry`, `Editable::select_region`, `gtk4::Popover` | hecho | 1 |
 | `Sources/Search/OneWindow.swift` | Fusión de perfiles en una sola ventana | — | Subsistema secundario fuera de `PLAN.md` | diferido | — |
 | `Sources/Search/PageFind.swift` | Motor de búsqueda en la página | `crates/search/src/find_bar.rs` | `cef::BrowserHost::find` + `cef::FindHandler` | hecho | 1 |
@@ -184,7 +184,7 @@ Estados: `pendiente` · `directo` · `adaptado` · `diferido` · `imposible` · 
 | `Sources/Search/PinFolders.swift` | Modelo de carpetas de pines | — | Subsistema opcional estilo Arc | diferido | — |
 | `Sources/Search/PinFolderViews.swift` | Vistas de carpetas de pines | — | Subsistema opcional estilo Arc | diferido | — |
 | `Sources/Search/Pins.swift` | Estado de pestañas fijadas (persisten en `session.json` y no cierran con `Ctrl+W`) | `crates/search-core/src/session.rs` | `adw::TabView::set_page_pinned`, `serde_json` | hecho | 2 |
-| `Sources/Search/Plate.swift` | Primitivas visuales reutilizables para paneles | `crates/search/src/window.rs` | `adw::Clamp`, `adw::PreferencesGroup`, `.boxed-list` | adaptado | 3 |
+| `Sources/Search/Plate.swift` | Primitivas visuales reutilizables para paneles | `crates/search/src/window.rs` | `adw::Clamp`, `adw::PreferencesGroup`, `.boxed-list` | hecho | 3 |
 | `Sources/Search/Player.swift` | Indicador/control de audio en pestañas | `crates/search/src/sidebar_tabs.rs` | `BrowserHost::is_audio_muted` / `set_audio_muted` | hecho | 2 |
 | `Sources/Search/PopupGesture.swift` | Control de popups legítimos (`target=_blank` / OAuth `window.open`) | `crates/search/src/browser_view.rs` | `cef::LifeSpanHandler::on_before_popup` (`user_gesture`) | hecho | 2 |
 | `Sources/Search/Prefs.swift` | Almacén reactivo de ajustes con persistencia atómica | `crates/search-core/src/settings.rs` + `crates/search/src/settings.rs` | JSON en `$XDG_CONFIG_HOME/search/settings.json` + esquema GSettings | hecho | 1 |
@@ -192,7 +192,7 @@ Estados: `pendiente` · `directo` · `adaptado` · `diferido` · `imposible` · 
 | `Sources/Search/Profiles.swift` | Perfiles múltiples | — | Fuera de alcance de `PLAN.md` | diferido | — |
 | `Sources/Search/Proxy.swift` | Configuración de proxy de red | — | CEF respeta variables de proxy del entorno / sistema | hecho | 1 |
 | `Sources/Search/Reader.swift` | Modo lectura con tipografía limpia claro/oscuro y tamaño ajustable | `crates/search-core/src/reader.rs` + `crates/search/src/reader.rs` | `third_party/readability/Readability.js` (Apache-2.0) + vista HTML limpia | adaptado | 4 |
-| `Sources/Search/Recall.swift` | Paneles de Historial (`Ctrl+H`) y Descargas (`Ctrl+Shift+Y`) | `crates/search/src/history_ui.rs` + `downloads_ui.rs` | `adw::OverlaySplitView`, `gtk4::ListView`, `gtk4::SearchEntry` | adaptado | 3 |
+| `Sources/Search/Recall.swift` | Paneles de Historial (`Ctrl+H`) y Descargas (`Ctrl+Shift+Y`) | `crates/search/src/history_ui.rs` + `downloads_ui.rs` | `adw::OverlaySplitView`, `gtk4::ListView`, `gtk4::SearchEntry` | hecho | 3 |
 | `Sources/Search/RecordingIndicator.swift` | Píldora de grabación de extensiones | — | Diferido a Fase 9 | diferido | 9 |
 | `Sources/Search/Registrable.swift` | Cálculo de dominio registrable (eTLD+1) y `sameSite` | `crates/search-core/src/domain.rs` | Rust puro (sufijos públicos / comparación exacta de origin) | directo | 4 |
 | `Sources/Search/Scripting.swift` | Interfaz de automatización externa (`Search.sdef`) | `crates/search/src/dbus.rs` | `zbus` (`io.github.searchlinux.Search1`) | adaptado | 7 |
@@ -204,7 +204,7 @@ Estados: `pendiente` · `directo` · `adaptado` · `diferido` · `imposible` · 
 | `Sources/Search/ShortcutsPage.swift` | Ventana de consulta de atajos de teclado | `crates/search/src/actions.rs` | `adw::ShortcutsDialog` | hecho | 2 |
 | `Sources/Search/Shortcuts.swift` | Definición de acciones y aceleradores con `Ctrl` | `crates/search/src/actions.rs` | `gio::SimpleAction`, `Application::set_accels_for_action` | hecho | 1 |
 | `Sources/Search/SideIcons.swift` | Variante compacta de barra lateral | `crates/search/src/sidebar_tabs.rs` | `gtk4::ListBox` | hecho | 2 |
-| `Sources/Search/SidePanel.swift` | Panel lateral auxiliar para historial, marcadores, descargas y Curtain | `crates/search/src/window.rs` | `adw::OverlaySplitView` | adaptado | 3 |
+| `Sources/Search/SidePanel.swift` | Panel lateral auxiliar para historial, marcadores, descargas y Curtain | `crates/search/src/window.rs` | `adw::OverlaySplitView` | hecho | 3 |
 | `Sources/Search/Side.swift` | Barra lateral izquierda vertical de pestañas (fijadas arriba + normales + DnD) | `crates/search/src/sidebar_tabs.rs` | Widget propio `SidebarTabs` enlazado al `adw::TabView` | hecho | 2 |
 | `Sources/Search/SiteCard.swift` | Popover de estado del sitio (TLS, activar/pausar Shield en dominio) | `crates/search/src/window.rs` | `gtk4::Popover`, `cef::NavigationEntry::ssl_status` | adaptado | 4 |
 | `Sources/Search/SiteLocation.swift` | Puente CoreLocation en macOS | `crates/search/src/browser_view.rs` | `cef::PermissionHandler` | adaptado | 4 |
@@ -232,7 +232,7 @@ Estados: `pendiente` · `directo` · `adaptado` · `diferido` · `imposible` · 
 | `Sources/Search/TabGroups.swift` | Vistas de grupos de pestañas | — | Opcional secundario | diferido | — |
 | `Sources/Search/TabGroup.swift` | Modelo JSON de grupos de pestañas (conservado en `session.json` por compatibilidad) | `crates/search-core/src/session.rs` | `serde` | hecho | 2 |
 | `Sources/Search/TabLift.swift` | Icono de arrastre de pestaña entre ventanas | `crates/search/src/window.rs` | `adw::TabView` (`create-window`) + `gtk4::DragIcon` (Wayland) | adaptado | 2 |
-| `Sources/Search/TabOffers.swift` | Desplegable de sugerencias de autocompletado (historial, pestañas, marcadores) | `crates/search/src/address.rs` | `gtk4::Popover` sin robar foco + `gtk4::ListBox` | adaptado | 3 |
+| `Sources/Search/TabOffers.swift` | Desplegable de sugerencias de autocompletado (historial, pestañas, marcadores) | `crates/search/src/address.rs` | `gtk4::Popover` sin robar foco + `gtk4::ListBox` | hecho | 3 |
 | `Sources/Search/TabShortcutHint.swift` | Atajos `Ctrl+1..8` y `Ctrl+9` (última pestaña) | `crates/search/src/actions.rs` | `gio::SimpleAction` | hecho | 2 |
 | `Sources/Search/Tab.swift` | Envoltorio `BrowserView` sobre `cef::Browser` con progreso, favicon, zoom y señales | `crates/search/src/browser_view.rs` | `BrowserView` sobre `cef::Browser` (OSR en `gtk4::Picture`) | hecho | 1 |
 | `Sources/Search/TabSwitcher.swift` | Selector rápido `Ctrl+K` con búsqueda difusa sobre todas las ventanas | `crates/search/src/tab_switcher.rs` | `adw::Dialog` centrado + `search_core::fuzzy` + teclas `↑/↓/Enter/Ctrl+W/Esc` | hecho | 2 |
@@ -411,10 +411,10 @@ Mismo formato JSON declarativo de `WKContentRuleList` (las 57 reglas de `Shield.
 | Alternar pestañas arriba vs barra lateral vertical | `⇧⌘S` | `Ctrl+Shift+S` | ✅ |
 | Plegar/mostrar barra de pestañas | `⌘S` | `Ctrl+S` | ✅ |
 | Duplicar pestaña | `⌘D` | `Ctrl+Alt+D` | ✅ |
-| Añadir o quitar marcador de la página actual | `⇧⌘B` | `Ctrl+D` (y alias `Ctrl+Shift+B`) | ⬜ |
-| Panel de marcadores | Menú Bookmarks | `Ctrl+Shift+O` | ⬜ |
-| Panel de historial | `⌘Y` | `Ctrl+H` (y alias `Ctrl+Y`) | ⬜ |
-| Panel de descargas | `⇧⌘J` | `Ctrl+Shift+Y` (y alias `Ctrl+Shift+J`) | ⬜ |
+| Añadir o quitar marcador de la página actual | `⇧⌘B` | `Ctrl+D` (y alias `Ctrl+Shift+B`) | ✅ |
+| Panel de marcadores | Menú Bookmarks | `Ctrl+Shift+O` | ✅ |
+| Panel de historial | `⌘Y` | `Ctrl+H` (y alias `Ctrl+Y`) | ✅ |
+| Panel de descargas | `⇧⌘J` | `Ctrl+Shift+Y` (y alias `Ctrl+Shift+J`) | ✅ |
 | Modo lectura | `⇧⌘R` | `Ctrl+Alt+R` / `F9` | ⬜ |
 | Curtain: modo selección ("ocultar elemento") | `⇧⌘H` | `Ctrl+Shift+H` | ⬜ |
 | Curtain: ver elementos ocultos en este sitio | `⇧⌘U` | `Ctrl+Shift+E` | ⬜ |

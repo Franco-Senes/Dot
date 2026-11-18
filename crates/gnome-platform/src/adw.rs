@@ -141,6 +141,17 @@ impl Application {
         }
     }
 
+    pub fn send_notification(&self, id: Option<&str>, notification: &crate::gio::Notification) {
+        let c_id = id.map(to_cstring);
+        unsafe {
+            sys::g_application_send_notification(
+                self.obj.as_ptr().cast(),
+                c_id.as_ref().map_or(ptr::null(), |s| s.as_ptr()),
+                notification.as_notification_ptr(),
+            );
+        }
+    }
+
     pub fn run_with_args(&self, args: &[String]) -> i32 {
         let c_args: Vec<CString> = args.iter().map(|a| to_cstring(a)).collect();
         let mut argv: Vec<*mut c_char> = c_args.iter().map(|a| a.as_ptr() as *mut c_char).collect();
@@ -236,6 +247,14 @@ impl ApplicationWindow {
 
     pub fn is_fullscreen(&self) -> bool {
         unsafe { sys::gtk_window_is_fullscreen(self.obj.as_ptr().cast()) != 0 }
+    }
+
+    pub fn is_active(&self) -> bool {
+        unsafe { sys::gtk_window_is_active(self.obj.as_ptr().cast()) != 0 }
+    }
+
+    pub fn as_window_ptr(&self) -> *mut sys::GtkWindow {
+        self.obj.as_ptr().cast()
     }
 
     pub fn set_focus_widget(&self, widget: Option<&impl AsWidget>) {
@@ -872,6 +891,46 @@ impl OverlaySplitView {
         unsafe {
             sys::adw_overlay_split_view_set_max_sidebar_width(self.obj.as_ptr().cast(), width);
         }
+    }
+
+    pub fn set_sidebar_position(&self, position: crate::gtk::PackType) {
+        unsafe {
+            sys::adw_overlay_split_view_set_sidebar_position(
+                self.obj.as_ptr().cast(),
+                position as libc::c_int,
+            );
+        }
+    }
+
+    pub fn set_sidebar_width_fraction(&self, fraction: f64) {
+        unsafe {
+            sys::adw_overlay_split_view_set_sidebar_width_fraction(
+                self.obj.as_ptr().cast(),
+                fraction,
+            );
+        }
+    }
+
+    pub fn set_enable_show_gesture(&self, enable: bool) {
+        unsafe {
+            sys::adw_overlay_split_view_set_enable_show_gesture(
+                self.obj.as_ptr().cast(),
+                if enable { sys::GTRUE } else { sys::GFALSE },
+            );
+        }
+    }
+
+    pub fn set_enable_hide_gesture(&self, enable: bool) {
+        unsafe {
+            sys::adw_overlay_split_view_set_enable_hide_gesture(
+                self.obj.as_ptr().cast(),
+                if enable { sys::GTRUE } else { sys::GFALSE },
+            );
+        }
+    }
+
+    pub fn connect_show_sidebar_notify<F: Fn() + 'static>(&self, callback: F) -> SignalHandlerId {
+        connect_signal_notify(self.obj.as_ptr(), "show-sidebar", callback)
     }
 }
 

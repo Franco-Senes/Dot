@@ -4,12 +4,15 @@
 //! las ventanas y modos de verificación headless (`--smoke-test`, `--smoke-test-session-*`).
 
 use crate::actions;
+use crate::bookmarks_ui::BookmarksManager;
 use crate::browser_view;
 use crate::cef_engine::CefEngine;
+use crate::downloads::DownloadManager;
+use crate::history_ui::HistoryManager;
 use crate::settings::SettingsStore;
 use crate::style;
 use crate::tab_switcher::{self, SwitcherTabItem, TabSwitcherCallbacks};
-use crate::window::{BrowserWindow, WindowCallbacks};
+use crate::window::{BrowserWindow, SharedDataStores, WindowCallbacks};
 use anyhow::{anyhow, Result};
 use gnome_platform::adw::Application;
 use gnome_platform::gio::ApplicationFlags;
@@ -49,6 +52,7 @@ struct AppControllerInner {
     app: Application,
     paths: SearchPaths,
     settings: SettingsStore,
+    stores: SharedDataStores,
     cef: RefCell<Option<CefEngine>>,
     windows: RefCell<Vec<BrowserWindow>>,
     closed_tabs: RefCell<ClosedTabStack>,
@@ -64,11 +68,17 @@ impl AppController {
         settings: SettingsStore,
         session_enabled: bool,
     ) -> Self {
+        let stores = SharedDataStores {
+            history: HistoryManager::load(paths.history_file()),
+            bookmarks: BookmarksManager::load(paths.bookmarks_file()),
+            downloads: DownloadManager::load(paths.downloads_file(), settings.clone()),
+        };
         Self {
             inner: Rc::new(AppControllerInner {
                 app,
                 paths,
                 settings,
+                stores,
                 cef: RefCell::new(None),
                 windows: RefCell::new(Vec::new()),
                 closed_tabs: RefCell::new(ClosedTabStack::default()),
@@ -179,6 +189,43 @@ impl AppController {
                 }
             }));
         }
+        {
+            let ctrl = self.clone();
+            cbs.on_list_open_tabs = Some(Box::new(move || {
+                ctrl.inner
+                    .windows
+                    .borrow()
+                    .iter()
+                    .flat_map(BrowserWindow::open_tab_infos)
+                    .collect()
+            }));
+        }
+        {
+            let ctrl = self.clone();
+            cbs.on_switch_to_tab = Some(Box::new(move |window_id, tab_id| {
+                let target = ctrl
+                    .inner
+                    .windows
+                    .borrow()
+                    .iter()
+                    .find(|w| w.id() == window_id)
+                    .cloned();
+                if let Some(win) = target {
+                    win.select_tab_by_id(tab_id);
+                    win.present();
+                }
+            }));
+        }
+        {
+            let ctrl = self.clone();
+            cbs.on_is_any_window_active = Some(Box::new(move || {
+                ctrl.inner
+                    .windows
+                    .borrow()
+                    .iter()
+                    .any(|w| w.gtk_window().is_active())
+            }));
+        }
         cbs
     }
 
@@ -201,6 +248,7 @@ impl AppController {
             &self.inner.app,
             ctx,
             self.inner.settings.clone(),
+            self.inner.stores.clone(),
             is_private,
             self.build_window_callbacks(),
         )?;
@@ -231,6 +279,7 @@ impl AppController {
             &self.inner.app,
             ctx,
             self.inner.settings.clone(),
+            self.inner.stores.clone(),
             is_private,
             self.build_window_callbacks(),
         )?;
@@ -255,6 +304,7 @@ impl AppController {
             &self.inner.app,
             ctx,
             self.inner.settings.clone(),
+            self.inner.stores.clone(),
             false,
             self.build_window_callbacks(),
         )?;
@@ -362,6 +412,9 @@ impl AppController {
     fn shutdown(&self) {
         self.inner.shutting_down.set(true);
         self.save_session_now();
+        self.inner.stores.history.flush_now();
+        self.inner.stores.bookmarks.flush_now();
+        self.inner.stores.downloads.flush_now();
         let windows: Vec<BrowserWindow> = self.inner.windows.borrow_mut().drain(..).collect();
         for win in windows {
             win.close_all_browsers();

@@ -12,9 +12,17 @@ use crate::sys;
 use bitflags::bitflags;
 use libc::c_char;
 use std::ffi::{CStr, CString};
+use std::path::{Path, PathBuf};
 use std::ptr;
 
 pub const STYLE_PROVIDER_PRIORITY_APPLICATION: u32 = 600;
+
+#[repr(i32)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PackType {
+    Start = 0,
+    End = 1,
+}
 
 #[repr(i32)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -367,10 +375,34 @@ pub trait AsEditable: AsWidget {
         self.select_region(0, -1);
     }
 
+    fn selection_bounds(&self) -> Option<(i32, i32)> {
+        let mut start: libc::c_int = 0;
+        let mut end: libc::c_int = 0;
+        let has_sel = unsafe {
+            sys::gtk_editable_get_selection_bounds(self.as_editable_ptr(), &mut start, &mut end)
+                != 0
+        };
+        if has_sel {
+            Some((start, end))
+        } else {
+            None
+        }
+    }
+
+    fn delete_selection(&self) {
+        unsafe {
+            sys::gtk_editable_delete_selection(self.as_editable_ptr());
+        }
+    }
+
     fn set_position(&self, position: i32) {
         unsafe {
             sys::gtk_editable_set_position(self.as_editable_ptr(), position);
         }
+    }
+
+    fn position(&self) -> i32 {
+        unsafe { sys::gtk_editable_get_position(self.as_editable_ptr()) }
     }
 
     fn connect_changed<F: Fn() + 'static>(&self, callback: F) -> SignalHandlerId {
@@ -1662,5 +1694,418 @@ impl DropTarget {
 impl AsController for DropTarget {
     fn as_controller_ptr(&self) -> *mut sys::GtkEventController {
         self.obj.as_ptr().cast()
+    }
+}
+
+#[derive(Clone)]
+pub struct Popover {
+    obj: ObjectRef,
+}
+
+impl Popover {
+    pub fn new() -> Self {
+        let ptr = unsafe { sys::gtk_popover_new() };
+        let obj = unsafe { ObjectRef::from_new_ptr(ptr.cast()) };
+        Self { obj }
+    }
+
+    pub fn set_child(&self, child: Option<&impl AsWidget>) {
+        let ptr = child.map_or(ptr::null_mut(), AsWidget::as_widget_ptr);
+        unsafe {
+            sys::gtk_popover_set_child(self.obj.as_ptr().cast(), ptr);
+        }
+    }
+
+    pub fn set_autohide(&self, autohide: bool) {
+        unsafe {
+            sys::gtk_popover_set_autohide(
+                self.obj.as_ptr().cast(),
+                if autohide { sys::GTRUE } else { sys::GFALSE },
+            );
+        }
+    }
+
+    pub fn set_has_arrow(&self, has_arrow: bool) {
+        unsafe {
+            sys::gtk_popover_set_has_arrow(
+                self.obj.as_ptr().cast(),
+                if has_arrow { sys::GTRUE } else { sys::GFALSE },
+            );
+        }
+    }
+
+    pub fn set_position(&self, pos: PositionType) {
+        unsafe {
+            sys::gtk_popover_set_position(self.obj.as_ptr().cast(), pos as i32);
+        }
+    }
+
+    pub fn set_pointing_to(&self, rect: Option<Rectangle>) {
+        let raw = rect.map(Rectangle::to_raw);
+        let ptr = raw.as_ref().map_or(ptr::null(), |r| r as *const _);
+        unsafe {
+            sys::gtk_popover_set_pointing_to(self.obj.as_ptr().cast(), ptr);
+        }
+    }
+
+    pub fn set_offset(&self, x_offset: i32, y_offset: i32) {
+        unsafe {
+            sys::gtk_popover_set_offset(self.obj.as_ptr().cast(), x_offset, y_offset);
+        }
+    }
+
+    pub fn popup(&self) {
+        unsafe {
+            sys::gtk_popover_popup(self.obj.as_ptr().cast());
+        }
+    }
+
+    pub fn popdown(&self) {
+        unsafe {
+            sys::gtk_popover_popdown(self.obj.as_ptr().cast());
+        }
+    }
+
+    pub fn connect_closed<F: Fn() + 'static>(&self, callback: F) -> SignalHandlerId {
+        connect_signal_void(self.obj.as_ptr(), "closed", false, callback)
+    }
+}
+
+impl Default for Popover {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl AsWidget for Popover {
+    fn as_widget_ptr(&self) -> *mut sys::GtkWidget {
+        self.obj.as_ptr().cast()
+    }
+}
+
+#[derive(Clone)]
+pub struct MenuButton {
+    obj: ObjectRef,
+}
+
+impl MenuButton {
+    pub fn new() -> Self {
+        let ptr = unsafe { sys::gtk_menu_button_new() };
+        let obj = unsafe { ObjectRef::from_new_ptr(ptr.cast()) };
+        Self { obj }
+    }
+
+    pub fn set_icon_name(&self, icon_name: &str) {
+        let c = to_cstring(icon_name);
+        unsafe {
+            sys::gtk_menu_button_set_icon_name(self.obj.as_ptr().cast(), c.as_ptr());
+        }
+    }
+
+    pub fn set_label(&self, label: &str) {
+        let c = to_cstring(label);
+        unsafe {
+            sys::gtk_menu_button_set_label(self.obj.as_ptr().cast(), c.as_ptr());
+        }
+    }
+
+    pub fn set_menu_model(&self, model: Option<&Menu>) {
+        let ptr = model.map_or(ptr::null_mut(), Menu::as_menu_model_ptr);
+        unsafe {
+            sys::gtk_menu_button_set_menu_model(self.obj.as_ptr().cast(), ptr);
+        }
+    }
+
+    pub fn set_popover(&self, popover: Option<&Popover>) {
+        let ptr = popover.map_or(ptr::null_mut(), AsWidget::as_widget_ptr);
+        unsafe {
+            sys::gtk_menu_button_set_popover(self.obj.as_ptr().cast(), ptr);
+        }
+    }
+}
+
+impl Default for MenuButton {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl AsWidget for MenuButton {
+    fn as_widget_ptr(&self) -> *mut sys::GtkWidget {
+        self.obj.as_ptr().cast()
+    }
+}
+
+#[derive(Clone)]
+pub struct DropDown {
+    obj: ObjectRef,
+}
+
+impl DropDown {
+    pub fn from_strings(items: &[&str]) -> Self {
+        let c_items: Vec<CString> = items.iter().map(|s| to_cstring(s)).collect();
+        let mut ptrs: Vec<*const c_char> = c_items.iter().map(|s| s.as_ptr()).collect();
+        ptrs.push(ptr::null());
+        let ptr = unsafe { sys::gtk_drop_down_new_from_strings(ptrs.as_ptr()) };
+        let obj = unsafe { ObjectRef::from_new_ptr(ptr.cast()) };
+        Self { obj }
+    }
+
+    pub fn selected(&self) -> u32 {
+        unsafe { sys::gtk_drop_down_get_selected(self.obj.as_ptr().cast()) }
+    }
+
+    pub fn set_selected(&self, position: u32) {
+        unsafe {
+            sys::gtk_drop_down_set_selected(self.obj.as_ptr().cast(), position);
+        }
+    }
+
+    pub fn connect_selected_notify<F: Fn() + 'static>(&self, callback: F) -> SignalHandlerId {
+        connect_signal_notify(self.obj.as_ptr(), "selected", callback)
+    }
+}
+
+impl AsWidget for DropDown {
+    fn as_widget_ptr(&self) -> *mut sys::GtkWidget {
+        self.obj.as_ptr().cast()
+    }
+}
+
+#[derive(Clone)]
+pub struct FileDialog {
+    obj: ObjectRef,
+}
+
+impl FileDialog {
+    pub fn new() -> Self {
+        let ptr = unsafe { sys::gtk_file_dialog_new() };
+        let obj = unsafe { ObjectRef::from_new_ptr(ptr.cast()) };
+        Self { obj }
+    }
+
+    pub fn set_title(&self, title: &str) {
+        let c = to_cstring(title);
+        unsafe {
+            sys::gtk_file_dialog_set_title(self.obj.as_ptr().cast(), c.as_ptr());
+        }
+    }
+
+    pub fn set_initial_name(&self, name: &str) {
+        let c = to_cstring(name);
+        unsafe {
+            sys::gtk_file_dialog_set_initial_name(self.obj.as_ptr().cast(), c.as_ptr());
+        }
+    }
+
+    pub fn set_initial_folder(&self, path: &Path) {
+        let c = to_cstring(&path.to_string_lossy());
+        unsafe {
+            let gfile = sys::g_file_new_for_path(c.as_ptr());
+            if !gfile.is_null() {
+                sys::gtk_file_dialog_set_initial_folder(self.obj.as_ptr().cast(), gfile);
+                sys::g_object_unref(gfile.cast());
+            }
+        }
+    }
+
+    pub fn open<F: FnOnce(Option<PathBuf>) + 'static>(
+        &self,
+        parent: Option<&crate::adw::ApplicationWindow>,
+        callback: F,
+    ) {
+        unsafe extern "C" fn on_ready<F: FnOnce(Option<PathBuf>) + 'static>(
+            source_object: *mut sys::GObject,
+            res: *mut libc::c_void,
+            user_data: sys::gpointer,
+        ) {
+            let cb = Box::from_raw(user_data.cast::<F>());
+            let mut err: *mut sys::GError = ptr::null_mut();
+            let gfile = sys::gtk_file_dialog_open_finish(source_object.cast(), res, &mut err);
+            if !err.is_null() {
+                sys::g_error_free(err);
+            }
+            cb(gfile_to_pathbuf_and_unref(gfile));
+        }
+
+        let parent_ptr = parent.map_or(ptr::null_mut(), |w| w.as_window_ptr());
+        let boxed = Box::new(callback);
+        unsafe {
+            sys::gtk_file_dialog_open(
+                self.obj.as_ptr().cast(),
+                parent_ptr,
+                ptr::null_mut(),
+                Some(on_ready::<F>),
+                Box::into_raw(boxed).cast(),
+            );
+        }
+    }
+
+    pub fn save<F: FnOnce(Option<PathBuf>) + 'static>(
+        &self,
+        parent: Option<&crate::adw::ApplicationWindow>,
+        callback: F,
+    ) {
+        unsafe extern "C" fn on_ready<F: FnOnce(Option<PathBuf>) + 'static>(
+            source_object: *mut sys::GObject,
+            res: *mut libc::c_void,
+            user_data: sys::gpointer,
+        ) {
+            let cb = Box::from_raw(user_data.cast::<F>());
+            let mut err: *mut sys::GError = ptr::null_mut();
+            let gfile = sys::gtk_file_dialog_save_finish(source_object.cast(), res, &mut err);
+            if !err.is_null() {
+                sys::g_error_free(err);
+            }
+            cb(gfile_to_pathbuf_and_unref(gfile));
+        }
+
+        let parent_ptr = parent.map_or(ptr::null_mut(), |w| w.as_window_ptr());
+        let boxed = Box::new(callback);
+        unsafe {
+            sys::gtk_file_dialog_save(
+                self.obj.as_ptr().cast(),
+                parent_ptr,
+                ptr::null_mut(),
+                Some(on_ready::<F>),
+                Box::into_raw(boxed).cast(),
+            );
+        }
+    }
+
+    pub fn select_folder<F: FnOnce(Option<PathBuf>) + 'static>(
+        &self,
+        parent: Option<&crate::adw::ApplicationWindow>,
+        callback: F,
+    ) {
+        unsafe extern "C" fn on_ready<F: FnOnce(Option<PathBuf>) + 'static>(
+            source_object: *mut sys::GObject,
+            res: *mut libc::c_void,
+            user_data: sys::gpointer,
+        ) {
+            let cb = Box::from_raw(user_data.cast::<F>());
+            let mut err: *mut sys::GError = ptr::null_mut();
+            let gfile =
+                sys::gtk_file_dialog_select_folder_finish(source_object.cast(), res, &mut err);
+            if !err.is_null() {
+                sys::g_error_free(err);
+            }
+            cb(gfile_to_pathbuf_and_unref(gfile));
+        }
+
+        let parent_ptr = parent.map_or(ptr::null_mut(), |w| w.as_window_ptr());
+        let boxed = Box::new(callback);
+        unsafe {
+            sys::gtk_file_dialog_select_folder(
+                self.obj.as_ptr().cast(),
+                parent_ptr,
+                ptr::null_mut(),
+                Some(on_ready::<F>),
+                Box::into_raw(boxed).cast(),
+            );
+        }
+    }
+}
+
+impl Default for FileDialog {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+unsafe fn gfile_to_pathbuf_and_unref(gfile: *mut sys::GFile) -> Option<PathBuf> {
+    if gfile.is_null() {
+        return None;
+    }
+    let path_ptr = sys::g_file_get_path(gfile);
+    let out = if path_ptr.is_null() {
+        None
+    } else {
+        let s = CStr::from_ptr(path_ptr).to_string_lossy().into_owned();
+        sys::g_free(path_ptr.cast());
+        Some(PathBuf::from(s))
+    };
+    sys::g_object_unref(gfile.cast());
+    out
+}
+
+/// Abre archivos o carpetas contenedoras mediante `GtkFileLauncher` (compatible con portales XDG).
+pub struct FileLauncher;
+
+impl FileLauncher {
+    pub fn launch_file(parent: Option<&crate::adw::ApplicationWindow>, path: &Path) {
+        unsafe extern "C" fn on_done(
+            source_object: *mut sys::GObject,
+            res: *mut libc::c_void,
+            _user_data: sys::gpointer,
+        ) {
+            let mut err: *mut sys::GError = ptr::null_mut();
+            let _ = sys::gtk_file_launcher_launch_finish(source_object.cast(), res, &mut err);
+            if !err.is_null() {
+                sys::g_error_free(err);
+            }
+            sys::g_object_unref(source_object.cast());
+        }
+
+        let c_path = to_cstring(&path.to_string_lossy());
+        let parent_ptr = parent.map_or(ptr::null_mut(), |w| w.as_window_ptr());
+        unsafe {
+            let gfile = sys::g_file_new_for_path(c_path.as_ptr());
+            if gfile.is_null() {
+                return;
+            }
+            let launcher = sys::gtk_file_launcher_new(gfile);
+            sys::g_object_unref(gfile.cast());
+            if launcher.is_null() {
+                return;
+            }
+            sys::gtk_file_launcher_launch(
+                launcher,
+                parent_ptr,
+                ptr::null_mut(),
+                Some(on_done),
+                ptr::null_mut(),
+            );
+        }
+    }
+
+    pub fn open_containing_folder(parent: Option<&crate::adw::ApplicationWindow>, path: &Path) {
+        unsafe extern "C" fn on_done(
+            source_object: *mut sys::GObject,
+            res: *mut libc::c_void,
+            _user_data: sys::gpointer,
+        ) {
+            let mut err: *mut sys::GError = ptr::null_mut();
+            let _ = sys::gtk_file_launcher_open_containing_folder_finish(
+                source_object.cast(),
+                res,
+                &mut err,
+            );
+            if !err.is_null() {
+                sys::g_error_free(err);
+            }
+            sys::g_object_unref(source_object.cast());
+        }
+
+        let c_path = to_cstring(&path.to_string_lossy());
+        let parent_ptr = parent.map_or(ptr::null_mut(), |w| w.as_window_ptr());
+        unsafe {
+            let gfile = sys::g_file_new_for_path(c_path.as_ptr());
+            if gfile.is_null() {
+                return;
+            }
+            let launcher = sys::gtk_file_launcher_new(gfile);
+            sys::g_object_unref(gfile.cast());
+            if launcher.is_null() {
+                return;
+            }
+            sys::gtk_file_launcher_open_containing_folder(
+                launcher,
+                parent_ptr,
+                ptr::null_mut(),
+                Some(on_done),
+                ptr::null_mut(),
+            );
+        }
     }
 }

@@ -81,6 +81,11 @@ pub struct GFile {
 }
 
 #[repr(C)]
+pub struct GNotification {
+    _private: [u8; 0],
+}
+
+#[repr(C)]
 pub struct GAction {
     _private: [u8; 0],
 }
@@ -247,6 +252,26 @@ pub struct GtkScrolledWindow {
 
 #[repr(C)]
 pub struct GtkPopover {
+    _private: [u8; 0],
+}
+
+#[repr(C)]
+pub struct GtkMenuButton {
+    _private: [u8; 0],
+}
+
+#[repr(C)]
+pub struct GtkDropDown {
+    _private: [u8; 0],
+}
+
+#[repr(C)]
+pub struct GtkFileDialog {
+    _private: [u8; 0],
+}
+
+#[repr(C)]
+pub struct GtkFileLauncher {
     _private: [u8; 0],
 }
 
@@ -480,6 +505,7 @@ extern "C" {
         notify: GDestroyNotify,
     ) -> guint;
     pub fn g_source_remove(tag: guint) -> gboolean;
+    pub fn g_get_user_special_dir(directory: c_int) -> *const c_char;
 }
 
 #[link(name = "gobject-2.0")]
@@ -513,7 +539,17 @@ extern "C" {
     pub fn g_application_quit(application: *mut GApplication);
     pub fn g_application_hold(application: *mut GApplication);
     pub fn g_application_release(application: *mut GApplication);
+    pub fn g_application_send_notification(
+        application: *mut GApplication,
+        id: *const c_char,
+        notification: *mut GNotification,
+    );
 
+    pub fn g_notification_new(title: *const c_char) -> *mut GNotification;
+    pub fn g_notification_set_body(notification: *mut GNotification, body: *const c_char);
+    pub fn g_notification_set_icon(notification: *mut GNotification, icon: *mut GIcon);
+
+    pub fn g_file_new_for_path(path: *const c_char) -> *mut GFile;
     pub fn g_file_get_uri(file: *mut GFile) -> *mut c_char;
     pub fn g_file_get_path(file: *mut GFile) -> *mut c_char;
 
@@ -691,6 +727,7 @@ extern "C" {
     pub fn gtk_window_fullscreen(window: *mut GtkWindow);
     pub fn gtk_window_unfullscreen(window: *mut GtkWindow);
     pub fn gtk_window_is_fullscreen(window: *mut GtkWindow) -> gboolean;
+    pub fn gtk_window_is_active(window: *mut GtkWindow) -> gboolean;
     pub fn gtk_window_set_focus(window: *mut GtkWindow, focus: *mut GtkWidget);
 
     pub fn gtk_box_new(orientation: c_int, spacing: c_int) -> *mut GtkWidget;
@@ -733,7 +770,14 @@ extern "C" {
     pub fn gtk_editable_get_text(editable: *mut GtkEditable) -> *const c_char;
     pub fn gtk_editable_set_text(editable: *mut GtkEditable, text: *const c_char);
     pub fn gtk_editable_select_region(editable: *mut GtkEditable, start_pos: c_int, end_pos: c_int);
+    pub fn gtk_editable_get_selection_bounds(
+        editable: *mut GtkEditable,
+        start_pos: *mut c_int,
+        end_pos: *mut c_int,
+    ) -> gboolean;
+    pub fn gtk_editable_delete_selection(editable: *mut GtkEditable);
     pub fn gtk_editable_set_position(editable: *mut GtkEditable, position: c_int);
+    pub fn gtk_editable_get_position(editable: *mut GtkEditable) -> c_int;
 
     pub fn gtk_label_new(str_: *const c_char) -> *mut GtkWidget;
     pub fn gtk_label_set_text(self_: *mut GtkLabel, str_: *const c_char);
@@ -799,6 +843,10 @@ extern "C" {
         propagate: gboolean,
     );
 
+    pub fn gtk_popover_new() -> *mut GtkWidget;
+    pub fn gtk_popover_set_child(popover: *mut GtkPopover, child: *mut GtkWidget);
+    pub fn gtk_popover_set_autohide(popover: *mut GtkPopover, autohide: gboolean);
+    pub fn gtk_popover_set_offset(popover: *mut GtkPopover, x_offset: c_int, y_offset: c_int);
     pub fn gtk_popover_menu_new_from_model(model: *mut GMenuModel) -> *mut GtkWidget;
     pub fn gtk_popover_menu_set_menu_model(popover: *mut GtkPopoverMenu, model: *mut GMenuModel);
     pub fn gtk_popover_set_pointing_to(popover: *mut GtkPopover, rect: *const GdkRectangle);
@@ -806,6 +854,86 @@ extern "C" {
     pub fn gtk_popover_set_position(popover: *mut GtkPopover, position: c_int);
     pub fn gtk_popover_popup(popover: *mut GtkPopover);
     pub fn gtk_popover_popdown(popover: *mut GtkPopover);
+
+    pub fn gtk_menu_button_new() -> *mut GtkWidget;
+    pub fn gtk_menu_button_set_icon_name(menu_button: *mut GtkMenuButton, icon_name: *const c_char);
+    pub fn gtk_menu_button_set_label(menu_button: *mut GtkMenuButton, label: *const c_char);
+    pub fn gtk_menu_button_set_menu_model(
+        menu_button: *mut GtkMenuButton,
+        menu_model: *mut GMenuModel,
+    );
+    pub fn gtk_menu_button_set_popover(menu_button: *mut GtkMenuButton, popover: *mut GtkWidget);
+
+    pub fn gtk_drop_down_new_from_strings(strings: *const *const c_char) -> *mut GtkWidget;
+    pub fn gtk_drop_down_get_selected(self_: *mut GtkDropDown) -> guint;
+    pub fn gtk_drop_down_set_selected(self_: *mut GtkDropDown, position: guint);
+
+    pub fn gtk_file_dialog_new() -> *mut GtkFileDialog;
+    pub fn gtk_file_dialog_set_title(self_: *mut GtkFileDialog, title: *const c_char);
+    pub fn gtk_file_dialog_set_initial_name(self_: *mut GtkFileDialog, name: *const c_char);
+    pub fn gtk_file_dialog_set_initial_folder(self_: *mut GtkFileDialog, folder: *mut GFile);
+    pub fn gtk_file_dialog_open(
+        self_: *mut GtkFileDialog,
+        parent: *mut GtkWindow,
+        cancellable: *mut c_void,
+        callback: GAsyncReadyCallback,
+        user_data: gpointer,
+    );
+    pub fn gtk_file_dialog_open_finish(
+        self_: *mut GtkFileDialog,
+        result: *mut c_void,
+        error: *mut *mut GError,
+    ) -> *mut GFile;
+    pub fn gtk_file_dialog_save(
+        self_: *mut GtkFileDialog,
+        parent: *mut GtkWindow,
+        cancellable: *mut c_void,
+        callback: GAsyncReadyCallback,
+        user_data: gpointer,
+    );
+    pub fn gtk_file_dialog_save_finish(
+        self_: *mut GtkFileDialog,
+        result: *mut c_void,
+        error: *mut *mut GError,
+    ) -> *mut GFile;
+    pub fn gtk_file_dialog_select_folder(
+        self_: *mut GtkFileDialog,
+        parent: *mut GtkWindow,
+        cancellable: *mut c_void,
+        callback: GAsyncReadyCallback,
+        user_data: gpointer,
+    );
+    pub fn gtk_file_dialog_select_folder_finish(
+        self_: *mut GtkFileDialog,
+        result: *mut c_void,
+        error: *mut *mut GError,
+    ) -> *mut GFile;
+
+    pub fn gtk_file_launcher_new(file: *mut GFile) -> *mut GtkFileLauncher;
+    pub fn gtk_file_launcher_launch(
+        self_: *mut GtkFileLauncher,
+        parent: *mut GtkWindow,
+        cancellable: *mut c_void,
+        callback: GAsyncReadyCallback,
+        user_data: gpointer,
+    );
+    pub fn gtk_file_launcher_launch_finish(
+        self_: *mut GtkFileLauncher,
+        result: *mut c_void,
+        error: *mut *mut GError,
+    ) -> gboolean;
+    pub fn gtk_file_launcher_open_containing_folder(
+        self_: *mut GtkFileLauncher,
+        parent: *mut GtkWindow,
+        cancellable: *mut c_void,
+        callback: GAsyncReadyCallback,
+        user_data: gpointer,
+    );
+    pub fn gtk_file_launcher_open_containing_folder_finish(
+        self_: *mut GtkFileLauncher,
+        result: *mut c_void,
+        error: *mut *mut GError,
+    ) -> gboolean;
 
     pub fn gtk_image_new() -> *mut GtkWidget;
     pub fn gtk_image_new_from_icon_name(icon_name: *const c_char) -> *mut GtkWidget;
@@ -980,6 +1108,22 @@ extern "C" {
     pub fn adw_overlay_split_view_set_collapsed(
         self_: *mut AdwOverlaySplitView,
         collapsed: gboolean,
+    );
+    pub fn adw_overlay_split_view_set_sidebar_position(
+        self_: *mut AdwOverlaySplitView,
+        position: c_int,
+    );
+    pub fn adw_overlay_split_view_set_enable_show_gesture(
+        self_: *mut AdwOverlaySplitView,
+        enable_show_gesture: gboolean,
+    );
+    pub fn adw_overlay_split_view_set_enable_hide_gesture(
+        self_: *mut AdwOverlaySplitView,
+        enable_hide_gesture: gboolean,
+    );
+    pub fn adw_overlay_split_view_set_sidebar_width_fraction(
+        self_: *mut AdwOverlaySplitView,
+        fraction: gdouble,
     );
     pub fn adw_overlay_split_view_get_show_sidebar(self_: *mut AdwOverlaySplitView) -> gboolean;
     pub fn adw_overlay_split_view_set_show_sidebar(

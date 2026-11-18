@@ -78,6 +78,15 @@ pub fn install_app_actions_and_accels(app: &Application) {
         "win.open-shortcuts",
         &["<Control>question", "<Control><Shift>slash"],
     );
+
+    // Fase 3 — Historial, marcadores y descargas.
+    app.set_accels_for_action("win.toggle-history", &["<Control>h", "<Control>y"]);
+    app.set_accels_for_action("win.bookmark-page", &["<Control>d", "<Control><Shift>b"]);
+    app.set_accels_for_action("win.toggle-bookmarks", &["<Control><Shift>o"]);
+    app.set_accels_for_action(
+        "win.toggle-downloads",
+        &["<Control><Shift>y", "<Control><Shift>j"],
+    );
 }
 
 /// Registra todas las acciones de ventana (`win.*`) sobre `gtk_win`.
@@ -288,6 +297,27 @@ pub fn install_window_actions(gtk_win: &ApplicationWindow, win: &BrowserWindow) 
         let w = win.clone();
         move || present_shortcuts_dialog(w.gtk_window())
     });
+
+    // Fase 3.
+    add_win_action(gtk_win, "toggle-history", {
+        let w = win.clone();
+        move || w.toggle_history_panel()
+    });
+
+    add_win_action(gtk_win, "bookmark-page", {
+        let w = win.clone();
+        move || w.open_bookmark_popover()
+    });
+
+    add_win_action(gtk_win, "toggle-bookmarks", {
+        let w = win.clone();
+        move || w.toggle_bookmarks_panel()
+    });
+
+    add_win_action(gtk_win, "toggle-downloads", {
+        let w = win.clone();
+        move || w.toggle_downloads_panel()
+    });
 }
 
 /// Muestra el diálogo nativo `AdwShortcutsDialog` (`Ctrl+?`) con todos los atajos activos.
@@ -335,6 +365,20 @@ pub fn present_shortcuts_dialog(parent: &ApplicationWindow) {
         nav_sec.add(&ShortcutsItem::new(title, accel));
     }
     dialog.add(&nav_sec);
+
+    let data_sec = ShortcutsSection::new("Historial, marcadores y descargas");
+    for (title, accel) in [
+        ("Panel de historial", "<Control>h <Control>y"),
+        (
+            "Añadir o editar marcador de la página",
+            "<Control>d <Control><Shift>b",
+        ),
+        ("Panel de marcadores", "<Control><Shift>o"),
+        ("Panel de descargas", "<Control><Shift>y <Control><Shift>j"),
+    ] {
+        data_sec.add(&ShortcutsItem::new(title, accel));
+    }
+    dialog.add(&data_sec);
 
     let page_sec = ShortcutsSection::new("Página y aplicación");
     for (title, accel) in [

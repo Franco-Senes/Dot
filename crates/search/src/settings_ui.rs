@@ -3,14 +3,18 @@
 //! Todos los cambios se persisten atómicamente mediante `SettingsStore` y se propagan
 //! en vivo sin reiniciar (incluida la disposición de pestañas arriba vs barra lateral).
 
+use crate::downloads::default_system_downloads_dir;
 use crate::settings::SettingsStore;
 use gnome_platform::adw::{
-    ApplicationWindow, ComboRow, EntryRow, PreferencesDialog, PreferencesGroup, PreferencesPage,
-    SwitchRow,
+    ActionRow, ApplicationWindow, ComboRow, EntryRow, PreferencesDialog, PreferencesGroup,
+    PreferencesPage, SwitchRow,
 };
-use gnome_platform::gtk::{AsEditable, AsWidget, StringList};
+use gnome_platform::gtk::{
+    Align, AsEditable, AsWidget, BoxWidget, Button, FileDialog, Orientation, StringList,
+};
 use search_core::address::SearchEngine;
 use search_core::settings::ColorLook;
+use std::path::Path;
 
 const ENGINE_ORDER: [SearchEngine; 5] = [
     SearchEngine::DuckDuckGo,
@@ -163,6 +167,87 @@ pub fn present_settings_dialog(parent: &ApplicationWindow, settings: &SettingsSt
     privacy_group.add(&click_ids_row);
 
     page.add(&privacy_group);
+
+    // Grupo 3: Descargas (Fase 3).
+    let downloads_group = PreferencesGroup::new();
+    downloads_group.set_title("Descargas");
+
+    let dir_row = ActionRow::new();
+    dir_row.set_title("Carpeta de descargas");
+    let default_dir_display = default_system_downloads_dir()
+        .to_string_lossy()
+        .into_owned();
+    let current_dir_subtitle = if snap.downloads_dir.trim().is_empty() {
+        format!("Predeterminada ({default_dir_display})")
+    } else {
+        snap.downloads_dir.clone()
+    };
+    dir_row.set_subtitle(&current_dir_subtitle);
+
+    let dir_actions = BoxWidget::new(Orientation::Horizontal, 6);
+    dir_actions.set_valign(Align::Center);
+
+    let choose_btn = Button::with_label("Elegir…");
+    {
+        let st = settings.clone();
+        let row_ref = dir_row.clone();
+        let parent_ref = parent.clone();
+        choose_btn.connect_clicked(move || {
+            let dlg = FileDialog::new();
+            dlg.set_title("Elegir carpeta de descargas");
+            let current = st.with(|s| s.downloads_dir.trim().to_string());
+            if !current.is_empty() && Path::new(&current).is_dir() {
+                dlg.set_initial_folder(Path::new(&current));
+            } else {
+                let sys_dl = default_system_downloads_dir();
+                if sys_dl.is_dir() {
+                    dlg.set_initial_folder(&sys_dl);
+                }
+            }
+            let st_done = st.clone();
+            let row_done = row_ref.clone();
+            dlg.select_folder(Some(&parent_ref), move |opt_dir| {
+                if let Some(chosen) = opt_dir {
+                    let s_path = chosen.to_string_lossy().into_owned();
+                    row_done.set_subtitle(&s_path);
+                    st_done.update(|s| s.downloads_dir = s_path);
+                }
+            });
+        });
+    }
+    dir_actions.append(&choose_btn);
+
+    let reset_dir_btn = Button::from_icon_name("edit-undo-symbolic");
+    reset_dir_btn.add_css_class("flat");
+    reset_dir_btn.set_tooltip_text(Some("Restablecer a la carpeta XDG de Descargas"));
+    {
+        let st = settings.clone();
+        let row_ref = dir_row.clone();
+        let def_label = format!("Predeterminada ({default_dir_display})");
+        reset_dir_btn.connect_clicked(move || {
+            row_ref.set_subtitle(&def_label);
+            st.update(|s| s.downloads_dir.clear());
+        });
+    }
+    dir_actions.append(&reset_dir_btn);
+    dir_row.add_suffix(&dir_actions);
+    downloads_group.add(&dir_row);
+
+    let ask_row = SwitchRow::new();
+    ask_row.set_title("Preguntar siempre dónde guardar");
+    ask_row.set_subtitle("Abre el selector de archivos antes de iniciar cada descarga");
+    ask_row.set_active(snap.downloads_ask);
+    {
+        let st = settings.clone();
+        let row_ref = ask_row.clone();
+        ask_row.connect_active_notify(move || {
+            let ask = row_ref.is_active();
+            st.update(|s| s.downloads_ask = ask);
+        });
+    }
+    downloads_group.add(&ask_row);
+
+    page.add(&downloads_group);
     dialog.add(&page);
     dialog.present(Some(parent));
 }

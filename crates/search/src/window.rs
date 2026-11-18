@@ -10,25 +10,30 @@
 
 use crate::actions;
 use crate::address::AddressBar;
+use crate::bookmarks_ui::{self, BookmarksManager, BookmarksPanel};
 use crate::browser_view::{BrowserCallbacks, BrowserView};
+use crate::downloads::DownloadManager;
+use crate::downloads_ui::DownloadsPanel;
 use crate::find_bar::FindBar;
+use crate::history_ui::{HistoryManager, HistoryPanel};
 use crate::settings::SettingsStore;
 use crate::sidebar_tabs::{SidebarCallbacks, SidebarTabItem, SidebarTabs};
 use crate::tab_switcher::SwitcherTabItem;
 use anyhow::Result;
 use cef::RequestContext;
 use gnome_platform::adw::{
-    Application, ApplicationWindow, CenteringPolicy, HeaderBar, TabBar, TabPage, TabView,
-    TabViewShortcuts, ToolbarStyle, ToolbarView,
+    Application, ApplicationWindow, CenteringPolicy, HeaderBar, OverlaySplitView, TabBar, TabPage,
+    TabView, TabViewShortcuts, ToolbarStyle, ToolbarView,
 };
 use gnome_platform::gdk::{Rectangle, Texture};
 use gnome_platform::gio::{Icon, Menu, SimpleAction, SimpleActionGroup};
 use gnome_platform::glib::{self, Bytes};
 use gnome_platform::gtk::{
-    Align, AsWidget, BoxWidget, Label, Orientation, Overlay, PopoverMenu, PositionType,
-    ProgressBar, Revealer, RevealerTransitionType,
+    Align, AsWidget, BoxWidget, Label, Orientation, Overlay, PackType, Popover, PopoverMenu,
+    PositionType, ProgressBar, Revealer, RevealerTransitionType,
 };
 use search_core::address::{display_at_rest, resolve_address, sanitize_url_for_ui};
+use search_core::history::{suggest_omnibox, OpenTabInfo};
 use search_core::session::{now_unix_secs, ClosedTab, SessionTab, SessionWindow};
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
@@ -36,6 +41,22 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 static NEXT_WINDOW_ID: AtomicU64 = AtomicU64::new(1);
 static NEXT_TAB_ID: AtomicU64 = AtomicU64::new(1);
+
+/// Almacenes compartidos de datos de navegación (Fase 3) inyectados desde `AppController`.
+#[derive(Clone)]
+pub struct SharedDataStores {
+    pub history: HistoryManager,
+    pub bookmarks: BookmarksManager,
+    pub downloads: DownloadManager,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SidePanelKind {
+    None,
+    History,
+    Bookmarks,
+    Downloads,
+}
 
 /// Eventos que una ventana comunica al controlador global de aplicación (`app.rs`).
 #[derive(Default)]
@@ -48,6 +69,9 @@ pub struct WindowCallbacks {
     pub on_open_tab_switcher: Option<Box<dyn Fn(BrowserWindow)>>,
     pub on_move_tab_to_new_window: Option<Box<dyn Fn(SessionTab, bool)>>,
     pub on_window_closed: Option<Box<dyn Fn(u64)>>,
+    pub on_list_open_tabs: Option<Box<dyn Fn() -> Vec<OpenTabInfo>>>,
+    pub on_switch_to_tab: Option<Box<dyn Fn(u64, u64)>>,
+    pub on_is_any_window_active: Option<Box<dyn Fn() -> bool>>,
 }
 
 struct TabRecord {
@@ -128,12 +152,19 @@ struct WindowState {
     top_bar_revealer: Revealer,
     sidebar_tabs: SidebarTabs,
     sidebar_revealer: Revealer,
+    side_split: OverlaySplitView,
+    active_panel: Cell<SidePanelKind>,
+    history_panel: RefCell<Option<HistoryPanel>>,
+    bookmarks_panel: RefCell<Option<BookmarksPanel>>,
+    downloads_panel: RefCell<Option<DownloadsPanel>>,
+    bookmark_popover: RefCell<Option<Popover>>,
     tab_menu: Menu,
     tab_close_action: SimpleAction,
     active_popover: RefCell<Option<PopoverMenu>>,
     menu_target_tab: Cell<Option<u64>>,
     request_context: RequestContext,
     settings: SettingsStore,
+    stores: SharedDataStores,
     tabs: RefCell<Vec<TabRecord>>,
     folded: Cell<bool>,
     suppress_auto_wake: Cell<bool>,
@@ -151,6 +182,7 @@ impl BrowserWindow {
         app: &Application,
         request_context: RequestContext,
         settings: SettingsStore,
+        stores: SharedDataStores,
         is_private: bool,
         callbacks: WindowCallbacks,
     ) -> Result<Self> {
@@ -248,7 +280,21 @@ impl BrowserWindow {
         main_hbox.append(&sidebar_revealer);
         main_hbox.append(&content_box);
 
-        toolbar_view.set_content(Some(&main_hbox));
+        // Panel lateral discreto derecho (`AdwOverlaySplitView`) para Historial, Marcadores y Descargas.
+        // Cero botones permanentes en la cabecera: solo se muestra bajo demanda con atajos y cierra con Esc.
+        let side_split = OverlaySplitView::new();
+        side_split.set_sidebar_position(PackType::End);
+        side_split.set_collapsed(true);
+        side_split.set_show_sidebar(false);
+        side_split.set_pin_sidebar(false);
+        side_split.set_enable_show_gesture(false);
+        side_split.set_enable_hide_gesture(true);
+        side_split.set_min_sidebar_width(340.0);
+        side_split.set_max_sidebar_width(420.0);
+        side_split.set_sidebar_width_fraction(0.32);
+        side_split.set_content(Some(&main_hbox));
+
+        toolbar_view.set_content(Some(&side_split));
         window.set_content(Some(&toolbar_view));
 
         let tab_close_action = SimpleAction::new("close");
@@ -267,12 +313,19 @@ impl BrowserWindow {
                 top_bar_revealer,
                 sidebar_tabs,
                 sidebar_revealer,
+                side_split,
+                active_panel: Cell::new(SidePanelKind::None),
+                history_panel: RefCell::new(None),
+                bookmarks_panel: RefCell::new(None),
+                downloads_panel: RefCell::new(None),
+                bookmark_popover: RefCell::new(None),
                 tab_menu,
                 tab_close_action,
                 active_popover: RefCell::new(None),
                 menu_target_tab: Cell::new(None),
                 request_context,
                 settings: settings.clone(),
+                stores,
                 tabs: RefCell::new(Vec::new()),
                 folded: Cell::new(false),
                 suppress_auto_wake: Cell::new(false),
@@ -281,6 +334,7 @@ impl BrowserWindow {
             }),
         };
 
+        bw.init_side_panels();
         bw.install_tab_context_actions();
         bw.wire_signals();
         actions::install_window_actions(&bw.inner.window, &bw);
@@ -554,6 +608,177 @@ impl BrowserWindow {
                 favicon: t.favicon_texture.clone(),
             })
             .collect()
+    }
+
+    /// Instantánea de pestañas abiertas para sugerencias del omnibox ("Cambiar a pestaña").
+    pub fn open_tab_infos(&self) -> Vec<OpenTabInfo> {
+        self.sync_order_with_tab_view();
+        self.inner
+            .tabs
+            .borrow()
+            .iter()
+            .map(|t| OpenTabInfo {
+                window_id: self.inner.id,
+                tab_id: t.id,
+                title: t.display_title(),
+                url: t.url.clone(),
+                is_private: self.inner.is_private,
+            })
+            .collect()
+    }
+
+    pub fn toggle_history_panel(&self) {
+        self.toggle_side_panel(SidePanelKind::History);
+    }
+
+    pub fn toggle_bookmarks_panel(&self) {
+        self.toggle_side_panel(SidePanelKind::Bookmarks);
+    }
+
+    pub fn toggle_downloads_panel(&self) {
+        self.toggle_side_panel(SidePanelKind::Downloads);
+    }
+
+    pub fn close_side_panel(&self) {
+        self.inner.side_split.set_show_sidebar(false);
+        self.inner.active_panel.set(SidePanelKind::None);
+        if let Some(ref p) = *self.inner.history_panel.borrow() {
+            p.set_panel_visible(false);
+        }
+        if let Some(ref p) = *self.inner.bookmarks_panel.borrow() {
+            p.set_panel_visible(false);
+        }
+    }
+
+    /// Abre el popover discreto de marcador (`Ctrl+D` / `Ctrl+Shift+B`) anclado a la barra de direcciones.
+    pub fn open_bookmark_popover(&self) {
+        if let Some(old) = self.inner.bookmark_popover.borrow_mut().take() {
+            old.popdown();
+            old.unparent();
+        }
+        let Some(active_id) = self.selected_tab_id() else {
+            return;
+        };
+        let (url, title) = {
+            let tabs = self.inner.tabs.borrow();
+            match tabs.iter().find(|t| t.id == active_id) {
+                Some(t) => (t.url.clone(), t.display_title()),
+                None => return,
+            }
+        };
+        if let Some(pop) = bookmarks_ui::open_bookmark_popover(
+            self.inner.address_bar.entry(),
+            &self.inner.stores.bookmarks,
+            &url,
+            &title,
+        ) {
+            *self.inner.bookmark_popover.borrow_mut() = Some(pop);
+        }
+    }
+
+    fn init_side_panels(&self) {
+        let hist_panel = HistoryPanel::new(
+            self.inner.stores.history.clone(),
+            {
+                let w = self.clone();
+                move |url, new_tab| {
+                    if new_tab {
+                        let _ = w.open_tab(Some(&url), true, false, false);
+                    } else {
+                        w.navigate_typed_input(&url);
+                    }
+                    w.close_side_panel();
+                }
+            },
+            {
+                let w = self.clone();
+                move || w.close_side_panel()
+            },
+        );
+        *self.inner.history_panel.borrow_mut() = Some(hist_panel);
+
+        let bm_panel = BookmarksPanel::new(
+            self.inner.window.clone(),
+            self.inner.stores.bookmarks.clone(),
+            {
+                let w = self.clone();
+                move |url, new_tab| {
+                    if new_tab {
+                        let _ = w.open_tab(Some(&url), true, false, false);
+                    } else {
+                        w.navigate_typed_input(&url);
+                    }
+                    w.close_side_panel();
+                }
+            },
+            {
+                let w = self.clone();
+                move || w.close_side_panel()
+            },
+        );
+        *self.inner.bookmarks_panel.borrow_mut() = Some(bm_panel);
+
+        let dl_panel = DownloadsPanel::new(
+            self.inner.window.clone(),
+            self.inner.stores.downloads.clone(),
+            {
+                let w = self.clone();
+                move |url| {
+                    if let Some(bv) = w.ensure_active_browser_view() {
+                        bv.start_download(&url);
+                    }
+                }
+            },
+            {
+                let w = self.clone();
+                move || w.close_side_panel()
+            },
+        );
+        *self.inner.downloads_panel.borrow_mut() = Some(dl_panel);
+    }
+
+    fn toggle_side_panel(&self, kind: SidePanelKind) {
+        let already =
+            self.inner.active_panel.get() == kind && self.inner.side_split.shows_sidebar();
+        if already {
+            self.close_side_panel();
+            return;
+        }
+
+        if let Some(ref p) = *self.inner.history_panel.borrow() {
+            p.set_panel_visible(false);
+        }
+        if let Some(ref p) = *self.inner.bookmarks_panel.borrow() {
+            p.set_panel_visible(false);
+        }
+
+        match kind {
+            SidePanelKind::None => {
+                self.close_side_panel();
+                return;
+            }
+            SidePanelKind::History => {
+                if let Some(ref p) = *self.inner.history_panel.borrow() {
+                    self.inner.side_split.set_sidebar(Some(p.widget()));
+                    p.set_panel_visible(true);
+                }
+            }
+            SidePanelKind::Bookmarks => {
+                if let Some(ref p) = *self.inner.bookmarks_panel.borrow() {
+                    self.inner.side_split.set_sidebar(Some(p.widget()));
+                    p.set_panel_visible(true);
+                }
+            }
+            SidePanelKind::Downloads => {
+                if let Some(ref p) = *self.inner.downloads_panel.borrow() {
+                    self.inner.side_split.set_sidebar(Some(p.widget()));
+                    p.refresh();
+                }
+            }
+        }
+
+        self.inner.active_panel.set(kind);
+        self.inner.side_split.set_show_sidebar(true);
     }
 
     pub fn navigate_typed_input(&self, raw_typed: &str) {
@@ -856,6 +1081,15 @@ impl BrowserWindow {
             self.set_fullscreen(false);
             return;
         }
+        if let Some(pop) = self.inner.bookmark_popover.borrow_mut().take() {
+            pop.popdown();
+            pop.unparent();
+            return;
+        }
+        if self.inner.side_split.shows_sidebar() {
+            self.close_side_panel();
+            return;
+        }
         if self.inner.find_bar.is_open() {
             self.inner.find_bar.close();
             return;
@@ -912,6 +1146,11 @@ impl BrowserWindow {
 
     /// Cierra limpiamente todos los `cef::Browser` activos de esta ventana (p. ej. al salir).
     pub fn close_all_browsers(&self) {
+        self.inner.address_bar.cleanup();
+        if let Some(pop) = self.inner.bookmark_popover.borrow_mut().take() {
+            pop.popdown();
+            pop.unparent();
+        }
         if let Some(pop) = self.inner.active_popover.borrow_mut().take() {
             pop.unparent();
         }
@@ -1060,6 +1299,47 @@ impl BrowserWindow {
                 }
             }));
         }
+        {
+            let w = self.clone();
+            let bv_ref = bv.clone();
+            cbs.on_load_finished = Some(Box::new(move |url, status| {
+                if w.inner.is_private || bv_ref.last_load_was_error() {
+                    return;
+                }
+                if status == 0 || (200..400).contains(&status) {
+                    let title = bv_ref.title();
+                    w.inner.stores.history.record_visit(&url, &title);
+                }
+            }));
+        }
+        {
+            let w = self.clone();
+            cbs.on_before_download = Some(Box::new(move |ev| {
+                w.inner.stores.downloads.handle_before_download(
+                    ev,
+                    &w.inner.window,
+                    w.inner.is_private,
+                );
+            }));
+        }
+        {
+            let w = self.clone();
+            cbs.on_download_updated = Some(Box::new(move |ev| {
+                let any_active = w
+                    .inner
+                    .callbacks
+                    .on_is_any_window_active
+                    .as_ref()
+                    .map(|cb| cb())
+                    .unwrap_or_else(|| w.inner.window.is_active());
+                w.inner.stores.downloads.handle_download_updated(
+                    ev,
+                    w.inner.is_private,
+                    &w.inner.app,
+                    any_active,
+                );
+            }));
+        }
 
         bv.set_callbacks(cbs);
         Ok(bv)
@@ -1067,18 +1347,21 @@ impl BrowserWindow {
 
     fn handle_tab_title_changed(&self, tab_id: u64, title: String) {
         let is_selected = self.selected_tab_id() == Some(tab_id);
-        let updated_title = {
+        let (updated_title, current_url) = {
             let mut tabs = self.inner.tabs.borrow_mut();
             let Some(tab) = tabs.iter_mut().find(|t| t.id == tab_id) else {
                 return;
             };
-            tab.title = title;
+            tab.title = title.clone();
             let disp = tab.display_title();
             let tip = tab.tooltip_text();
             tab.page.set_title(&disp);
             tab.page.set_tooltip(Some(&tip));
-            disp
+            (disp, tab.url.clone())
         };
+        if !self.inner.is_private && !title.trim().is_empty() {
+            self.inner.stores.history.retitle(&current_url, &title);
+        }
         if is_selected {
             self.update_window_title(&updated_title);
         }
@@ -1456,7 +1739,8 @@ impl BrowserWindow {
     }
 
     fn wire_signals(&self) {
-        // Barra de direcciones: envío y tecla Escape.
+        // Barra de direcciones: envío, autocompletado unificado, cambio de pestaña,
+        // borrado con Shift+Supr y tecla Escape.
         {
             let w = self.clone();
             self.inner.address_bar.connect_submit(move |typed| {
@@ -1468,6 +1752,61 @@ impl BrowserWindow {
             self.inner.address_bar.connect_escape(move || {
                 if let Some(bv) = w.active_browser_view() {
                     bv.grab_focus();
+                }
+            });
+        }
+        {
+            let w = self.clone();
+            self.inner
+                .address_bar
+                .connect_suggest_provider(move |typed| {
+                    let open_tabs = w
+                        .inner
+                        .callbacks
+                        .on_list_open_tabs
+                        .as_ref()
+                        .map(|cb| cb())
+                        .unwrap_or_else(|| w.open_tab_infos());
+                    let now = now_unix_secs();
+                    w.inner.stores.history.with_store(|hist| {
+                        w.inner
+                            .stores
+                            .bookmarks
+                            .with_store(|bms| suggest_omnibox(typed, hist, bms, &open_tabs, 8, now))
+                    })
+                });
+        }
+        {
+            let w = self.clone();
+            self.inner
+                .address_bar
+                .connect_switch_tab(move |win_id, tab_id| {
+                    if let Some(ref cb) = w.inner.callbacks.on_switch_to_tab {
+                        cb(win_id, tab_id);
+                    } else if win_id == w.inner.id {
+                        w.select_tab_by_id(tab_id);
+                    }
+                });
+        }
+        {
+            let w = self.clone();
+            self.inner.address_bar.connect_delete_history(move |key| {
+                w.inner.stores.history.remove_by_key(&key);
+            });
+        }
+
+        // Sincronizar estado del panel lateral derecho al cerrarse haciendo clic fuera.
+        {
+            let w = self.clone();
+            self.inner.side_split.connect_show_sidebar_notify(move || {
+                if !w.inner.side_split.shows_sidebar() {
+                    w.inner.active_panel.set(SidePanelKind::None);
+                    if let Some(ref p) = *w.inner.history_panel.borrow() {
+                        p.set_panel_visible(false);
+                    }
+                    if let Some(ref p) = *w.inner.bookmarks_panel.borrow() {
+                        p.set_panel_visible(false);
+                    }
                 }
             });
         }

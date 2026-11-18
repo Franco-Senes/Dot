@@ -86,6 +86,18 @@ impl SearchPaths {
         self.data_dir.join("session.json")
     }
 
+    pub fn history_file(&self) -> PathBuf {
+        self.data_dir.join("history.json")
+    }
+
+    pub fn bookmarks_file(&self) -> PathBuf {
+        self.data_dir.join("bookmarks.json")
+    }
+
+    pub fn downloads_file(&self) -> PathBuf {
+        self.data_dir.join("downloads.json")
+    }
+
     pub fn cef_cache_dir(&self) -> PathBuf {
         self.cache_dir.join("cef")
     }

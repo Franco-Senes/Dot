@@ -51,6 +51,33 @@ const TLS_OVERRIDE_HOST: &str = "search-tls-override.invalid";
 pub type LoadingStateCallback = Box<dyn Fn(bool, bool, bool)>;
 pub type PaintFrameCallback = Box<dyn Fn(u64, i32, i32)>;
 
+/// Instantánea segura de `CefDownloadHandler::on_before_download`.
+pub struct DownloadBeforeEvent {
+    pub cef_id: u32,
+    pub url: String,
+    pub suggested_name: String,
+    pub total_bytes: i64,
+    pub callback: BeforeDownloadCallback,
+}
+
+/// Instantánea segura de `CefDownloadHandler::on_download_updated`.
+pub struct DownloadUpdateEvent {
+    pub cef_id: u32,
+    pub url: String,
+    pub full_path: String,
+    pub suggested_name: String,
+    pub received_bytes: i64,
+    pub total_bytes: i64,
+    pub percent_complete: i32,
+    pub current_speed: i64,
+    pub is_in_progress: bool,
+    pub is_complete: bool,
+    pub is_canceled: bool,
+    pub is_interrupted: bool,
+    pub is_paused: bool,
+    pub callback: Option<DownloadItemCallback>,
+}
+
 #[derive(Default)]
 pub struct BrowserCallbacks {
     pub on_title_changed: Option<Box<dyn Fn(String)>>,
@@ -65,6 +92,8 @@ pub struct BrowserCallbacks {
     pub on_find_result: Option<Box<dyn Fn(i32, i32)>>,
     pub on_load_finished: Option<Box<dyn Fn(String, i32)>>,
     pub on_non_empty_paint: Option<PaintFrameCallback>,
+    pub on_before_download: Option<Box<dyn Fn(DownloadBeforeEvent)>>,
+    pub on_download_updated: Option<Box<dyn Fn(DownloadUpdateEvent)>>,
 }
 
 struct SharedState {
@@ -93,6 +122,7 @@ struct SharedState {
     audio_nonce: String,
     tls_allowed_hosts: RefCell<HashSet<String>>,
     suppress_next_abort_error: Cell<bool>,
+    last_load_was_error: Cell<bool>,
     counted_active: Cell<bool>,
     callbacks: RefCell<BrowserCallbacks>,
 }
@@ -180,6 +210,7 @@ impl BrowserView {
             audio_nonce: generate_hex_nonce_128(),
             tls_allowed_hosts: RefCell::new(HashSet::new()),
             suppress_next_abort_error: Cell::new(false),
+            last_load_was_error: Cell::new(false),
             counted_active: Cell::new(false),
             callbacks: RefCell::new(BrowserCallbacks::default()),
         });
@@ -328,6 +359,18 @@ impl BrowserView {
     pub fn stop_load(&self) {
         if let Some(browser) = self.browser() {
             browser.stop_load();
+        }
+    }
+
+    pub fn last_load_was_error(&self) -> bool {
+        self.shared.last_load_was_error.get()
+    }
+
+    /// Inicia o reintenta una descarga directa mediante `CefBrowserHost::start_download`.
+    pub fn start_download(&self, url: &str) {
+        if let Some(host) = self.host() {
+            let cs = CefString::from(url);
+            host.start_download(Some(&cs));
         }
     }
 
@@ -763,6 +806,7 @@ fn build_cef_client(shared: Rc<SharedState>) -> Client {
     let load_handler = SearchLoadHandler::new(shared.clone());
     let life_span_handler = SearchLifeSpanHandler::new(shared.clone());
     let find_handler = SearchFindHandler::new(shared.clone());
+    let download_handler = SearchDownloadHandler::new(shared.clone());
     let cookie_filter = SearchCookieFilter::new(shared.clone());
     let resource_req_handler = SearchResourceRequestHandler::new(shared.clone(), cookie_filter);
     let request_handler = SearchRequestHandler::new(shared, resource_req_handler);
@@ -773,6 +817,7 @@ fn build_cef_client(shared: Rc<SharedState>) -> Client {
         load_handler,
         life_span_handler,
         find_handler,
+        download_handler,
         request_handler,
     )
 }
@@ -1067,6 +1112,14 @@ wrap_load_handler! {
             frame: Option<&mut Frame>,
             _transition_type: TransitionType,
         ) {
+            if let Some(ref frame) = frame {
+                if frame.is_main() != 0 {
+                    let url = CefString::from(&frame.url()).to_string();
+                    if !url.starts_with("data:text/html;charset=utf-8,<!--search-internal-->") {
+                        self.shared.last_load_was_error.set(false);
+                    }
+                }
+            }
             if !self.shared.settings.with(|s| s.send_gpc) {
                 return;
             }
@@ -1138,6 +1191,7 @@ wrap_load_handler! {
                 .map(CefString::to_string)
                 .unwrap_or_else(|| "Error de red".to_string());
 
+            self.shared.last_load_was_error.set(true);
             *self.shared.current_url.borrow_mut() = failed.clone();
             if let Some(ref cb) = self.shared.callbacks.borrow().on_address_changed {
                 cb(failed.clone());
@@ -1468,6 +1522,7 @@ wrap_request_handler! {
             }
 
             self.shared.suppress_next_abort_error.set(true);
+            self.shared.last_load_was_error.set(true);
             *self.shared.current_url.borrow_mut() = failed_url.clone();
             if let Some(ref addr_cb) = self.shared.callbacks.borrow().on_address_changed {
                 addr_cb(failed_url.clone());
@@ -1491,6 +1546,106 @@ wrap_request_handler! {
     }
 }
 
+wrap_download_handler! {
+    struct SearchDownloadHandler {
+        shared: Rc<SharedState>,
+    }
+
+    impl DownloadHandler {
+        fn can_download(
+            &self,
+            _browser: Option<&mut Browser>,
+            _url: Option<&CefString>,
+            _request_method: Option<&CefString>,
+        ) -> ::std::os::raw::c_int {
+            1
+        }
+
+        fn on_before_download(
+            &self,
+            _browser: Option<&mut Browser>,
+            download_item: Option<&mut DownloadItem>,
+            suggested_name: Option<&CefString>,
+            callback: Option<&mut BeforeDownloadCallback>,
+        ) -> ::std::os::raw::c_int {
+            let (Some(item), Some(cb)) = (download_item, callback) else {
+                return 0;
+            };
+            let url = {
+                let u = CefString::from(&item.url()).to_string();
+                if u.is_empty() {
+                    CefString::from(&item.original_url()).to_string()
+                } else {
+                    u
+                }
+            };
+            let name = suggested_name
+                .map(CefString::to_string)
+                .filter(|s| !s.trim().is_empty())
+                .unwrap_or_else(|| CefString::from(&item.suggested_file_name()).to_string());
+
+            let ev = DownloadBeforeEvent {
+                cef_id: item.id(),
+                url,
+                suggested_name: name,
+                total_bytes: item.total_bytes(),
+                callback: cb.clone(),
+            };
+
+            let has_handler = self.shared.callbacks.borrow().on_before_download.is_some();
+            if has_handler {
+                if let Some(ref handler) = self.shared.callbacks.borrow().on_before_download {
+                    handler(ev);
+                }
+                1
+            } else {
+                0
+            }
+        }
+
+        fn on_download_updated(
+            &self,
+            _browser: Option<&mut Browser>,
+            download_item: Option<&mut DownloadItem>,
+            callback: Option<&mut DownloadItemCallback>,
+        ) {
+            let Some(item) = download_item else {
+                return;
+            };
+            if item.is_valid() == 0 {
+                return;
+            }
+            let url = {
+                let u = CefString::from(&item.url()).to_string();
+                if u.is_empty() {
+                    CefString::from(&item.original_url()).to_string()
+                } else {
+                    u
+                }
+            };
+            let ev = DownloadUpdateEvent {
+                cef_id: item.id(),
+                url,
+                full_path: CefString::from(&item.full_path()).to_string(),
+                suggested_name: CefString::from(&item.suggested_file_name()).to_string(),
+                received_bytes: item.received_bytes(),
+                total_bytes: item.total_bytes(),
+                percent_complete: item.percent_complete(),
+                current_speed: item.current_speed(),
+                is_in_progress: item.is_in_progress() != 0,
+                is_complete: item.is_complete() != 0,
+                is_canceled: item.is_canceled() != 0,
+                is_interrupted: item.is_interrupted() != 0,
+                is_paused: item.is_paused() != 0,
+                callback: callback.map(|c| c.clone()),
+            };
+            if let Some(ref handler) = self.shared.callbacks.borrow().on_download_updated {
+                handler(ev);
+            }
+        }
+    }
+}
+
 wrap_client! {
     struct SearchClient {
         render_handler: RenderHandler,
@@ -1498,6 +1653,7 @@ wrap_client! {
         load_handler: LoadHandler,
         life_span_handler: LifeSpanHandler,
         find_handler: FindHandler,
+        download_handler: DownloadHandler,
         request_handler: RequestHandler,
     }
 
@@ -1520,6 +1676,10 @@ wrap_client! {
 
         fn find_handler(&self) -> Option<FindHandler> {
             Some(self.find_handler.clone())
+        }
+
+        fn download_handler(&self) -> Option<DownloadHandler> {
+            Some(self.download_handler.clone())
         }
 
         fn request_handler(&self) -> Option<RequestHandler> {

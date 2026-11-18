@@ -172,6 +172,83 @@ label.search-switcher-badge {
     background-color: alpha(currentColor, 0.09);
     opacity: 0.82;
 }
+
+popover.search-omnibox-popover > contents {
+    padding: 4px;
+    border-radius: 10px;
+}
+
+listbox.search-omnibox-list {
+    background-color: transparent;
+}
+
+listbox.search-omnibox-list row.search-omnibox-row {
+    border-radius: 7px;
+    margin: 1px 0;
+}
+
+listbox.search-omnibox-list row.search-omnibox-row:selected {
+    background-color: alpha(@accent_bg_color, 0.18);
+}
+
+label.search-omnibox-url {
+    font-size: 0.78rem;
+    opacity: 0.64;
+}
+
+label.search-omnibox-badge {
+    font-size: 0.72rem;
+    font-weight: 600;
+    padding: 2px 7px;
+    border-radius: 999px;
+    background-color: alpha(@accent_bg_color, 0.16);
+    color: @accent_color;
+}
+
+box.search-side-panel {
+    background-color: @sidebar_bg_color;
+    border-left: 1px solid alpha(currentColor, 0.09);
+}
+
+label.search-panel-title {
+    font-weight: 600;
+    font-size: 0.96rem;
+}
+
+label.search-panel-section {
+    font-weight: 600;
+    font-size: 0.78rem;
+    opacity: 0.65;
+}
+
+label.search-panel-subtitle {
+    font-size: 0.78rem;
+    opacity: 0.65;
+}
+
+label.search-panel-empty {
+    font-size: 0.88rem;
+    opacity: 0.60;
+}
+
+listbox.search-panel-list {
+    background-color: transparent;
+}
+
+listbox.search-panel-list row.search-panel-row {
+    padding: 0;
+}
+
+button.search-panel-item-btn {
+    padding: 4px 6px;
+    border-radius: 7px;
+}
+
+box.search-panel-editor {
+    padding: 8px;
+    border-radius: 8px;
+    background-color: alpha(currentColor, 0.05);
+}
 "#;
 
 /// Registra el proveedor CSS de la aplicación en el `GdkDisplay` activo.
