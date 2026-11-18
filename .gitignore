@@ -1,0 +1,7 @@
+upstream/
+target/
+_build/
+.flatpak-builder/
+build-dir/
+repo/
+.toolchain/
