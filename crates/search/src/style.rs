@@ -157,6 +157,18 @@ box.search-main-hbox.cards-enabled box.search-sidebar {
     border-right: none;
 }
 
+box.search-sidebar-resize-handle {
+    min-width: 6px;
+    background-color: transparent;
+    border-right: 2px solid transparent;
+    transition: border-color 140ms ease;
+}
+
+box.search-sidebar-resize-handle:hover,
+box.search-sidebar-resize-handle.dragging {
+    border-right-color: alpha(@accent_bg_color, 0.55);
+}
+
 box.search-sidebar-favorites {
     padding: 2px 1px 6px 1px;
 }

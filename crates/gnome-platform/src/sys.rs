@@ -1037,6 +1037,7 @@ extern "C" {
     pub fn gtk_event_controller_focus_new() -> *mut GtkEventController;
 
     pub fn gtk_gesture_click_new() -> *mut GtkGesture;
+    pub fn gtk_gesture_drag_new() -> *mut GtkGesture;
     pub fn gtk_gesture_single_set_button(gesture: *mut GtkGestureSingle, button: guint);
     pub fn gtk_gesture_single_get_current_button(gesture: *mut GtkGestureSingle) -> guint;
     pub fn gtk_gesture_swipe_new() -> *mut GtkGesture;

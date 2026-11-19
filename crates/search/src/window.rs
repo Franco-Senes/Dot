@@ -33,8 +33,8 @@ use gnome_platform::gdk::{Rectangle, Texture};
 use gnome_platform::gio::{Menu, SimpleAction, SimpleActionGroup};
 use gnome_platform::glib;
 use gnome_platform::gtk::{
-    Align, AsWidget, BoxWidget, Label, Orientation, Overflow, Overlay, PackType, Popover,
-    PopoverMenu, PositionType, ProgressBar, Revealer, RevealerTransitionType,
+    Align, AsWidget, BoxWidget, GestureDrag, Label, Orientation, Overflow, Overlay, PackType,
+    Popover, PopoverMenu, PositionType, ProgressBar, Revealer, RevealerTransitionType,
 };
 use search_core::address::{
     canonical_internal_url, display_at_rest, parse_internal_page, resolve_address,
@@ -43,7 +43,7 @@ use search_core::address::{
 use search_core::history::{suggest_omnibox, OpenTabInfo};
 use search_core::paths::SearchPaths;
 use search_core::session::{now_unix_secs, ClosedTab, PinStyle, SessionTab, SessionWindow};
-use search_core::settings::{NewTabPosition, UiMotion};
+use search_core::settings::{AppSettings, NewTabPosition, UiMotion};
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -294,10 +294,24 @@ impl BrowserWindow {
         // Barra lateral vertical de pestañas estilo Arc enlazada al mismo `AdwTabView`.
         let initial_sidebar_width = settings.with(|s| s.sidebar_width.round() as i32);
         let sidebar_tabs = SidebarTabs::new(initial_sidebar_width);
+
+        // Borde derecho arrastrable para redimensionar la barra lateral sin salir del `Revealer`.
+        let sidebar_resize_handle = BoxWidget::new(Orientation::Vertical, 0);
+        sidebar_resize_handle.add_css_class("search-sidebar-resize-handle");
+        sidebar_resize_handle.set_size_request(6, -1);
+        sidebar_resize_handle.set_halign(Align::End);
+        sidebar_resize_handle.set_vexpand(true);
+        sidebar_resize_handle.set_cursor_from_name(Some("col-resize"));
+
+        let sidebar_overlay = Overlay::new();
+        sidebar_overlay.set_child(Some(sidebar_tabs.widget()));
+        sidebar_overlay.add_overlay(&sidebar_resize_handle);
+        sidebar_overlay.set_measure_overlay(&sidebar_resize_handle, false);
+
         let sidebar_revealer = Revealer::new();
         sidebar_revealer.set_transition_type(RevealerTransitionType::SlideRight);
         sidebar_revealer.set_transition_duration(initial_motion.duration_ms(220));
-        sidebar_revealer.set_child(Some(sidebar_tabs.widget()));
+        sidebar_revealer.set_child(Some(&sidebar_overlay));
 
         let find_bar = FindBar::new();
         find_bar.set_motion_duration(initial_motion.duration_ms(150));
@@ -338,6 +352,70 @@ impl BrowserWindow {
         main_hbox.set_vexpand(true);
         main_hbox.append(&sidebar_revealer);
         main_hbox.append(&stage_shell);
+
+        // Redimensionado fluido de la barra lateral con ratón (`col-resize`) y guardado al soltar.
+        {
+            let drag = GestureDrag::new();
+            drag.set_button(1);
+            let drag_start_width = Rc::new(Cell::new(initial_sidebar_width));
+            let drag_applied_width = Rc::new(Cell::new(initial_sidebar_width));
+
+            {
+                let tabs_ref = sidebar_tabs.clone();
+                let handle_ref = sidebar_resize_handle.clone();
+                let hbox_ref = main_hbox.clone();
+                let start_w = drag_start_width.clone();
+                let applied_w = drag_applied_width.clone();
+                drag.connect_drag_begin(move |_x, _y| {
+                    let w = tabs_ref.width().clamp(
+                        AppSettings::SIDEBAR_WIDTH_MIN as i32,
+                        AppSettings::SIDEBAR_WIDTH_MAX as i32,
+                    );
+                    start_w.set(w);
+                    applied_w.set(w);
+                    handle_ref.add_css_class("dragging");
+                    hbox_ref.set_cursor_from_name(Some("col-resize"));
+                });
+            }
+            {
+                let tabs_ref = sidebar_tabs.clone();
+                let start_w = drag_start_width.clone();
+                let applied_w = drag_applied_width.clone();
+                drag.connect_drag_update(move |dx, _dy| {
+                    // Compensar el desplazamiento del propio handle conforme cambia el ancho.
+                    let true_delta = dx + f64::from(applied_w.get() - start_w.get());
+                    let next = (f64::from(start_w.get()) + true_delta).round() as i32;
+                    let clamped = next.clamp(
+                        AppSettings::SIDEBAR_WIDTH_MIN as i32,
+                        AppSettings::SIDEBAR_WIDTH_MAX as i32,
+                    );
+                    if clamped != applied_w.get() {
+                        applied_w.set(clamped);
+                        tabs_ref.set_width(clamped);
+                    }
+                });
+            }
+            {
+                let settings_ref = settings.clone();
+                let handle_ref = sidebar_resize_handle.clone();
+                let hbox_ref = main_hbox.clone();
+                let applied_w = drag_applied_width.clone();
+                drag.connect_drag_end(move |_dx, _dy| {
+                    handle_ref.remove_css_class("dragging");
+                    hbox_ref.set_cursor_from_name(None);
+                    let final_w = f64::from(applied_w.get()).clamp(
+                        AppSettings::SIDEBAR_WIDTH_MIN,
+                        AppSettings::SIDEBAR_WIDTH_MAX,
+                    );
+                    let prev_w = settings_ref.with(|s| s.sidebar_width);
+                    if (prev_w - final_w).abs() >= 0.5 {
+                        settings_ref.update(|s| s.sidebar_width = final_w);
+                    }
+                });
+            }
+
+            sidebar_resize_handle.add_controller(&drag);
+        }
 
         // Panel lateral discreto derecho (`AdwOverlaySplitView`) para Historial, Marcadores y Descargas.
         // Cero botones permanentes en la cabecera: solo se muestra bajo demanda con atajos y cierra con Esc.

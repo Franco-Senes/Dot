@@ -17,7 +17,7 @@ use gnome_platform::gtk::{
 };
 use search_core::pin_folders::{PinFolder, PinFolderStore, MAX_PIN_FOLDER_DEPTH};
 use search_core::session::PinStyle;
-use search_core::settings::TabGlyph;
+use search_core::settings::{AppSettings, TabGlyph};
 use std::cell::{Cell, RefCell};
 use std::path::PathBuf;
 use std::rc::Rc;
@@ -242,6 +242,7 @@ pub struct SidebarTabs {
     settings_icon: Image,
     add_folder_icon: Image,
     folder_popover: Rc<RefCell<Option<Popover>>>,
+    current_width: Rc<Cell<i32>>,
     motion_ms: Rc<Cell<u32>>,
     callbacks: Rc<RefCell<SidebarCallbacks>>,
 }
@@ -249,10 +250,14 @@ pub struct SidebarTabs {
 impl SidebarTabs {
     pub fn new(width: i32) -> Self {
         let dark = icons::is_dark_theme();
+        let clamped_width = width.clamp(
+            AppSettings::SIDEBAR_WIDTH_MIN as i32,
+            AppSettings::SIDEBAR_WIDTH_MAX as i32,
+        );
 
         let root = BoxWidget::new(Orientation::Vertical, 4);
         root.add_css_class("search-sidebar");
-        root.set_size_request(width.clamp(180, 360), -1);
+        root.set_size_request(clamped_width, -1);
         root.set_vexpand(true);
 
         // 1. Cuadrícula superior de Favoritos (hasta 4 cuadrados por fila).
@@ -376,6 +381,7 @@ impl SidebarTabs {
             settings_icon,
             add_folder_icon,
             folder_popover,
+            current_width: Rc::new(Cell::new(clamped_width)),
             motion_ms,
             callbacks: callbacks.clone(),
         };
@@ -442,7 +448,21 @@ impl SidebarTabs {
     }
 
     pub fn set_width(&self, width: i32) {
-        self.root.set_size_request(width.clamp(180, 360), -1);
+        let clamped = width.clamp(
+            AppSettings::SIDEBAR_WIDTH_MIN as i32,
+            AppSettings::SIDEBAR_WIDTH_MAX as i32,
+        );
+        self.current_width.set(clamped);
+        self.root.set_size_request(clamped, -1);
+    }
+
+    pub fn width(&self) -> i32 {
+        let allocated = self.root.width();
+        if allocated > 0 {
+            allocated
+        } else {
+            self.current_width.get()
+        }
     }
 
     pub fn set_motion_duration(&self, ms: u32) {

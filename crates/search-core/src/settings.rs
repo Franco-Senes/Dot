@@ -211,7 +211,7 @@ impl Default for AppSettings {
             confirm_quit: false,
             look: ColorLook::System,
             vertical_tabs: false,
-            sidebar_width: 240.0,
+            sidebar_width: Self::SIDEBAR_WIDTH_DEFAULT,
             layout_cards: true,
             compact_tabs: false,
             roomy_sidebar: false,
@@ -250,6 +250,10 @@ impl Default for AppSettings {
 }
 
 impl AppSettings {
+    pub const SIDEBAR_WIDTH_MIN: f64 = 180.0;
+    pub const SIDEBAR_WIDTH_MAX: f64 = 440.0;
+    pub const SIDEBAR_WIDTH_DEFAULT: f64 = 240.0;
+
     pub fn block_third_party_cookies(&self) -> bool {
         !self.sites_keep
     }
@@ -328,11 +332,12 @@ impl AppSettings {
         if !self.page_zoom.is_finite() || self.page_zoom < 0.25 || self.page_zoom > 5.0 {
             self.page_zoom = 1.0;
         }
-        if !self.sidebar_width.is_finite()
-            || self.sidebar_width < 180.0
-            || self.sidebar_width > 360.0
-        {
-            self.sidebar_width = 240.0;
+        if !self.sidebar_width.is_finite() {
+            self.sidebar_width = Self::SIDEBAR_WIDTH_DEFAULT;
+        } else {
+            self.sidebar_width = self
+                .sidebar_width
+                .clamp(Self::SIDEBAR_WIDTH_MIN, Self::SIDEBAR_WIDTH_MAX);
         }
         self.reader_font_size = self.reader_font_size.clamp(12, 36);
         self.closed_tab_stack_size = self.closed_tab_stack_size.clamp(20, 100);
@@ -404,6 +409,44 @@ mod tests {
 
         let bak = file.with_extension("json.bak");
         assert!(bak.exists());
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn sidebar_width_clamps_and_persists() {
+        let (root, file) = temp_settings_path("sidebar-width");
+
+        let too_small = AppSettings {
+            sidebar_width: 90.0,
+            ..AppSettings::default()
+        };
+        too_small.save(&file).expect("save too_small");
+        let loaded_small = AppSettings::load(&file);
+        assert_eq!(loaded_small.sidebar_width, AppSettings::SIDEBAR_WIDTH_MIN);
+
+        let too_large = AppSettings {
+            sidebar_width: 800.0,
+            ..AppSettings::default()
+        };
+        too_large.save(&file).expect("save too_large");
+        let loaded_large = AppSettings::load(&file);
+        assert_eq!(loaded_large.sidebar_width, AppSettings::SIDEBAR_WIDTH_MAX);
+
+        let custom = AppSettings {
+            sidebar_width: 312.0,
+            ..AppSettings::default()
+        };
+        custom.save(&file).expect("save custom");
+        let loaded_custom = AppSettings::load(&file);
+        assert_eq!(loaded_custom.sidebar_width, 312.0);
+
+        let mut non_finite = AppSettings {
+            sidebar_width: f64::NAN,
+            ..AppSettings::default()
+        };
+        non_finite.clamp_invariants();
+        assert_eq!(non_finite.sidebar_width, AppSettings::SIDEBAR_WIDTH_DEFAULT);
+
         let _ = fs::remove_dir_all(&root);
     }
 }

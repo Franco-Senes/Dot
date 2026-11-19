@@ -23,7 +23,7 @@ use search_core::chromium_flags::{
     ResolvedChromiumFlags, BASE_DISABLED_FEATURES, BASE_PRIVACY_SWITCHES, VAAPI_LINUX_FEATURES,
 };
 use search_core::paths::SearchPaths;
-use search_core::settings::{ColorLook, NewTabPosition, TabGlyph, UiMotion};
+use search_core::settings::{AppSettings, ColorLook, NewTabPosition, TabGlyph, UiMotion};
 use std::cell::RefCell;
 use std::path::Path;
 use std::rc::Rc;
@@ -896,16 +896,26 @@ fn build_appearance_section(
         "sidebar vertical tabs layout barra lateral superior",
     );
 
-    let width_row = SpinRow::with_range(180.0, 360.0, 10.0);
+    let width_row = SpinRow::with_range(
+        AppSettings::SIDEBAR_WIDTH_MIN,
+        AppSettings::SIDEBAR_WIDTH_MAX,
+        10.0,
+    );
     width_row.set_title("Anchura de la barra lateral (px)");
-    width_row.set_subtitle("Ajustable entre 180 px y 360 px con efecto inmediato");
+    width_row.set_subtitle("Ajustable entre 180 px y 440 px con efecto inmediato");
     width_row.set_digits(0);
-    width_row.set_value(snap.sidebar_width.clamp(180.0, 360.0));
+    width_row.set_value(snap.sidebar_width.clamp(
+        AppSettings::SIDEBAR_WIDTH_MIN,
+        AppSettings::SIDEBAR_WIDTH_MAX,
+    ));
     {
         let st = settings.clone();
         let row_ref = width_row.clone();
         width_row.connect_value_notify(move || {
-            let w = row_ref.value().clamp(180.0, 360.0);
+            let w = row_ref.value().clamp(
+                AppSettings::SIDEBAR_WIDTH_MIN,
+                AppSettings::SIDEBAR_WIDTH_MAX,
+            );
             st.update(|s| s.sidebar_width = w);
         });
     }
@@ -915,7 +925,7 @@ fn build_appearance_section(
         "appearance",
         "Apariencia y movimiento",
         "Anchura de la barra lateral",
-        "180–360 px",
+        "180–440 px",
         "sidebar width anchura barra lateral",
     );
 

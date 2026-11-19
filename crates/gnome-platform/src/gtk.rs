@@ -1313,6 +1313,49 @@ impl AsController for GestureSwipe {
 }
 
 #[derive(Clone)]
+pub struct GestureDrag {
+    obj: ObjectRef,
+}
+
+impl GestureDrag {
+    pub fn new() -> Self {
+        let ptr = unsafe { sys::gtk_gesture_drag_new() };
+        let obj = unsafe { ObjectRef::from_new_ptr(ptr.cast()) };
+        Self { obj }
+    }
+
+    pub fn set_button(&self, button: u32) {
+        unsafe {
+            sys::gtk_gesture_single_set_button(self.obj.as_ptr().cast(), button);
+        }
+    }
+
+    pub fn connect_drag_begin<F: Fn(f64, f64) + 'static>(&self, callback: F) -> SignalHandlerId {
+        connect_signal_f64_f64(self.obj.as_ptr(), "drag-begin", callback)
+    }
+
+    pub fn connect_drag_update<F: Fn(f64, f64) + 'static>(&self, callback: F) -> SignalHandlerId {
+        connect_signal_f64_f64(self.obj.as_ptr(), "drag-update", callback)
+    }
+
+    pub fn connect_drag_end<F: Fn(f64, f64) + 'static>(&self, callback: F) -> SignalHandlerId {
+        connect_signal_f64_f64(self.obj.as_ptr(), "drag-end", callback)
+    }
+}
+
+impl Default for GestureDrag {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl AsController for GestureDrag {
+    fn as_controller_ptr(&self) -> *mut sys::GtkEventController {
+        self.obj.as_ptr().cast()
+    }
+}
+
+#[derive(Clone)]
 pub struct ToggleButton {
     obj: ObjectRef,
 }
