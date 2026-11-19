@@ -3,9 +3,9 @@
 
 use crate::icons::{self, IconId};
 use gnome_platform::gtk::{
-    Align, AsEditable, AsWidget, BoxWidget, Button, EllipsizeMode, Label, ListBox, ListBoxRow,
-    MenuButton, Orientation, PolicyType, Popover, ScrolledWindow, SearchEntry, SelectionMode,
-    Separator,
+    Align, AsEditable, AsWidget, BoxWidget, Button, EllipsizeMode, Image, Label, ListBox,
+    ListBoxRow, MenuButton, Orientation, PolicyType, Popover, ScrolledWindow, SearchEntry,
+    SelectionMode, Separator,
 };
 use search_core::address::display_at_rest;
 use search_core::history::{format_time_hm, group_by_day, HistoryEntry, HistoryStore};
@@ -107,6 +107,14 @@ impl HistoryManager {
         }
     }
 
+    pub fn clear_last_7_days(&self) {
+        let cutoff = now_unix_secs() - 7.0 * 86_400.0;
+        if self.inner.borrow_mut().store.clear_since(cutoff) > 0 {
+            self.schedule_save();
+            self.notify_listeners();
+        }
+    }
+
     pub fn clear_all(&self) {
         self.inner.borrow_mut().store.clear_all();
         self.schedule_save();
@@ -169,7 +177,11 @@ pub struct HistoryPanel {
     root: BoxWidget,
     search_entry: SearchEntry,
     list_box: ListBox,
-    empty_label: Label,
+    empty_box: BoxWidget,
+    empty_icon: Image,
+    empty_title: Label,
+    empty_desc: Label,
+    empty_cta: Button,
     manager: HistoryManager,
     on_open_url: OpenUrlCallback,
     visible: Rc<Cell<bool>>,
@@ -217,7 +229,7 @@ impl HistoryPanel {
         }
         clear_box.append(&btn_hour);
 
-        let btn_day = Button::with_label("Borrar último día");
+        let btn_day = Button::with_label("Borrar últimas 24 h");
         btn_day.add_css_class("flat");
         {
             let mgr = manager.clone();
@@ -228,6 +240,18 @@ impl HistoryPanel {
             });
         }
         clear_box.append(&btn_day);
+
+        let btn_week = Button::with_label("Borrar últimos 7 días");
+        btn_week.add_css_class("flat");
+        {
+            let mgr = manager.clone();
+            let pop = clear_pop.clone();
+            btn_week.connect_clicked(move || {
+                pop.popdown();
+                mgr.clear_last_7_days();
+            });
+        }
+        clear_box.append(&btn_week);
 
         clear_box.append(&Separator::new(Orientation::Horizontal));
 
@@ -246,13 +270,14 @@ impl HistoryPanel {
         clear_pop.set_child(Some(&clear_box));
 
         let clear_menu_btn = MenuButton::new();
-        clear_menu_btn.set_label("Borrar…");
+        clear_menu_btn.set_label("Borrar");
         clear_menu_btn.add_css_class("flat");
+        clear_menu_btn.set_tooltip_text(Some("Borrar historial por rango de tiempo"));
         clear_menu_btn.set_popover(Some(&clear_pop));
         header.append(&clear_menu_btn);
 
         let close_btn = icons::icon_button(IconId::Close, 15);
-        close_btn.set_tooltip_text(Some("Cerrar panel (Esc)"));
+        close_btn.set_tooltip_text(Some("Cerrar panel de historial (Esc)"));
         {
             let cb = on_close.clone();
             close_btn.connect_clicked(move || cb());
@@ -273,14 +298,35 @@ impl HistoryPanel {
         list_box.set_selection_mode(SelectionMode::None);
         list_box.set_activate_on_single_click(false);
 
-        let empty_label = Label::new(Some("No hay visitas en el historial"));
-        empty_label.add_css_class("search-panel-empty");
-        empty_label.set_margins(16, 16, 28, 16);
-        empty_label.set_halign(Align::Center);
-        empty_label.set_valign(Align::Start);
+        let empty_box = BoxWidget::new(Orientation::Vertical, 8);
+        empty_box.set_margins(20, 20, 32, 20);
+        empty_box.set_halign(Align::Center);
+        empty_box.set_valign(Align::Start);
+
+        let empty_icon = icons::image(IconId::History, 28);
+        empty_icon.set_halign(Align::Center);
+        empty_box.append(&empty_icon);
+
+        let empty_title = Label::new(Some("Sin visitas en el historial"));
+        empty_title.add_css_class("search-panel-title");
+        empty_title.set_halign(Align::Center);
+        empty_box.append(&empty_title);
+
+        let empty_desc = Label::new(Some(
+            "Las páginas que visites aparecerán aquí organizadas por día.",
+        ));
+        empty_desc.add_css_class("search-panel-empty");
+        empty_desc.set_wrap(true);
+        empty_desc.set_halign(Align::Center);
+        empty_box.append(&empty_desc);
+
+        let empty_cta = Button::with_label("Abrir nueva pestaña");
+        empty_cta.add_css_class("suggested-action");
+        empty_cta.set_halign(Align::Center);
+        empty_box.append(&empty_cta);
 
         let list_container = BoxWidget::new(Orientation::Vertical, 0);
-        list_container.append(&empty_label);
+        list_container.append(&empty_box);
         list_container.append(&list_box);
 
         let scroller = ScrolledWindow::new();
@@ -294,11 +340,28 @@ impl HistoryPanel {
             root,
             search_entry: search_entry.clone(),
             list_box,
-            empty_label,
+            empty_box,
+            empty_icon,
+            empty_title,
+            empty_desc,
+            empty_cta: empty_cta.clone(),
             manager: manager.clone(),
-            on_open_url,
+            on_open_url: on_open_url.clone(),
             visible,
         };
+
+        {
+            let se = search_entry.clone();
+            let cb = on_open_url;
+            empty_cta.connect_clicked(move || {
+                if !se.text().trim().is_empty() {
+                    se.set_text("");
+                    se.grab_focus();
+                } else {
+                    cb("plasma://newtab".to_string(), false);
+                }
+            });
+        }
 
         {
             let p = panel.clone();
@@ -336,15 +399,26 @@ impl HistoryPanel {
         let entries = self.manager.filter_chronological(&query, PANEL_MAX_ROWS);
 
         if entries.is_empty() {
-            self.empty_label.set_text(if query.trim().is_empty() {
-                "No hay visitas en el historial"
+            let trimmed = query.trim();
+            let dark = icons::is_dark_theme();
+            if trimmed.is_empty() {
+                icons::set_image_icon(&self.empty_icon, IconId::History, dark);
+                self.empty_title.set_text("Sin visitas en el historial");
+                self.empty_desc
+                    .set_text("Las páginas que visites aparecerán aquí organizadas por día.");
+                self.empty_cta.set_label("Abrir nueva pestaña");
             } else {
-                "Sin coincidencias en el historial"
-            });
-            self.empty_label.set_visible(true);
+                icons::set_image_icon(&self.empty_icon, IconId::Search, dark);
+                self.empty_title
+                    .set_text(&format!("Sin resultados para «{trimmed}»"));
+                self.empty_desc
+                    .set_text("Prueba con otro término o limpia el filtro de búsqueda.");
+                self.empty_cta.set_label("Limpiar filtro");
+            }
+            self.empty_box.set_visible(true);
             return;
         }
-        self.empty_label.set_visible(false);
+        self.empty_box.set_visible(false);
 
         let groups = group_by_day(&entries, now_unix_secs());
         for group in groups {

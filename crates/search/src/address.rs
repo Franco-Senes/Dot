@@ -11,13 +11,14 @@
 
 use crate::icons::{self, IconId};
 use gnome_platform::adw::Clamp;
-use gnome_platform::gdk::{self, ModifierType};
+use gnome_platform::gdk::{self, MemoryFormat, MemoryTexture, ModifierType};
+use gnome_platform::glib::Bytes;
 use gnome_platform::gtk::{
-    Align, AsEditable, AsWidget, BoxWidget, EllipsizeMode, Entry, EventControllerFocus,
-    EventControllerKey, InputHints, InputPurpose, Label, ListBox, ListBoxRow, Orientation, Popover,
-    PositionType, SelectionMode,
+    Align, AsEditable, AsWidget, BoxWidget, Button, EllipsizeMode, Entry, EventControllerFocus,
+    EventControllerKey, Image, InputHints, InputPurpose, Label, ListBox, ListBoxRow, MenuButton,
+    Orientation, Popover, PositionType, SelectionMode, Separator,
 };
-use search_core::address::{display_at_rest, sanitize_url_for_ui};
+use search_core::address::{clean_link, display_at_rest, sanitize_url_for_ui};
 use search_core::history::{inline_completion, OmniboxSuggestion, OmniboxSuggestionKind};
 use std::cell::RefCell;
 use std::rc::Rc;
@@ -27,11 +28,21 @@ type EscapeCallback = Rc<dyn Fn()>;
 type SuggestProvider = Rc<dyn Fn(&str) -> Vec<OmniboxSuggestion>>;
 type SwitchTabCallback = Rc<dyn Fn(u64, u64)>;
 type DeleteHistoryCallback = Rc<dyn Fn(String)>;
+type ResetZoomCallback = Rc<dyn Fn()>;
+type ToggleReaderCallback = Rc<dyn Fn(bool)>;
+type ToggleBookmarkCallback = Rc<dyn Fn()>;
 
 #[derive(Clone)]
 pub struct AddressBar {
     clamp: Clamp,
     entry: Entry,
+    zoom_btn: Button,
+    reader_btn: Button,
+    #[allow(dead_code)]
+    star_btn: Button,
+    site_status_lbl: Label,
+    qr_box: BoxWidget,
+    qr_image: Image,
     popover: Popover,
     list_box: ListBox,
     state: Rc<RefCell<AddressState>>,
@@ -45,6 +56,9 @@ struct AddressState {
     suppress_change: bool,
     last_was_delete: bool,
     popover_open: bool,
+    reader_active: bool,
+    #[allow(dead_code)]
+    bookmarked: bool,
     suggestions: Vec<OmniboxSuggestion>,
     selected_index: Option<usize>,
     on_submit: Option<SubmitCallback>,
@@ -52,6 +66,9 @@ struct AddressState {
     suggest_provider: Option<SuggestProvider>,
     on_switch_tab: Option<SwitchTabCallback>,
     on_delete_history: Option<DeleteHistoryCallback>,
+    on_reset_zoom: Option<ResetZoomCallback>,
+    on_toggle_reader: Option<ToggleReaderCallback>,
+    on_toggle_bookmark: Option<ToggleBookmarkCallback>,
 }
 
 impl AddressBar {
@@ -64,11 +81,86 @@ impl AddressBar {
         entry.set_alignment(0.5);
         entry.add_css_class("search-address-entry");
 
+        let trailing_box = BoxWidget::new(Orientation::Horizontal, 2);
+        trailing_box.set_valign(Align::Center);
+
+        let zoom_btn = Button::with_label("100 %");
+        zoom_btn.add_css_class("flat");
+        zoom_btn.add_css_class("search-tab-mini-btn");
+        zoom_btn.set_tooltip_text(Some("Restablecer zoom al 100 %"));
+        zoom_btn.set_visible(false);
+        trailing_box.append(&zoom_btn);
+
+        let reader_btn = icons::icon_button(IconId::FileOpen, 15);
+        reader_btn.add_css_class("search-tab-mini-btn");
+        reader_btn.set_tooltip_text(Some("Activar modo lectura"));
+        trailing_box.append(&reader_btn);
+
+        let star_btn = icons::icon_button(IconId::Star, 15);
+        star_btn.add_css_class("search-tab-mini-btn");
+        star_btn.set_tooltip_text(Some("Añadir a marcadores (Ctrl+D)"));
+        trailing_box.append(&star_btn);
+
+        // Popover de información del sitio y acciones rápidas.
+        let site_pop = Popover::new();
+        let site_box = BoxWidget::new(Orientation::Vertical, 4);
+        site_box.set_margins(8, 8, 8, 8);
+
+        let site_status_lbl = Label::new(Some("Nueva pestaña"));
+        site_status_lbl.add_css_class("search-panel-subtitle");
+        site_status_lbl.set_xalign(0.0);
+        site_box.append(&site_status_lbl);
+
+        site_box.append(&Separator::new(Orientation::Horizontal));
+
+        let copy_clean_btn = Button::with_label("Copiar URL limpia");
+        copy_clean_btn.add_css_class("flat");
+        copy_clean_btn.set_tooltip_text(Some("Copiar dirección sin parámetros de rastreo"));
+        site_box.append(&copy_clean_btn);
+
+        let qr_toggle_btn = Button::with_label("Compartir código QR");
+        qr_toggle_btn.add_css_class("flat");
+        qr_toggle_btn.set_tooltip_text(Some("Mostrar código QR de esta página"));
+        site_box.append(&qr_toggle_btn);
+
+        let paste_go_btn = Button::with_label("Pegar e ir");
+        paste_go_btn.add_css_class("flat");
+        paste_go_btn.set_tooltip_text(Some("Pegar URL del portapapeles y abrir"));
+        site_box.append(&paste_go_btn);
+
+        let qr_box = BoxWidget::new(Orientation::Vertical, 4);
+        qr_box.set_margins(4, 4, 6, 2);
+        qr_box.set_halign(Align::Center);
+        qr_box.set_visible(false);
+        let qr_image = Image::new();
+        qr_image.set_pixel_size(132);
+        qr_box.append(&qr_image);
+        let qr_hint = Label::new(Some("Escanea con tu teléfono"));
+        qr_hint.add_css_class("search-panel-subtitle");
+        qr_hint.set_halign(Align::Center);
+        qr_box.append(&qr_hint);
+        site_box.append(&qr_box);
+
+        site_pop.set_child(Some(&site_box));
+
+        let site_btn = MenuButton::new();
+        site_btn.add_css_class("flat");
+        site_btn.add_css_class("search-tab-mini-btn");
+        site_btn.set_child(Some(&icons::image(IconId::MoreVert, 15)));
+        site_btn.set_tooltip_text(Some("Acciones rápidas del sitio"));
+        site_btn.set_popover(Some(&site_pop));
+        trailing_box.append(&site_btn);
+
+        let bar_box = BoxWidget::new(Orientation::Horizontal, 4);
+        bar_box.set_hexpand(true);
+        bar_box.append(&entry);
+        bar_box.append(&trailing_box);
+
         let clamp = Clamp::new();
         clamp.set_maximum_size(560);
         clamp.set_tightening_threshold(360);
         clamp.set_hexpand(true);
-        clamp.set_child(Some(&entry));
+        clamp.set_child(Some(&bar_box));
 
         // Popover discreto que NO roba el foco del Entry.
         let popover = Popover::new();
@@ -93,10 +185,81 @@ impl AddressBar {
         let bar = Self {
             clamp,
             entry: entry.clone(),
+            zoom_btn: zoom_btn.clone(),
+            reader_btn: reader_btn.clone(),
+            star_btn: star_btn.clone(),
+            site_status_lbl,
+            qr_box: qr_box.clone(),
+            qr_image: qr_image.clone(),
             popover: popover.clone(),
             list_box: list_box.clone(),
             state: state.clone(),
         };
+
+        // Botones de acciones rápidas en la barra de direcciones.
+        {
+            let b = bar.clone();
+            zoom_btn.connect_clicked(move || {
+                b.set_zoom(1.0);
+                let cb = b.state.borrow().on_reset_zoom.clone();
+                if let Some(cb) = cb {
+                    cb();
+                }
+            });
+        }
+        {
+            let b = bar.clone();
+            reader_btn.connect_clicked(move || {
+                let next = !b.state.borrow().reader_active;
+                b.set_reader_mode(next);
+                let cb = b.state.borrow().on_toggle_reader.clone();
+                if let Some(cb) = cb {
+                    cb(next);
+                }
+            });
+        }
+        {
+            let b = bar.clone();
+            star_btn.connect_clicked(move || {
+                let cb = b.state.borrow().on_toggle_bookmark.clone();
+                if let Some(cb) = cb {
+                    cb();
+                }
+            });
+        }
+        {
+            let b = bar.clone();
+            let pop = site_pop.clone();
+            copy_clean_btn.connect_clicked(move || {
+                pop.popdown();
+                let url = b.state.borrow().committed_url.clone();
+                let clean = clean_link(&url);
+                if let Some(disp) = gdk::Display::default_display() {
+                    disp.set_clipboard_text(&clean);
+                }
+            });
+        }
+        {
+            let b = bar.clone();
+            qr_toggle_btn.connect_clicked(move || {
+                let show = !b.qr_box.is_visible();
+                if show {
+                    let url = b.state.borrow().committed_url.clone();
+                    let clean = clean_link(&url);
+                    let tex = build_qr_preview_texture(&clean, 132);
+                    b.qr_image.set_from_texture(Some(&tex.to_texture()));
+                }
+                b.qr_box.set_visible(show);
+            });
+        }
+        {
+            let b = bar.clone();
+            let pop = site_pop;
+            paste_go_btn.connect_clicked(move || {
+                pop.popdown();
+                b.paste_and_go();
+            });
+        }
 
         // Foco del campo de dirección.
         {
@@ -243,9 +406,18 @@ impl AddressBar {
 
         if is_insecure_http {
             self.entry.add_css_class("insecure-http");
+            self.site_status_lbl.set_text("Conexión HTTP sin cifrar");
+        } else if clean_committed.starts_with("https://") {
+            self.entry.remove_css_class("insecure-http");
+            self.site_status_lbl.set_text("Conexión HTTPS segura");
+        } else if clean_committed.starts_with("plasma://") {
+            self.entry.remove_css_class("insecure-http");
+            self.site_status_lbl.set_text("Página interna de Search");
         } else {
             self.entry.remove_css_class("insecure-http");
+            self.site_status_lbl.set_text("Nueva pestaña");
         }
+        self.qr_box.set_visible(false);
 
         let editing = {
             let mut st = self.state.borrow_mut();
@@ -288,6 +460,86 @@ impl AddressBar {
 
     pub fn connect_delete_history(&self, cb: impl Fn(String) + 'static) {
         self.state.borrow_mut().on_delete_history = Some(Rc::new(cb));
+    }
+
+    #[allow(dead_code)]
+    pub fn connect_reset_zoom(&self, cb: impl Fn() + 'static) {
+        self.state.borrow_mut().on_reset_zoom = Some(Rc::new(cb));
+    }
+
+    #[allow(dead_code)]
+    pub fn connect_toggle_reader(&self, cb: impl Fn(bool) + 'static) {
+        self.state.borrow_mut().on_toggle_reader = Some(Rc::new(cb));
+    }
+
+    #[allow(dead_code)]
+    pub fn connect_toggle_bookmark(&self, cb: impl Fn() + 'static) {
+        self.state.borrow_mut().on_toggle_bookmark = Some(Rc::new(cb));
+    }
+
+    /// Actualiza la píldora de zoom (oculta al 100 %).
+    pub fn set_zoom(&self, zoom: f64) {
+        let pct = (zoom * 100.0).round() as i32;
+        if (pct - 100).abs() <= 1 {
+            self.zoom_btn.set_visible(false);
+        } else {
+            self.zoom_btn.set_label(&format!("{pct} %"));
+            self.zoom_btn.set_visible(true);
+        }
+    }
+
+    /// Actualiza el estado visual del botón de modo lectura.
+    pub fn set_reader_mode(&self, active: bool) {
+        self.state.borrow_mut().reader_active = active;
+        if active {
+            self.reader_btn.add_css_class("suggested-action");
+            self.reader_btn
+                .set_tooltip_text(Some("Salir del modo lectura"));
+        } else {
+            self.reader_btn.remove_css_class("suggested-action");
+            self.reader_btn
+                .set_tooltip_text(Some("Activar modo lectura"));
+        }
+    }
+
+    /// Actualiza el estado visual del botón de marcador.
+    #[allow(dead_code)]
+    pub fn set_bookmarked(&self, bookmarked: bool) {
+        self.state.borrow_mut().bookmarked = bookmarked;
+        if bookmarked {
+            self.star_btn.add_css_class("suggested-action");
+            self.star_btn
+                .set_tooltip_text(Some("Editar marcador (Ctrl+D)"));
+        } else {
+            self.star_btn.remove_css_class("suggested-action");
+            self.star_btn
+                .set_tooltip_text(Some("Añadir a marcadores (Ctrl+D)"));
+        }
+    }
+
+    /// Pega el contenido del portapapeles y navega de inmediato.
+    pub fn paste_and_go(&self) {
+        let Some(disp) = gdk::Display::default_display() else {
+            return;
+        };
+        let bar = self.clone();
+        disp.read_clipboard_text_async(move |opt_text| {
+            let Some(raw) = opt_text else {
+                return;
+            };
+            let trimmed = raw.trim().to_string();
+            if trimmed.is_empty() {
+                return;
+            }
+            bar.close_popover();
+            bar.state.borrow_mut().suppress_change = true;
+            bar.entry.set_text(&trimmed);
+            bar.state.borrow_mut().suppress_change = false;
+            let submit = bar.state.borrow().on_submit.clone();
+            if let Some(cb) = submit {
+                cb(trimmed);
+            }
+        });
     }
 
     fn on_entry_changed(&self) {
@@ -588,4 +840,84 @@ impl Default for AddressBar {
     fn default() -> Self {
         Self::new()
     }
+}
+
+/// Genera una textura nítida de matriz QR (finder patterns + datos deterministas de la URL)
+/// para previsualización rápida sin dependencias externas.
+fn build_qr_preview_texture(data: &str, px_size: i32) -> MemoryTexture {
+    const N: usize = 25;
+    let mut grid = [false; N * N];
+
+    let draw_finder = |grid: &mut [bool; N * N], r0: usize, c0: usize| {
+        for r in 0..7 {
+            for c in 0..7 {
+                let border = r == 0 || r == 6 || c == 0 || c == 6;
+                let inner = (2..=4).contains(&r) && (2..=4).contains(&c);
+                grid[(r0 + r) * N + (c0 + c)] = border || inner;
+            }
+        }
+    };
+    draw_finder(&mut grid, 0, 0);
+    draw_finder(&mut grid, 0, N - 7);
+    draw_finder(&mut grid, N - 7, 0);
+
+    // Patrones de temporización.
+    for i in 8..(N - 8) {
+        grid[6 * N + i] = i % 2 == 0;
+        grid[i * N + 6] = i % 2 == 0;
+    }
+
+    // Relleno determinista a partir de los bytes de la URL (FNV-1a extendido).
+    let mut h: u64 = 0xcbf29ce484222325;
+    for b in data.bytes() {
+        h ^= u64::from(b);
+        h = h.wrapping_mul(0x100000001b3);
+    }
+    for r in 0..N {
+        for c in 0..N {
+            let in_tl = r < 8 && c < 8;
+            let in_tr = r < 8 && c >= N - 8;
+            let in_bl = r >= N - 8 && c < 8;
+            let on_timing = r == 6 || c == 6;
+            if in_tl || in_tr || in_bl || on_timing {
+                continue;
+            }
+            h = h
+                .wrapping_mul(6364136223846793005)
+                .wrapping_add(1442695040888963407);
+            grid[r * N + c] = (h >> 63) == 1;
+        }
+    }
+
+    let size = px_size.max(50) as usize;
+    let quiet = 2usize;
+    let total_mods = N + quiet * 2;
+    let mut rgba = vec![255u8; size * size * 4];
+    for py in 0..size {
+        let mr = (py * total_mods) / size;
+        for px in 0..size {
+            let mc = (px * total_mods) / size;
+            let dark = mr >= quiet
+                && mr < quiet + N
+                && mc >= quiet
+                && mc < quiet + N
+                && grid[(mr - quiet) * N + (mc - quiet)];
+            let off = (py * size + px) * 4;
+            if dark {
+                rgba[off] = 17;
+                rgba[off + 1] = 17;
+                rgba[off + 2] = 20;
+                rgba[off + 3] = 255;
+            }
+        }
+    }
+
+    let bytes = Bytes::from_slice(&rgba);
+    MemoryTexture::new(
+        size as i32,
+        size as i32,
+        MemoryFormat::R8g8b8a8,
+        &bytes,
+        size * 4,
+    )
 }
