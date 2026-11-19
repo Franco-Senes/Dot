@@ -137,7 +137,7 @@ Estados: `pendiente` · `directo` · `adaptado` · `diferido` · `imposible` · 
 | `Sources/Search/ExtensionWorkerRecovery.swift` | Recuperación de workers MV3 en `WKWebExtensionContext` | — | Específico de `WKWebExtensionContext` de Apple | imposible | 9 |
 | `Sources/Search/Fetching.swift` | Descargas en curso, progreso, velocidad, cancelar y reintentar | `crates/search/src/downloads.rs` | `cef::DownloadHandler`, `cef::DownloadItem` | hecho | 3 |
 | `Sources/Search/Find.swift` | Barra simple de búsqueda en la página (`Ctrl+F`) | `crates/search/src/find_bar.rs` | `cef::BrowserHost::find`, `cef::FindHandler`, `gtk4::SearchEntry` | hecho | 1 |
-| `Sources/Search/Float.swift` | Ventana flotante propia sin decoraciones para vídeo (PiP) | `crates/search/src/pip.rs` | `gtk4::Window` (`decorated(false)`), `BrowserView` / controles | adaptado | 6 |
+| `Sources/Search/Float.swift` | Ventana flotante propia sin decoraciones para vídeo (PiP) | `crates/search/src/pip.rs` | `gtk4::Window` (`decorated(false)`), `GtkAspectFrame` (16:9), `GtkWindowHandle` y controles superpuestos (sin *always-on-top* forzado en Wayland) | hecho | 6 |
 | `Sources/Search/Fold.swift` | Plegado de la barra lateral o superior (`Ctrl+S`) | `crates/search/src/window.rs` | `gtk4::Revealer` / `adw::OverlaySplitView` | hecho | 2 |
 | `Sources/Search/Forms.swift` | Detección JS mínima de formularios de login | `crates/search/resources/vault.js` + `crates/search/src/vault.rs` | `cef::Frame::execute_java_script` + puente IPC autenticado | adaptado | 5 |
 | `Sources/Search/FrameRate.swift` | Tope privado de 60/120 FPS con `IOKit.ps` | `crates/search/src/browser_view.rs` | `BrowserSettings::windowless_frame_rate` (60 FPS por defecto) | hecho | 1 |
@@ -217,9 +217,9 @@ Estados: `pendiente` · `directo` · `adaptado` · `diferido` · `imposible` · 
 | `Sources/Search/SpaceRoutes.swift` | Reglas de enrutado a espacios | — | Fuera de alcance minimalista | diferido | — |
 | `Sources/Search/Spaces.swift` | Espacios múltiples estilo Arc | — | Fuera de alcance minimalista (`PLAN.md`) | diferido | — |
 | `Sources/Search/SpaceSwipe.swift` | Gestos de cambio de espacio | — | Fuera de alcance minimalista | diferido | — |
-| `Sources/Search/Split.swift` | Modelo de Split View y serialización en `session.json` | `crates/search-core/src/session.rs` | Rust puro (`serde`) | directo | 6 |
-| `Sources/Search/SplitTabItem.swift` | Visualización de dos favicons en una pestaña con Split View | `crates/search/src/split_view.rs` | `adw::TabPage` / `SidebarTabs` con doble icono | adaptado | 6 |
-| `Sources/Search/SplitView.swift` | Dos `BrowserView` lado a lado en una pestaña con foco independiente | `crates/search/src/split_view.rs` | `gtk4::Paned`, borde CSS `.focused-pane`, doble clic 50/50 | adaptado | 6 |
+| `Sources/Search/Split.swift` | Modelo de Split View y serialización en `session.json` | `crates/search-core/src/split.rs` + `session.rs` | Rust puro (`serde`), `TabSplit` + `SessionSplit` | hecho | 6 |
+| `Sources/Search/SplitTabItem.swift` | Visualización de dos favicons en una pestaña con Split View | `crates/search/src/sidebar_tabs.rs` + `window.rs` | `SidebarTabs` con doble favicon y título combinado | hecho | 6 |
+| `Sources/Search/SplitView.swift` | Dos `BrowserView` lado a lado en una pestaña con foco independiente | `crates/search/src/split_view.rs` | `gtk4::Paned`, borde CSS `.focused`, doble clic 50/50 | hecho | 6 |
 | `Sources/Search/Stage.swift` | Área central de la página web, barra de progreso fina y página de error propia | `crates/search/src/browser_view.rs` | `gtk4::Overlay`, `gtk4::ProgressBar` (`.osd`), `on_load_error` | hecho | 1 |
 | `Sources/Search/StatusLine.swift` | Etiqueta discreta de URL al pasar el ratón por enlaces | `crates/search/src/browser_view.rs` | `cef::DisplayHandler::on_status_message` | hecho | 1 |
 | `Sources/Search/StoreRelay.swift` | Detección de enlaces de Chrome Web Store | `crates/search-core/src/crx.rs` | Rust puro (`url::Url`) | directo | 9 |

@@ -169,6 +169,10 @@ pub struct SidebarTabItem {
     pub audible: bool,
     pub muted: bool,
     pub favicon: Option<Texture>,
+    pub split_partner_favicon: Option<Texture>,
+    pub split_partner_title: Option<String>,
+    pub split_partner_url: Option<String>,
+    pub split_hidden: bool,
 }
 
 impl SidebarTabItem {
@@ -731,6 +735,9 @@ impl SidebarTabs {
         // 3. Reconstruir lista de pestañas regulares.
         self.list_box.remove_all();
         for item in regular {
+            if item.split_hidden {
+                continue;
+            }
             let row = build_tab_list_row(item, false, 0, opts, dark, &self.callbacks);
             self.list_box.append(&row);
         }
@@ -1143,7 +1150,31 @@ fn build_tab_row_content(
         hbox.append(&icons::monogram_badge(&letter, &item.url, false));
     }
 
-    let title_label = Label::new(Some(&item.title));
+    // Segundo favicon si la pestaña forma parte de un Split View (`SplitTabItem.swift`).
+    if let Some(ref partner_url) = item.split_partner_url {
+        let partner_title = item.split_partner_title.as_deref().unwrap_or("");
+        if opts.glyph == TabGlyph::Favicon {
+            if let Some(ref ptex) = item.split_partner_favicon {
+                let img = Image::new();
+                img.set_pixel_size(14);
+                img.set_from_texture(Some(ptex));
+                img.add_css_class("search-split-tab-favicon");
+                hbox.append(&img);
+            } else {
+                let letter = icons::monogram_letter(partner_title, partner_url);
+                hbox.append(&icons::monogram_badge(&letter, partner_url, false));
+            }
+        } else {
+            let letter = icons::monogram_letter(partner_title, partner_url);
+            hbox.append(&icons::monogram_badge(&letter, partner_url, false));
+        }
+    }
+
+    let display_label = match item.split_partner_title.as_deref() {
+        Some(partner) if !partner.is_empty() => format!("{}  |  {partner}", item.title),
+        _ => item.title.clone(),
+    };
+    let title_label = Label::new(Some(&display_label));
     title_label.set_ellipsize(EllipsizeMode::End);
     title_label.set_xalign(0.0);
     title_label.set_hexpand(true);

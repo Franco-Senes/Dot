@@ -143,6 +143,13 @@ enum PageIpcMessage {
 
 pub type ReaderExtractedCallback = Box<dyn Fn(bool, Option<String>, Option<ReaderArticle>)>;
 
+#[derive(Debug, Clone)]
+pub struct PageContextMenuInfo {
+    pub x: i32,
+    pub y: i32,
+    pub link_url: Option<String>,
+    pub is_video: bool,
+}
 #[derive(Default)]
 pub struct BrowserCallbacks {
     pub on_title_changed: Option<Box<dyn Fn(String)>>,
@@ -164,6 +171,7 @@ pub struct BrowserCallbacks {
     pub on_reader_extracted: Option<ReaderExtractedCallback>,
     pub on_reader_state_changed: Option<Box<dyn Fn(bool)>>,
     pub on_vault_event: Option<Box<dyn Fn(VaultEvent)>>,
+    pub on_context_menu: Option<Box<dyn Fn(PageContextMenuInfo)>>,
 }
 
 struct SharedState {
@@ -677,6 +685,14 @@ impl BrowserView {
         next
     }
 
+    pub fn execute_javascript(&self, script: &str) {
+        if let Some(frame) = self.main_frame() {
+            let js = CefString::from(script);
+            let url = CefString::from("about:blank");
+            frame.execute_java_script(Some(&js), Some(&url), 1);
+        }
+    }
+
     pub fn close_browser(&self) {
         if let Some(host) = self.host() {
             host.close_browser(1);
@@ -1061,7 +1077,8 @@ fn build_cef_client(shared: Rc<SharedState>) -> Client {
     let download_handler = SearchDownloadHandler::new(shared.clone());
     let cookie_filter = SearchCookieFilter::new(shared.clone());
     let resource_req_handler = SearchResourceRequestHandler::new(shared.clone(), cookie_filter);
-    let request_handler = SearchRequestHandler::new(shared, resource_req_handler);
+    let request_handler = SearchRequestHandler::new(shared.clone(), resource_req_handler);
+    let context_menu_handler = SearchContextMenuHandler::new(shared);
 
     SearchClient::new(
         render_handler,
@@ -1071,6 +1088,7 @@ fn build_cef_client(shared: Rc<SharedState>) -> Client {
         find_handler,
         download_handler,
         request_handler,
+        context_menu_handler,
     )
 }
 
@@ -2106,47 +2124,107 @@ wrap_download_handler! {
     }
 }
 
-wrap_client! {
-    struct SearchClient {
-        render_handler: RenderHandler,
-        display_handler: DisplayHandler,
-        load_handler: LoadHandler,
-        life_span_handler: LifeSpanHandler,
-        find_handler: FindHandler,
-        download_handler: DownloadHandler,
-        request_handler: RequestHandler,
+wrap_context_menu_handler! {
+    struct SearchContextMenuHandler {
+        shared: Rc<SharedState>,
     }
 
-    impl Client {
-        fn render_handler(&self) -> Option<RenderHandler> {
-            Some(self.render_handler.clone())
-        }
-
-        fn display_handler(&self) -> Option<DisplayHandler> {
-            Some(self.display_handler.clone())
-        }
-
-        fn load_handler(&self) -> Option<LoadHandler> {
-            Some(self.load_handler.clone())
-        }
-
-        fn life_span_handler(&self) -> Option<LifeSpanHandler> {
-            Some(self.life_span_handler.clone())
-        }
-
-        fn find_handler(&self) -> Option<FindHandler> {
-            Some(self.find_handler.clone())
-        }
-
-        fn download_handler(&self) -> Option<DownloadHandler> {
-            Some(self.download_handler.clone())
-        }
-
-        fn request_handler(&self) -> Option<RequestHandler> {
-            Some(self.request_handler.clone())
+    impl ContextMenuHandler {
+        fn run_context_menu(
+            &self,
+            _browser: Option<&mut Browser>,
+            _frame: Option<&mut Frame>,
+            params: Option<&mut ContextMenuParams>,
+            _model: Option<&mut MenuModel>,
+            callback: Option<&mut RunContextMenuCallback>,
+        ) -> ::std::os::raw::c_int {
+            if let Some(cb) = callback {
+                cb.cancel();
+            }
+            let Some(params) = params else {
+                return 1;
+            };
+            let link_raw = CefString::from(&params.link_url()).to_string();
+            let link_url = if link_raw.trim().is_empty() {
+                None
+            } else {
+                Some(link_raw)
+            };
+            let is_video = params.media_type()
+                == ContextMenuMediaType::from(
+                    cef::sys::cef_context_menu_media_type_t::CM_MEDIATYPE_VIDEO,
+                );
+            let info = PageContextMenuInfo {
+                x: params.xcoord(),
+                y: params.ycoord(),
+                link_url,
+                is_video,
+            };
+            let shared_weak = Rc::downgrade(&self.shared);
+            gnome_platform::glib::idle_add_local_once(move || {
+                if let Some(st) = shared_weak.upgrade() {
+                    if let Some(ref cb) = st.callbacks.borrow().on_context_menu {
+                        cb(info);
+                    }
+                }
+            });
+            1
         }
     }
 }
+
+mod cef_client {
+    #![allow(clippy::too_many_arguments)]
+    use super::*;
+
+    wrap_client! {
+        pub struct SearchClient {
+            render_handler: RenderHandler,
+            display_handler: DisplayHandler,
+            load_handler: LoadHandler,
+            life_span_handler: LifeSpanHandler,
+            find_handler: FindHandler,
+            download_handler: DownloadHandler,
+            request_handler: RequestHandler,
+            context_menu_handler: ContextMenuHandler,
+        }
+
+        impl Client {
+            fn render_handler(&self) -> Option<RenderHandler> {
+                Some(self.render_handler.clone())
+            }
+
+            fn display_handler(&self) -> Option<DisplayHandler> {
+                Some(self.display_handler.clone())
+            }
+
+            fn load_handler(&self) -> Option<LoadHandler> {
+                Some(self.load_handler.clone())
+            }
+
+            fn life_span_handler(&self) -> Option<LifeSpanHandler> {
+                Some(self.life_span_handler.clone())
+            }
+
+            fn find_handler(&self) -> Option<FindHandler> {
+                Some(self.find_handler.clone())
+            }
+
+            fn download_handler(&self) -> Option<DownloadHandler> {
+                Some(self.download_handler.clone())
+            }
+
+            fn request_handler(&self) -> Option<RequestHandler> {
+                Some(self.request_handler.clone())
+            }
+
+            fn context_menu_handler(&self) -> Option<ContextMenuHandler> {
+                Some(self.context_menu_handler.clone())
+            }
+        }
+    }
+}
+use cef_client::SearchClient;
 
 fn try_parse_tls_override_url(raw_url: &str, expected_nonce: &str) -> Option<String> {
     let parsed = url::Url::parse(raw_url).ok()?;

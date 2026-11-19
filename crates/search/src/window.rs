@@ -11,13 +11,14 @@
 use crate::actions;
 use crate::address::AddressBar;
 use crate::bookmarks_ui::{self, BookmarksManager, BookmarksPanel};
-use crate::browser_view::{BrowserCallbacks, BrowserView};
+use crate::browser_view::{BrowserCallbacks, BrowserView, PageContextMenuInfo};
 use crate::curtain::{CurtainManager, CurtainPanel, CurtainPanelCallbacks};
 use crate::downloads::DownloadManager;
 use crate::downloads_ui::DownloadsPanel;
 use crate::find_bar::FindBar;
 use crate::history_ui::{HistoryManager, HistoryPanel};
 use crate::icons::{self, IconId};
+use crate::pip::PipController;
 use crate::reader::ReaderToolbar;
 use crate::settings::SettingsStore;
 use crate::settings_page::SettingsPage;
@@ -25,6 +26,7 @@ use crate::shield::{self, ShieldManager};
 use crate::sidebar_tabs::{
     PinFoldersManager, SidebarCallbacks, SidebarRenderOptions, SidebarTabItem, SidebarTabs,
 };
+use crate::split_view::{SplitViewCallbacks, SplitViewContainer};
 use crate::tab_switcher::SwitcherTabItem;
 use crate::vault::VaultService;
 use crate::vault_ui::{self, VaultWindowUi};
@@ -38,8 +40,8 @@ use gnome_platform::gdk::{Rectangle, Texture};
 use gnome_platform::gio::{Menu, SimpleAction, SimpleActionGroup};
 use gnome_platform::glib::{self, SourceId};
 use gnome_platform::gtk::{
-    Align, AsWidget, BoxWidget, GestureDrag, Label, Orientation, Overflow, Overlay, PackType,
-    Popover, PopoverMenu, PositionType, ProgressBar, Revealer, RevealerTransitionType,
+    Align, AsWidget, BoxWidget, Button, GestureDrag, Label, Orientation, Overflow, Overlay,
+    PackType, Popover, PopoverMenu, PositionType, ProgressBar, Revealer, RevealerTransitionType,
 };
 use search_core::address::{
     canonical_internal_url, display_at_rest, parse_internal_page, resolve_address,
@@ -50,6 +52,7 @@ use search_core::paths::SearchPaths;
 use search_core::reader::render_reader_document;
 use search_core::session::{now_unix_secs, ClosedTab, PinStyle, SessionTab, SessionWindow};
 use search_core::settings::{AppSettings, NewTabPosition, UiMotion};
+use search_core::split::TabSplit;
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -228,6 +231,11 @@ struct WindowState {
     settings: SettingsStore,
     stores: SharedDataStores,
     tabs: RefCell<Vec<TabRecord>>,
+    splits: RefCell<Vec<TabSplit>>,
+    next_split_id: Cell<u64>,
+    split_view: SplitViewContainer,
+    pip: PipController,
+    page_context_popover: RefCell<Option<Popover>>,
     folded: Cell<bool>,
     suppress_auto_wake: Cell<bool>,
     closing_window: Cell<bool>,
@@ -503,6 +511,11 @@ impl BrowserWindow {
                 settings: settings.clone(),
                 stores,
                 tabs: RefCell::new(Vec::new()),
+                splits: RefCell::new(Vec::new()),
+                next_split_id: Cell::new(1),
+                split_view: SplitViewContainer::new(),
+                pip: PipController::new(),
+                page_context_popover: RefCell::new(None),
                 folded: Cell::new(false),
                 suppress_auto_wake: Cell::new(false),
                 closing_window: Cell::new(false),
@@ -533,6 +546,19 @@ impl BrowserWindow {
         stage_overlay.add_overlay(reader_toolbar.widget());
         stage_overlay.set_measure_overlay(reader_toolbar.widget(), false);
         *bw.inner.reader_toolbar.borrow_mut() = Some(reader_toolbar);
+
+        {
+            let w_focus = bw.clone();
+            let w_ratio = bw.clone();
+            bw.inner.split_view.set_callbacks(SplitViewCallbacks {
+                on_focus_pane: Some(Box::new(move |tab_id| {
+                    w_focus.focus_split_pane(tab_id);
+                })),
+                on_ratio_changed: Some(Box::new(move |ratio| {
+                    w_ratio.update_active_split_ratio(ratio);
+                })),
+            });
+        }
 
         bw.init_side_panels();
         bw.install_tab_context_actions();
@@ -861,6 +887,18 @@ impl BrowserWindow {
             created_ids.push(id);
         }
 
+        let mut restored_splits = Vec::new();
+        for saved_split in &saved.splits {
+            let split_id = self.inner.next_split_id.get();
+            self.inner.next_split_id.set(split_id.saturating_add(1));
+            if let Some(sp) = TabSplit::from_session_split(split_id, saved_split, |idx| {
+                created_ids.get(idx).copied()
+            }) {
+                restored_splits.push(sp);
+            }
+        }
+        *self.inner.splits.borrow_mut() = restored_splits;
+
         self.inner.suppress_auto_wake.set(prev_suppress);
 
         let target_id = created_ids
@@ -870,6 +908,8 @@ impl BrowserWindow {
         if let Some(id) = target_id {
             self.select_tab_by_id(id);
         }
+        self.sync_split_presentation();
+        self.sync_sidebar();
 
         Ok(())
     }
@@ -887,12 +927,21 @@ impl BrowserWindow {
             }
             out_tabs.push(t.to_session_tab());
         }
+        let splits = self
+            .inner
+            .splits
+            .borrow()
+            .iter()
+            .filter_map(|sp| {
+                sp.to_session_split(|tab_id| tabs_borrow.iter().position(|t| t.id == tab_id))
+            })
+            .collect();
         SessionWindow {
             tabs: out_tabs,
             active,
             sidebar: Some(self.inner.settings.with(|s| s.vertical_tabs)),
             groups: Vec::new(),
-            splits: Vec::new(),
+            splits,
         }
     }
 
@@ -1541,6 +1590,7 @@ impl BrowserWindow {
             self.inner.tab_view.set_page_pinned(&page, true);
         }
         self.sync_order_with_tab_view();
+        self.sync_split_presentation();
         self.sync_sidebar();
         self.notify_session_dirty();
     }
@@ -1562,6 +1612,7 @@ impl BrowserWindow {
             self.inner.tab_view.set_page_pinned(&page, false);
         }
         self.sync_order_with_tab_view();
+        self.sync_split_presentation();
         self.sync_sidebar();
         self.notify_session_dirty();
     }
@@ -1622,6 +1673,7 @@ impl BrowserWindow {
             muted
         };
         let _ = next_muted;
+        self.sync_split_presentation();
         self.sync_sidebar();
         self.notify_session_dirty();
     }
@@ -1890,6 +1942,7 @@ impl BrowserWindow {
             self.inner.progress_bar.set_visible(false);
             self.update_window_title("Ajustes");
         }
+        self.sync_split_presentation();
         self.sync_sidebar();
         self.notify_session_dirty();
     }
@@ -2161,6 +2214,13 @@ impl BrowserWindow {
             &self.inner.vault_ui,
             &self.inner.settings,
         );
+
+        {
+            let w = self.clone();
+            cbs.on_context_menu = Some(Box::new(move |info| {
+                w.show_page_context_menu(tab_id, info);
+            }));
+        }
         bv.set_callbacks(cbs);
         Ok(bv)
     }
@@ -2186,6 +2246,7 @@ impl BrowserWindow {
         if is_selected {
             self.update_window_title(&updated_title);
         }
+        self.sync_split_presentation();
         self.sync_sidebar();
         self.notify_session_dirty();
     }
@@ -2211,6 +2272,7 @@ impl BrowserWindow {
                 p.set_current_url(&new_url);
             }
         }
+        self.sync_split_presentation();
         self.sync_sidebar();
         self.notify_session_dirty();
     }
@@ -2365,6 +2427,7 @@ impl BrowserWindow {
             self.inner.find_bar.close();
         }
 
+        self.sync_split_presentation();
         self.sync_sidebar();
         self.notify_session_dirty();
     }
@@ -2512,26 +2575,43 @@ impl BrowserWindow {
         }
         self.sync_order_with_tab_view();
         let selected_page = self.inner.tab_view.selected_page();
-        let items: Vec<SidebarTabItem> = self
-            .inner
-            .tabs
-            .borrow()
+        let tabs_borrow = self.inner.tabs.borrow();
+        let splits_borrow = self.inner.splits.borrow();
+        let items: Vec<SidebarTabItem> = tabs_borrow
             .iter()
-            .map(|t| SidebarTabItem {
-                id: t.id,
-                url: t.url.clone(),
-                title: t.display_title_for(snap.tab_show_domain),
-                tooltip: t.tooltip_text(),
-                pin_label: t.pin.clone(),
-                pin_style: t.effective_pin_style(),
-                folder_id: t.folder_id.clone(),
-                selected: selected_page.as_ref() == Some(&t.page),
-                loading: t.loading,
-                audible: t.audible,
-                muted: t.muted,
-                favicon: t.favicon_texture.clone(),
+            .map(|t| {
+                let split_info = splits_borrow.iter().find(|sp| sp.contains(t.id));
+                let is_primary = split_info.and_then(|sp| sp.left()) == Some(t.id);
+                let partner = if is_primary {
+                    split_info
+                        .and_then(|sp| sp.partner(t.id))
+                        .and_then(|pid| tabs_borrow.iter().find(|pt| pt.id == pid))
+                } else {
+                    None
+                };
+                let split_hidden = split_info.is_some() && !is_primary && t.pin.is_none();
+                SidebarTabItem {
+                    id: t.id,
+                    url: t.url.clone(),
+                    title: t.display_title_for(snap.tab_show_domain),
+                    tooltip: t.tooltip_text(),
+                    pin_label: t.pin.clone(),
+                    pin_style: t.effective_pin_style(),
+                    folder_id: t.folder_id.clone(),
+                    selected: selected_page.as_ref() == Some(&t.page),
+                    loading: t.loading,
+                    audible: t.audible,
+                    muted: t.muted,
+                    favicon: t.favicon_texture.clone(),
+                    split_partner_favicon: partner.and_then(|p| p.favicon_texture.clone()),
+                    split_partner_title: partner.map(|p| p.display_title_for(snap.tab_show_domain)),
+                    split_partner_url: partner.map(|p| p.url.clone()),
+                    split_hidden,
+                }
             })
             .collect();
+        drop(splits_borrow);
+        drop(tabs_borrow);
         let folders = self.inner.stores.pin_folders.snapshot();
         let opts = SidebarRenderOptions {
             glyph: snap.tab_glyph,
@@ -2618,6 +2698,18 @@ impl BrowserWindow {
         sec2.append("Ocultar elemento (Curtain)", Some("tab.curtain-pick"));
         sec2.append("Elementos ocultos…", Some("tab.toggle-curtain"));
         sec2.append("Información del sitio y Shield…", Some("tab.site-info"));
+        let in_split = self
+            .inner
+            .splits
+            .borrow()
+            .iter()
+            .any(|sp| sp.contains(tab_id));
+        if in_split {
+            sec2.append("Separar pestañas", Some("tab.split-separate"));
+            sec2.append("Intercambiar paneles", Some("tab.split-swap"));
+        } else {
+            sec2.append("Abrir al lado", Some("tab.split-beside"));
+        }
         sec2.append("Mover a ventana nueva", Some("tab.move-to-new-window"));
         self.inner.tab_menu.append_section(None, &sec2);
 
@@ -2654,6 +2746,39 @@ impl BrowserWindow {
                 Box::new(move || {
                     if let Some(id) = w.inner.menu_target_tab.get() {
                         w.duplicate_tab(id);
+                    }
+                }),
+            );
+        }
+        {
+            let w = self.clone();
+            add(
+                "split-beside",
+                Box::new(move || {
+                    if let Some(id) = w.inner.menu_target_tab.get() {
+                        w.split_tab_by_id(id, None);
+                    }
+                }),
+            );
+        }
+        {
+            let w = self.clone();
+            add(
+                "split-separate",
+                Box::new(move || {
+                    if let Some(id) = w.inner.menu_target_tab.get() {
+                        w.separate_split_for_tab(id);
+                    }
+                }),
+            );
+        }
+        {
+            let w = self.clone();
+            add(
+                "split-swap",
+                Box::new(move || {
+                    if let Some(id) = w.inner.menu_target_tab.get() {
+                        w.swap_split_for_tab(id);
                     }
                 }),
             );
@@ -2980,6 +3105,10 @@ impl BrowserWindow {
                 };
 
                 if let Some(mut rec) = removed {
+                    if w.inner.pip.active_tab_id() == Some(rec.id) {
+                        w.inner.pip.close(false, true);
+                    }
+                    w.remove_tab_from_splits(rec.id);
                     let closed_meta = rec.to_closed_tab(pos);
                     if let Some(bv) = rec.browser.take() {
                         bv.close_browser();
@@ -2995,6 +3124,7 @@ impl BrowserWindow {
                 }
 
                 w.inner.tab_view.close_page_finish(&page, true);
+                w.sync_split_presentation();
                 w.sync_sidebar();
                 w.notify_session_dirty();
 
@@ -3126,6 +3256,9 @@ impl BrowserWindow {
             let w = self.clone();
             self.inner.window.connect_close_request(move || {
                 w.inner.closing_window.set(true);
+                if w.inner.pip.is_active() {
+                    w.inner.pip.close(false, true);
+                }
                 let win_id = w.inner.id;
                 if let Some(ref cb) = w.inner.callbacks.on_window_closed {
                     cb(win_id);
@@ -3134,6 +3267,454 @@ impl BrowserWindow {
                 false
             });
         }
+    }
+
+    // ========================================================================
+    // Split View (`split_view.rs` + `TabSplit`)
+    // ========================================================================
+
+    pub fn split_current_tab(&self, url: Option<&str>) {
+        if let Some(id) = self.selected_tab_id() {
+            self.split_tab_by_id(id, url);
+        }
+    }
+
+    pub fn split_tab_by_id(&self, tab_id: u64, url: Option<&str>) {
+        let existing_partner = self
+            .inner
+            .splits
+            .borrow()
+            .iter()
+            .find(|sp| sp.contains(tab_id))
+            .and_then(|sp| sp.partner(tab_id));
+
+        if let Some(partner_id) = existing_partner {
+            if let Some(target_url) = url {
+                let _ = self.ensure_tab_awake(partner_id);
+                if let Some(bv) = self.tab_browser_view(partner_id) {
+                    bv.load_url(target_url);
+                }
+                self.focus_split_pane(partner_id);
+            } else {
+                self.focus_split_pane(partner_id);
+            }
+            return;
+        }
+
+        let Ok(partner_id) = self.open_tab(url, true, false, false) else {
+            return;
+        };
+        let split_id = self.inner.next_split_id.get();
+        self.inner.next_split_id.set(split_id.saturating_add(1));
+        let split = TabSplit::new_pair(split_id, tab_id, partner_id, 0.5);
+        self.inner.splits.borrow_mut().push(split);
+
+        self.sync_split_presentation();
+        self.sync_split_presentation();
+        self.sync_sidebar();
+        self.notify_session_dirty();
+    }
+
+    pub fn focus_split_pane(&self, tab_id: u64) {
+        let in_split = {
+            let mut splits = self.inner.splits.borrow_mut();
+            if let Some(sp) = splits.iter_mut().find(|sp| sp.contains(tab_id)) {
+                sp.focused = Some(tab_id);
+                true
+            } else {
+                false
+            }
+        };
+        if !in_split {
+            return;
+        }
+        if self.selected_tab_id() != Some(tab_id) {
+            self.select_tab_by_id(tab_id);
+        } else {
+            self.inner.split_view.set_focused_pane(tab_id);
+        }
+        if let Some(bv) = self.tab_browser_view(tab_id) {
+            bv.grab_focus();
+        }
+    }
+
+    pub fn focus_other_split_pane(&self) {
+        let Some(active_id) = self.selected_tab_id() else {
+            return;
+        };
+        let partner = self
+            .inner
+            .splits
+            .borrow()
+            .iter()
+            .find(|sp| sp.contains(active_id))
+            .and_then(|sp| sp.partner(active_id));
+        if let Some(other_id) = partner {
+            self.focus_split_pane(other_id);
+        }
+    }
+
+    pub fn separate_active_split(&self) {
+        if let Some(id) = self.selected_tab_id() {
+            self.separate_split_for_tab(id);
+        }
+    }
+
+    pub fn separate_split_for_tab(&self, tab_id: u64) {
+        let removed_tabs: Option<Vec<u64>> = {
+            let mut splits = self.inner.splits.borrow_mut();
+            splits
+                .iter()
+                .position(|sp| sp.contains(tab_id))
+                .map(|idx| splits.remove(idx).tabs)
+        };
+        if let Some(tab_ids) = removed_tabs {
+            self.inner.split_view.detach();
+            for tid in tab_ids {
+                self.return_tab_widget_to_slot(tid);
+            }
+            self.sync_split_presentation();
+            self.sync_sidebar();
+            self.notify_session_dirty();
+        }
+    }
+
+    pub fn swap_active_split(&self) {
+        if let Some(id) = self.selected_tab_id() {
+            self.swap_split_for_tab(id);
+        }
+    }
+
+    pub fn swap_split_for_tab(&self, tab_id: u64) {
+        let swapped = {
+            let mut splits = self.inner.splits.borrow_mut();
+            if let Some(sp) = splits.iter_mut().find(|sp| sp.contains(tab_id)) {
+                sp.swap();
+                true
+            } else {
+                false
+            }
+        };
+        if swapped {
+            self.sync_split_presentation();
+            self.sync_sidebar();
+            self.notify_session_dirty();
+        }
+    }
+
+    pub fn close_active_split_pane(&self) {
+        let Some(active_id) = self.selected_tab_id() else {
+            return;
+        };
+        let in_split = self
+            .inner
+            .splits
+            .borrow()
+            .iter()
+            .any(|sp| sp.contains(active_id));
+        if in_split {
+            let _ = self.close_tab_by_id(active_id);
+        }
+    }
+
+    fn update_active_split_ratio(&self, ratio: f64) {
+        let Some(active_id) = self.selected_tab_id() else {
+            return;
+        };
+        let changed = {
+            let mut splits = self.inner.splits.borrow_mut();
+            if let Some(sp) = splits.iter_mut().find(|sp| sp.contains(active_id)) {
+                sp.set_primary_fraction(ratio);
+                true
+            } else {
+                false
+            }
+        };
+        if changed {
+            self.notify_session_dirty();
+        }
+    }
+
+    fn remove_tab_from_splits(&self, tab_id: u64) {
+        let mut dissolved_tabs = Vec::new();
+        {
+            let mut splits = self.inner.splits.borrow_mut();
+            if let Some(idx) = splits.iter().position(|sp| sp.contains(tab_id)) {
+                if !splits[idx].remove(tab_id) {
+                    let rem = splits.remove(idx);
+                    dissolved_tabs = rem.tabs;
+                }
+            }
+        }
+        if !dissolved_tabs.is_empty() {
+            self.inner.split_view.detach();
+            for tid in dissolved_tabs {
+                self.return_tab_widget_to_slot(tid);
+            }
+        }
+    }
+
+    fn return_tab_widget_to_slot(&self, tab_id: u64) {
+        if self.inner.pip.active_tab_id() == Some(tab_id) {
+            return;
+        }
+        let tabs = self.inner.tabs.borrow();
+        let Some(rec) = tabs.iter().find(|t| t.id == tab_id) else {
+            return;
+        };
+        if let Some(ref bv) = rec.browser {
+            bv.widget().unparent();
+            rec.slot.append(bv.widget());
+        } else if let Some(ref sp) = rec.settings_page {
+            sp.widget().unparent();
+            rec.slot.append(sp.widget());
+        }
+    }
+
+    fn tab_browser_view(&self, tab_id: u64) -> Option<BrowserView> {
+        self.inner
+            .tabs
+            .borrow()
+            .iter()
+            .find(|t| t.id == tab_id)
+            .and_then(|t| t.browser.clone())
+    }
+
+    fn sync_split_presentation(&self) {
+        let Some(active_id) = self.selected_tab_id() else {
+            self.inner.split_view.detach();
+            return;
+        };
+
+        let active_split = self
+            .inner
+            .splits
+            .borrow()
+            .iter()
+            .find(|sp| sp.contains(active_id))
+            .cloned();
+
+        let Some(sp) = active_split else {
+            self.inner.split_view.detach();
+            self.return_tab_widget_to_slot(active_id);
+            return;
+        };
+
+        let (Some(left_id), Some(right_id)) = (sp.left(), sp.right()) else {
+            self.inner.split_view.detach();
+            return;
+        };
+
+        if self.inner.pip.active_tab_id() == Some(left_id)
+            || self.inner.pip.active_tab_id() == Some(right_id)
+        {
+            self.inner.split_view.detach();
+            if self.inner.pip.active_tab_id() != Some(active_id) {
+                self.return_tab_widget_to_slot(active_id);
+            }
+            return;
+        }
+
+        let _ = self.ensure_tab_awake(left_id);
+        let _ = self.ensure_tab_awake(right_id);
+
+        let (active_slot, left_bv, right_bv) = {
+            let tabs = self.inner.tabs.borrow();
+            let active_slot = tabs
+                .iter()
+                .find(|t| t.id == active_id)
+                .map(|t| t.slot.clone());
+            let left_bv = tabs
+                .iter()
+                .find(|t| t.id == left_id)
+                .and_then(|t| t.browser.clone());
+            let right_bv = tabs
+                .iter()
+                .find(|t| t.id == right_id)
+                .and_then(|t| t.browser.clone());
+            (active_slot, left_bv, right_bv)
+        };
+
+        let (Some(slot), Some(lbv), Some(rbv)) = (active_slot, left_bv, right_bv) else {
+            self.inner.split_view.detach();
+            return;
+        };
+
+        self.inner.split_view.detach();
+        slot.append(self.inner.split_view.widget());
+        self.inner.split_view.set_panes(
+            left_id,
+            lbv.widget(),
+            right_id,
+            rbv.widget(),
+            sp.primary_fraction(),
+            active_id,
+        );
+    }
+
+    // ========================================================================
+    // Picture-in-Picture (`pip.rs`)
+    // ========================================================================
+
+    pub fn toggle_pip_for_active_tab(&self) {
+        if self.inner.pip.is_active() {
+            self.inner.pip.close(true, false);
+            return;
+        }
+        if let Some(tab_id) = self.selected_tab_id() {
+            self.open_pip_for_tab(tab_id);
+        }
+    }
+
+    pub fn open_pip_for_tab(&self, tab_id: u64) {
+        let _ = self.ensure_tab_awake(tab_id);
+        let Some(bv) = self.tab_browser_view(tab_id) else {
+            return;
+        };
+        let w = self.clone();
+        self.inner.pip.open(
+            tab_id,
+            bv,
+            Some(&self.inner.window),
+            move |tid, browser, focus_tab| {
+                let tabs = w.inner.tabs.borrow();
+                if let Some(rec) = tabs.iter().find(|t| t.id == tid) {
+                    browser.widget().unparent();
+                    rec.slot.append(browser.widget());
+                }
+                drop(tabs);
+                if focus_tab {
+                    w.select_tab_by_id(tid);
+                    w.inner.window.present();
+                }
+                w.sync_split_presentation();
+            },
+        );
+        self.sync_split_presentation();
+    }
+
+    // ========================================================================
+    // Menú contextual de página (enlaces en Split View + Picture-in-Picture)
+    // ========================================================================
+
+    fn show_page_context_menu(&self, tab_id: u64, info: PageContextMenuInfo) {
+        if let Some(old) = self.inner.page_context_popover.borrow_mut().take() {
+            old.popdown();
+            old.unparent();
+        }
+        let Some(bv) = self.tab_browser_view(tab_id) else {
+            return;
+        };
+
+        let pop = Popover::new();
+        pop.set_parent(bv.widget());
+        pop.set_has_arrow(false);
+        pop.set_position(PositionType::Bottom);
+        pop.set_pointing_to(Some(Rectangle {
+            x: info.x.max(0),
+            y: info.y.max(0),
+            width: 1,
+            height: 1,
+        }));
+
+        let menu_box = BoxWidget::new(Orientation::Vertical, 2);
+        menu_box.set_margins(4, 4, 4, 4);
+
+        let add_btn = |label: &str| {
+            let btn = Button::new();
+            btn.add_css_class("flat");
+            let lbl = Label::new(Some(label));
+            lbl.set_halign(Align::Start);
+            btn.set_child(Some(&lbl));
+            btn
+        };
+
+        if let Some(ref link) = info.link_url {
+            let open_new = add_btn("Abrir enlace en una pestaña nueva");
+            {
+                let w = self.clone();
+                let u = link.clone();
+                let p = pop.clone();
+                open_new.connect_clicked(move || {
+                    p.popdown();
+                    let _ = w.open_tab(Some(&u), true, false, false);
+                });
+            }
+            menu_box.append(&open_new);
+
+            let open_side = add_btn("Abrir enlace al lado");
+            {
+                let w = self.clone();
+                let u = link.clone();
+                let p = pop.clone();
+                open_side.connect_clicked(move || {
+                    p.popdown();
+                    w.split_tab_by_id(tab_id, Some(&u));
+                });
+            }
+            menu_box.append(&open_side);
+        }
+
+        if info.is_video {
+            let pip_btn = add_btn("Picture-in-Picture");
+            {
+                let w = self.clone();
+                let p = pop.clone();
+                pip_btn.connect_clicked(move || {
+                    p.popdown();
+                    w.open_pip_for_tab(tab_id);
+                });
+            }
+            menu_box.append(&pip_btn);
+        }
+
+        if bv.can_go_back() {
+            let back_btn = add_btn("Atrás");
+            let b = bv.clone();
+            let p = pop.clone();
+            back_btn.connect_clicked(move || {
+                p.popdown();
+                b.go_back();
+            });
+            menu_box.append(&back_btn);
+        }
+
+        if bv.can_go_forward() {
+            let fwd_btn = add_btn("Adelante");
+            let b = bv.clone();
+            let p = pop.clone();
+            fwd_btn.connect_clicked(move || {
+                p.popdown();
+                b.go_forward();
+            });
+            menu_box.append(&fwd_btn);
+        }
+
+        let reload_btn = add_btn("Recargar");
+        {
+            let b = bv.clone();
+            let p = pop.clone();
+            reload_btn.connect_clicked(move || {
+                p.popdown();
+                b.reload();
+            });
+        }
+        menu_box.append(&reload_btn);
+
+        let inspect_btn = add_btn("Inspeccionar");
+        {
+            let b = bv.clone();
+            let p = pop.clone();
+            inspect_btn.connect_clicked(move || {
+                p.popdown();
+                b.toggle_dev_tools();
+            });
+        }
+        menu_box.append(&inspect_btn);
+
+        pop.set_child(Some(&menu_box));
+        pop.popup();
+        *self.inner.page_context_popover.borrow_mut() = Some(pop);
     }
 
     fn notify_session_dirty(&self) {

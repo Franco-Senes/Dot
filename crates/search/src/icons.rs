@@ -53,6 +53,9 @@ pub enum IconId {
     Key,
     Keyboard,
     Info,
+    MediaPlay,
+    MediaPause,
+    PipReturn,
 }
 
 thread_local! {
@@ -584,6 +587,18 @@ fn rasterize_icon(id: IconId, dark: bool) -> Texture {
             c.circle_stroke(8.0, 8.0, 5.6, 1.35);
             c.circle_fill(8.0, 5.2, 0.9);
             c.line(8.0, 7.4, 8.0, 11.2, 1.5);
+        }
+        IconId::MediaPlay => {
+            c.polyline(&[(5.0, 3.6), (12.4, 8.0), (5.0, 12.4), (5.0, 3.6)], 1.5);
+        }
+        IconId::MediaPause => {
+            c.line(5.6, 3.8, 5.6, 12.2, 2.0);
+            c.line(10.4, 3.8, 10.4, 12.2, 2.0);
+        }
+        IconId::PipReturn => {
+            c.rounded_rect_stroke(2.4, 3.2, 11.2, 9.6, 1.6, 1.35);
+            c.polyline(&[(8.8, 6.2), (6.0, 6.2), (6.0, 9.0)], 1.35);
+            c.line(6.2, 6.4, 10.6, 10.8, 1.35);
         }
     }
 

@@ -181,6 +181,21 @@ pub struct GtkWindow {
 }
 
 #[repr(C)]
+pub struct GtkPaned {
+    _private: [u8; 0],
+}
+
+#[repr(C)]
+pub struct GtkWindowHandle {
+    _private: [u8; 0],
+}
+
+#[repr(C)]
+pub struct GtkAspectFrame {
+    _private: [u8; 0],
+}
+
+#[repr(C)]
 pub struct GtkApplication {
     _private: [u8; 0],
 }
@@ -747,9 +762,20 @@ extern "C" {
     pub fn gtk_widget_set_overflow(widget: *mut GtkWidget, overflow: c_int);
     pub fn gtk_widget_queue_draw(widget: *mut GtkWidget);
 
+    pub fn gtk_window_new() -> *mut GtkWidget;
     pub fn gtk_window_set_title(window: *mut GtkWindow, title: *const c_char);
     pub fn gtk_window_get_title(window: *mut GtkWindow) -> *const c_char;
     pub fn gtk_window_set_default_size(window: *mut GtkWindow, width: c_int, height: c_int);
+    pub fn gtk_window_get_default_size(
+        window: *mut GtkWindow,
+        width: *mut c_int,
+        height: *mut c_int,
+    );
+    pub fn gtk_window_set_decorated(window: *mut GtkWindow, setting: gboolean);
+    pub fn gtk_window_set_resizable(window: *mut GtkWindow, resizable: gboolean);
+    pub fn gtk_window_set_child(window: *mut GtkWindow, child: *mut GtkWidget);
+    pub fn gtk_window_set_transient_for(window: *mut GtkWindow, parent: *mut GtkWindow);
+    pub fn gtk_window_set_hide_on_close(window: *mut GtkWindow, setting: gboolean);
     pub fn gtk_window_present(window: *mut GtkWindow);
     pub fn gtk_window_close(window: *mut GtkWindow);
     pub fn gtk_window_destroy(window: *mut GtkWindow);
@@ -758,6 +784,28 @@ extern "C" {
     pub fn gtk_window_is_fullscreen(window: *mut GtkWindow) -> gboolean;
     pub fn gtk_window_is_active(window: *mut GtkWindow) -> gboolean;
     pub fn gtk_window_set_focus(window: *mut GtkWindow, focus: *mut GtkWidget);
+
+    pub fn gtk_paned_new(orientation: c_int) -> *mut GtkWidget;
+    pub fn gtk_paned_set_start_child(paned: *mut GtkPaned, child: *mut GtkWidget);
+    pub fn gtk_paned_set_end_child(paned: *mut GtkPaned, child: *mut GtkWidget);
+    pub fn gtk_paned_set_resize_start_child(paned: *mut GtkPaned, resize: gboolean);
+    pub fn gtk_paned_set_resize_end_child(paned: *mut GtkPaned, resize: gboolean);
+    pub fn gtk_paned_set_shrink_start_child(paned: *mut GtkPaned, shrink: gboolean);
+    pub fn gtk_paned_set_shrink_end_child(paned: *mut GtkPaned, shrink: gboolean);
+    pub fn gtk_paned_set_position(paned: *mut GtkPaned, position: c_int);
+    pub fn gtk_paned_get_position(paned: *mut GtkPaned) -> c_int;
+    pub fn gtk_paned_set_wide_handle(paned: *mut GtkPaned, wide: gboolean);
+
+    pub fn gtk_window_handle_new() -> *mut GtkWidget;
+    pub fn gtk_window_handle_set_child(handle: *mut GtkWindowHandle, child: *mut GtkWidget);
+
+    pub fn gtk_aspect_frame_new(
+        xalign: gfloat,
+        yalign: gfloat,
+        ratio: gfloat,
+        obey_child: gboolean,
+    ) -> *mut GtkWidget;
+    pub fn gtk_aspect_frame_set_child(self_: *mut GtkAspectFrame, child: *mut GtkWidget);
 
     pub fn gtk_box_new(orientation: c_int, spacing: c_int) -> *mut GtkWidget;
     pub fn gtk_box_append(box_: *mut GtkBox, child: *mut GtkWidget);

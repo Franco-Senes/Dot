@@ -17,6 +17,7 @@ pub mod reader;
 pub mod session;
 pub mod settings;
 pub mod shield;
+pub mod split;
 pub mod trace;
 pub mod updater;
 pub mod vault;
