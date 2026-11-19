@@ -3,14 +3,19 @@
 //! para inspeccionar, previsualizar al pasar el ratón y restaurar reglas por sitio o globales
 //! (`Curtain.swift` + `Hidden.swift`).
 
+use crate::icons::{self, IconId};
 use gnome_platform::gtk::{
-    Align, AsWidget, BoxWidget, Button, EllipsizeMode, EventControllerMotion, Label, ListBox,
-    ListBoxRow, Orientation, PolicyType, ScrolledWindow, SelectionMode, Separator,
+    Align, AsEditable, AsWidget, BoxWidget, Button, EllipsizeMode, EventControllerMotion,
+    FileDialog, Label, ListBox, ListBoxRow, MenuButton, Orientation, PolicyType, Popover,
+    PositionType, ScrolledWindow, SearchEntry, SelectionMode, Separator,
 };
-use search_core::curtain::{generate_selector, CurtainStore, ElementPickSnapshot, Veil};
+use search_core::curtain::{
+    generate_selector, CurtainImportStats, CurtainStore, ElementPickSnapshot, Veil,
+};
 use search_core::session::now_unix_secs;
 use search_core::shield::js_string_literal;
 use std::cell::{Cell, RefCell};
+use std::fs;
 use std::path::PathBuf;
 use std::rc::Rc;
 use std::time::Duration;
@@ -95,6 +100,32 @@ impl CurtainManager {
             self.notify_listeners();
         }
         removed
+    }
+
+    pub fn set_rule_enabled(&self, host: &str, selector: &str, enabled: bool) -> bool {
+        let changed = self
+            .inner
+            .borrow_mut()
+            .store
+            .set_enabled(host, selector, enabled);
+        if changed {
+            self.schedule_save();
+            self.notify_listeners();
+        }
+        changed
+    }
+
+    pub fn export_json(&self) -> anyhow::Result<String> {
+        self.inner.borrow().store.export_json()
+    }
+
+    pub fn import_json(&self, raw: &str) -> anyhow::Result<CurtainImportStats> {
+        let stats = self.inner.borrow_mut().store.import_json(raw)?;
+        if stats.added > 0 {
+            self.schedule_save();
+            self.notify_listeners();
+        }
+        Ok(stats)
     }
 
     pub fn undo(&self, host: &str) -> Option<Veil> {
@@ -218,12 +249,18 @@ enum CurtainScope {
 pub struct CurtainPanel {
     root: BoxWidget,
     site_caption: Label,
+    status_label: Label,
+    search_entry: SearchEntry,
     btn_site: Button,
     btn_all: Button,
     btn_undo: Button,
     btn_restore_all: Button,
     list_box: ListBox,
-    empty_label: Label,
+    empty_box: BoxWidget,
+    empty_title: Label,
+    empty_desc: Label,
+    empty_pick_btn: Button,
+    empty_clear_filter_btn: Button,
     manager: CurtainManager,
     callbacks: Rc<CurtainPanelCallbacks>,
     current_host: Rc<RefCell<Option<String>>>,
@@ -243,8 +280,8 @@ impl CurtainPanel {
         root.set_hexpand(true);
         root.set_vexpand(true);
 
-        // Cabecera compacta.
-        let header = BoxWidget::new(Orientation::Horizontal, 6);
+        // Cabecera compacta con menú Exportar/Importar y botón cerrar.
+        let header = BoxWidget::new(Orientation::Horizontal, 4);
         header.set_margins(8, 8, 10, 4);
 
         let title = Label::new(Some("Elementos ocultos"));
@@ -253,8 +290,26 @@ impl CurtainPanel {
         title.set_hexpand(true);
         header.append(&title);
 
-        let close_btn = Button::from_icon_name("window-close-symbolic");
-        close_btn.add_css_class("flat");
+        let io_pop = Popover::new();
+        io_pop.set_position(PositionType::Bottom);
+        let io_box = BoxWidget::new(Orientation::Vertical, 4);
+        io_box.set_margins(6, 6, 6, 6);
+        let export_btn = Button::with_label("Exportar reglas (JSON)…");
+        export_btn.add_css_class("flat");
+        let import_btn = Button::with_label("Importar reglas (JSON)…");
+        import_btn.add_css_class("flat");
+        io_box.append(&export_btn);
+        io_box.append(&import_btn);
+        io_pop.set_child(Some(&io_box));
+
+        let io_menu_btn = MenuButton::new();
+        io_menu_btn.add_css_class("flat");
+        io_menu_btn.set_child(Some(&icons::image(IconId::MoreVert, 15)));
+        io_menu_btn.set_tooltip_text(Some("Exportar o importar reglas JSON"));
+        io_menu_btn.set_popover(Some(&io_pop));
+        header.append(&io_menu_btn);
+
+        let close_btn = icons::icon_button(IconId::Close, 15);
         close_btn.set_tooltip_text(Some("Cerrar panel (Esc)"));
         {
             let cbs = callbacks.clone();
@@ -263,8 +318,8 @@ impl CurtainPanel {
         header.append(&close_btn);
         root.append(&header);
 
-        // Controles de acción rápida: Ocultar elemento + Deshacer.
-        let action_bar = BoxWidget::new(Orientation::Horizontal, 6);
+        // Controles de acción rápida: Ocultar elemento + Deshacer último bloqueo.
+        let action_bar = BoxWidget::new(Orientation::Vertical, 6);
         action_bar.set_margins(0, 4, 8, 8);
 
         let pick_btn = Button::with_label("Ocultar elemento…");
@@ -277,8 +332,14 @@ impl CurtainPanel {
         }
         action_bar.append(&pick_btn);
 
-        let btn_undo = Button::from_icon_name("edit-undo-symbolic");
+        let btn_undo = Button::new();
         btn_undo.add_css_class("flat");
+        let undo_content = BoxWidget::new(Orientation::Horizontal, 6);
+        undo_content.set_halign(Align::Center);
+        undo_content.append(&icons::image(IconId::Undo, 14));
+        undo_content.append(&Label::new(Some("Deshacer último bloqueo")));
+        btn_undo.set_child(Some(&undo_content));
+        btn_undo.set_hexpand(true);
         btn_undo.set_tooltip_text(Some("Deshacer el último elemento ocultado en este sitio"));
         action_bar.append(&btn_undo);
         root.append(&action_bar);
@@ -296,12 +357,26 @@ impl CurtainPanel {
         scope_bar.append(&btn_all);
         root.append(&scope_bar);
 
+        // Filtro de búsqueda de reglas.
+        let search_entry = SearchEntry::new();
+        search_entry.set_placeholder_text("Buscar por selector o etiqueta…");
+        search_entry.set_margins(0, 4, 8, 8);
+        root.append(&search_entry);
+
         let site_caption = Label::new(None);
         site_caption.add_css_class("search-panel-subtitle");
         site_caption.set_xalign(0.0);
         site_caption.set_ellipsize(EllipsizeMode::End);
         site_caption.set_margins(0, 4, 10, 10);
         root.append(&site_caption);
+
+        let status_label = Label::new(None);
+        status_label.add_css_class("search-panel-subtitle");
+        status_label.set_xalign(0.0);
+        status_label.set_wrap(true);
+        status_label.set_margins(0, 4, 10, 10);
+        status_label.set_visible(false);
+        root.append(&status_label);
 
         root.append(&Separator::new(Orientation::Horizontal));
 
@@ -310,14 +385,47 @@ impl CurtainPanel {
         list_box.set_selection_mode(SelectionMode::None);
         list_box.set_activate_on_single_click(false);
 
-        let empty_label = Label::new(Some("No hay elementos ocultos en este sitio."));
-        empty_label.add_css_class("search-panel-empty");
-        empty_label.set_margins(16, 16, 28, 16);
-        empty_label.set_halign(Align::Center);
-        empty_label.set_valign(Align::Start);
+        // Estado vacío orientado a la acción.
+        let empty_box = BoxWidget::new(Orientation::Vertical, 8);
+        empty_box.set_margins(24, 24, 18, 18);
+        empty_box.set_halign(Align::Center);
+        empty_box.set_valign(Align::Start);
+
+        let empty_icon = icons::image(IconId::Shield, 28);
+        empty_icon.set_halign(Align::Center);
+        empty_box.append(&empty_icon);
+
+        let empty_title = Label::new(Some("No hay elementos ocultos en este sitio"));
+        empty_title.add_css_class("search-panel-title");
+        empty_title.set_halign(Align::Center);
+        empty_title.set_wrap(true);
+        empty_box.append(&empty_title);
+
+        let empty_desc = Label::new(Some(
+            "Oculta banners, avisos o bloques molestos de forma permanente.",
+        ));
+        empty_desc.add_css_class("search-panel-empty");
+        empty_desc.set_halign(Align::Center);
+        empty_desc.set_wrap(true);
+        empty_box.append(&empty_desc);
+
+        let empty_pick_btn = Button::with_label("Iniciar selector (Ctrl+Shift+H)");
+        empty_pick_btn.add_css_class("suggested-action");
+        empty_pick_btn.set_halign(Align::Center);
+        {
+            let cbs = callbacks.clone();
+            empty_pick_btn.connect_clicked(move || (cbs.on_start_pick)());
+        }
+        empty_box.append(&empty_pick_btn);
+
+        let empty_clear_filter_btn = Button::with_label("Limpiar filtro");
+        empty_clear_filter_btn.add_css_class("flat");
+        empty_clear_filter_btn.set_halign(Align::Center);
+        empty_clear_filter_btn.set_visible(false);
+        empty_box.append(&empty_clear_filter_btn);
 
         let list_container = BoxWidget::new(Orientation::Vertical, 0);
-        list_container.append(&empty_label);
+        list_container.append(&empty_box);
         list_container.append(&list_box);
 
         let scroller = ScrolledWindow::new();
@@ -340,12 +448,18 @@ impl CurtainPanel {
         let panel = Self {
             root,
             site_caption,
+            status_label,
+            search_entry: search_entry.clone(),
             btn_site: btn_site.clone(),
             btn_all: btn_all.clone(),
             btn_undo: btn_undo.clone(),
             btn_restore_all: btn_restore_all.clone(),
             list_box,
-            empty_label,
+            empty_box,
+            empty_title,
+            empty_desc,
+            empty_pick_btn,
+            empty_clear_filter_btn: empty_clear_filter_btn.clone(),
             manager: manager.clone(),
             callbacks: callbacks.clone(),
             current_host,
@@ -365,6 +479,17 @@ impl CurtainPanel {
             panel.root.add_controller(&motion);
         }
 
+        {
+            let p = panel.clone();
+            search_entry.connect_search_changed(move || p.refresh());
+        }
+        {
+            let p = panel.clone();
+            empty_clear_filter_btn.connect_clicked(move || {
+                p.search_entry.set_text("");
+                p.refresh();
+            });
+        }
         {
             let p = panel.clone();
             btn_site.connect_clicked(move || {
@@ -413,6 +538,73 @@ impl CurtainPanel {
         }
         {
             let p = panel.clone();
+            let pop = io_pop.clone();
+            export_btn.connect_clicked(move || {
+                pop.popdown();
+                let dlg = FileDialog::new();
+                dlg.set_title("Exportar reglas de Curtain (JSON)");
+                dlg.set_initial_name("curtain-rules.json");
+                let p_done = p.clone();
+                dlg.save(None, move |opt_path| {
+                    let Some(path) = opt_path else { return };
+                    match p_done.manager.export_json() {
+                        Ok(json) => {
+                            match search_core::paths::write_atomic(&path, json.as_bytes()) {
+                                Ok(()) => p_done.show_status("Reglas exportadas."),
+                                Err(err) => {
+                                    search_core::warn!("Error al exportar reglas Curtain: {err:#}");
+                                    p_done.show_status("No se pudo guardar el archivo JSON.");
+                                }
+                            }
+                        }
+                        Err(err) => {
+                            search_core::warn!("Error al serializar reglas Curtain: {err:#}");
+                            p_done.show_status("No se pudieron preparar las reglas.");
+                        }
+                    }
+                });
+            });
+        }
+        {
+            let p = panel.clone();
+            let pop = io_pop.clone();
+            import_btn.connect_clicked(move || {
+                pop.popdown();
+                let dlg = FileDialog::new();
+                dlg.set_title("Importar reglas de Curtain (JSON)");
+                let p_done = p.clone();
+                dlg.open(None, move |opt_path| {
+                    let Some(path) = opt_path else { return };
+                    match fs::read_to_string(&path) {
+                        Ok(raw) => match p_done.manager.import_json(&raw) {
+                            Ok(stats) => {
+                                p_done.show_status(&format!(
+                                    "Importadas {} regla(s) ({} omitida(s)).",
+                                    stats.added, stats.skipped
+                                ));
+                                if stats.added > 0 {
+                                    if let Some(host) = p_done.current_host.borrow().clone() {
+                                        (p_done.callbacks.on_rules_changed)(host);
+                                    }
+                                }
+                            }
+                            Err(err) => {
+                                search_core::warn!("JSON inválido al importar Curtain: {err:#}");
+                                p_done.show_status(
+                                    "Archivo JSON no válido. Comprueba el formato e inténtalo de nuevo.",
+                                );
+                            }
+                        },
+                        Err(err) => {
+                            search_core::warn!("Error al leer archivo JSON de Curtain: {err}");
+                            p_done.show_status("No se pudo leer el archivo seleccionado.");
+                        }
+                    }
+                });
+            });
+        }
+        {
+            let p = panel.clone();
             manager.subscribe(move || {
                 if p.visible.get() {
                     p.refresh();
@@ -444,6 +636,24 @@ impl CurtainPanel {
         }
     }
 
+    fn show_status(&self, msg: &str) {
+        self.status_label.set_text(msg);
+        self.status_label.set_visible(true);
+    }
+
+    fn matches_query(veil: &Veil, host: &str, query_lower: &str) -> bool {
+        if query_lower.is_empty() {
+            return true;
+        }
+        veil.label.to_lowercase().contains(query_lower)
+            || veil.selector.to_lowercase().contains(query_lower)
+            || veil
+                .note
+                .as_deref()
+                .is_some_and(|n| n.to_lowercase().contains(query_lower))
+            || host.to_lowercase().contains(query_lower)
+    }
+
     pub fn refresh(&self) {
         self.list_box.remove_all();
 
@@ -459,6 +669,10 @@ impl CurtainPanel {
             self.btn_site.remove_css_class("suggested-action");
             self.btn_site.add_css_class("flat");
         }
+
+        let query = self.search_entry.text().trim().to_string();
+        let query_lower = query.to_lowercase();
+        let has_query = !query_lower.is_empty();
 
         let current_host = self.current_host.borrow().clone();
         let current_veils = current_host
@@ -479,20 +693,48 @@ impl CurtainPanel {
                 self.site_caption.set_text(&caption);
 
                 if current_veils.is_empty() {
-                    self.empty_label
-                        .set_text("No hay elementos ocultos en este sitio.");
-                    self.empty_label.set_visible(true);
+                    self.empty_title
+                        .set_text("No hay elementos ocultos en este sitio");
+                    if current_host.is_some() {
+                        self.empty_desc.set_text(
+                            "Oculta banners, avisos o bloques molestos de forma permanente.",
+                        );
+                        self.empty_pick_btn.set_visible(true);
+                    } else {
+                        self.empty_desc
+                            .set_text("Abre una página web para ocultar elementos.");
+                        self.empty_pick_btn.set_visible(false);
+                    }
+                    self.empty_clear_filter_btn.set_visible(false);
+                    self.empty_box.set_visible(true);
                     self.btn_restore_all.set_visible(false);
                     return;
                 }
-                self.empty_label.set_visible(false);
+
+                let host = current_host.unwrap_or_default();
+                let filtered: Vec<Veil> = current_veils
+                    .into_iter()
+                    .filter(|v| Self::matches_query(v, &host, &query_lower))
+                    .collect();
+
+                if filtered.is_empty() && has_query {
+                    self.empty_title
+                        .set_text(&format!("Sin resultados para «{query}»"));
+                    self.empty_desc
+                        .set_text("Prueba otro selector o limpia el filtro.");
+                    self.empty_pick_btn.set_visible(false);
+                    self.empty_clear_filter_btn.set_visible(true);
+                    self.empty_box.set_visible(true);
+                    self.btn_restore_all.set_visible(true);
+                    return;
+                }
+
+                self.empty_box.set_visible(false);
                 self.btn_restore_all.set_visible(true);
 
-                if let Some(host) = current_host {
-                    for veil in current_veils {
-                        let row = self.build_veil_row(&host, &veil, true);
-                        self.list_box.append(&row);
-                    }
+                for veil in filtered {
+                    let row = self.build_veil_row(&host, &veil, true);
+                    self.list_box.append(&row);
                 }
             }
             CurtainScope::AllSites => {
@@ -502,16 +744,28 @@ impl CurtainPanel {
                     .set_text(&format!("{total} regla(s) en {} sitio(s)", all.len()));
 
                 if all.is_empty() {
-                    self.empty_label
-                        .set_text("Todavía no has ocultado elementos en ningún sitio.");
-                    self.empty_label.set_visible(true);
+                    self.empty_title
+                        .set_text("Todavía no hay elementos ocultos");
+                    self.empty_desc
+                        .set_text("Usa el selector para ocultar partes de cualquier página web.");
+                    self.empty_pick_btn.set_visible(current_host.is_some());
+                    self.empty_clear_filter_btn.set_visible(false);
+                    self.empty_box.set_visible(true);
                     self.btn_restore_all.set_visible(false);
                     return;
                 }
-                self.empty_label.set_visible(false);
-                self.btn_restore_all.set_visible(true);
 
+                let mut matched_any = false;
                 for (host, veils) in all {
+                    let matching: Vec<Veil> = veils
+                        .into_iter()
+                        .filter(|v| Self::matches_query(v, &host, &query_lower))
+                        .collect();
+                    if matching.is_empty() {
+                        continue;
+                    }
+                    matched_any = true;
+
                     let header_row = ListBoxRow::new();
                     header_row.set_selectable(false);
                     header_row.set_activatable(false);
@@ -524,8 +778,7 @@ impl CurtainPanel {
                     lbl.set_hexpand(true);
                     h_box.append(&lbl);
 
-                    let clear_host = Button::from_icon_name("edit-clear-all-symbolic");
-                    clear_host.add_css_class("flat");
+                    let clear_host = icons::icon_button(IconId::ClearAll, 14);
                     clear_host.add_css_class("search-tab-mini-btn");
                     clear_host.set_tooltip_text(Some(&format!("Restaurar todo en {host}")));
                     {
@@ -543,10 +796,24 @@ impl CurtainPanel {
                     self.list_box.append(&header_row);
 
                     let is_active_host = current_host.as_deref() == Some(host.as_str());
-                    for veil in veils {
+                    for veil in matching {
                         let row = self.build_veil_row(&host, &veil, is_active_host);
                         self.list_box.append(&row);
                     }
+                }
+
+                if !matched_any && has_query {
+                    self.empty_title
+                        .set_text(&format!("Sin resultados para «{query}»"));
+                    self.empty_desc
+                        .set_text("Prueba otro selector, dominio o limpia el filtro.");
+                    self.empty_pick_btn.set_visible(false);
+                    self.empty_clear_filter_btn.set_visible(true);
+                    self.empty_box.set_visible(true);
+                    self.btn_restore_all.set_visible(true);
+                } else {
+                    self.empty_box.set_visible(false);
+                    self.btn_restore_all.set_visible(true);
                 }
             }
         }
@@ -561,8 +828,36 @@ impl CurtainPanel {
         let hbox = BoxWidget::new(Orientation::Horizontal, 6);
         hbox.set_margins(5, 5, 10, 8);
 
+        // Conmutador por regla para activar/desactivar sin eliminar.
+        let toggle_btn = icons::icon_button(IconId::Check, 13);
+        toggle_btn.add_css_class("search-tab-mini-btn");
+        if veil.enabled {
+            toggle_btn.add_css_class("suggested-action");
+            toggle_btn.remove_css_class("flat");
+            toggle_btn.set_tooltip_text(Some("Desactivar regla temporalmente"));
+        } else {
+            toggle_btn.add_css_class("dim-label");
+            toggle_btn.set_tooltip_text(Some("Activar regla"));
+        }
+        {
+            let mgr = self.manager.clone();
+            let cbs = self.callbacks.clone();
+            let h_owned = host.to_string();
+            let sel_owned = veil.selector.clone();
+            let next_enabled = !veil.enabled;
+            toggle_btn.connect_clicked(move || {
+                if mgr.set_rule_enabled(&h_owned, &sel_owned, next_enabled) {
+                    (cbs.on_rules_changed)(h_owned.clone());
+                }
+            });
+        }
+        hbox.append(&toggle_btn);
+
         let text_col = BoxWidget::new(Orientation::Vertical, 1);
         text_col.set_hexpand(true);
+        if !veil.enabled {
+            text_col.add_css_class("dim-label");
+        }
 
         let label_lbl = Label::new(Some(&veil.label));
         label_lbl.set_xalign(0.0);
@@ -581,10 +876,9 @@ impl CurtainPanel {
         text_col.set_tooltip_text(Some(&veil.selector));
         hbox.append(&text_col);
 
-        let restore_btn = Button::from_icon_name("edit-undo-symbolic");
-        restore_btn.add_css_class("flat");
+        let restore_btn = icons::icon_button(IconId::Trash, 14);
         restore_btn.add_css_class("search-tab-mini-btn");
-        restore_btn.set_tooltip_text(Some("Restaurar este elemento"));
+        restore_btn.set_tooltip_text(Some("Eliminar esta regla"));
         {
             let mgr = self.manager.clone();
             let cbs = self.callbacks.clone();

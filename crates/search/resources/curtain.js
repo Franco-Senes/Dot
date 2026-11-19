@@ -27,7 +27,7 @@
     frame.id = 'office-curtain-frame';
     frame.style.cssText = 'position:fixed;z-index:2147483646;pointer-events:none;' +
       'border:2px solid rgba(23,23,23,.9);background:rgba(23,23,23,.08);' +
-      'border-radius:4px;transition:all .06s ease-out;display:none';
+      'border-radius:4px;transition:left .06s ease-out,top .06s ease-out,width .06s ease-out,height .06s ease-out;display:none';
     tag = document.createElement('div');
     tag.style.cssText = 'position:absolute;font:500 11px system-ui,-apple-system,sans-serif;' +
       'color:#fff;background:#171717;padding:2px 7px;border-radius:5px;' +

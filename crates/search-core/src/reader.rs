@@ -11,10 +11,93 @@ pub const MIN_ARTICLE_TEXT_CHARS: usize = 250;
 /// Marcador HTML que identifica documentos del modo lectura como internos ante `BrowserView`.
 pub const READER_INTERNAL_MARKER: &str = "<!--search-internal--><!--search-reader-->";
 
+/// Tema visual del modo lectura.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ReaderTheme {
+    Paper,
+    Sepia,
+    Charcoal,
+    Amoled,
+}
+
+impl ReaderTheme {
+    pub fn as_attr(self) -> &'static str {
+        match self {
+            Self::Paper => "paper",
+            Self::Sepia => "sepia",
+            Self::Charcoal => "charcoal",
+            Self::Amoled => "amoled",
+        }
+    }
+}
+
+/// Familia tipográfica del cuerpo en modo lectura.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum ReaderFont {
+    Sans,
+    #[default]
+    Serif,
+    Mono,
+}
+
+impl ReaderFont {
+    pub fn css_stack(self) -> &'static str {
+        match self {
+            Self::Sans => r#"system-ui, -apple-system, "Cantarell", "Inter", sans-serif"#,
+            Self::Serif => {
+                r#"ui-serif, Georgia, "Liberation Serif", "DejaVu Serif", "Times New Roman", serif"#
+            }
+            Self::Mono => r#"ui-monospace, "JetBrains Mono", "DejaVu Sans Mono", monospace"#,
+        }
+    }
+}
+
+/// Medida máxima de línea en caracteres (`ch`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum ReaderMeasure {
+    Narrow,
+    #[default]
+    Medium,
+    Wide,
+}
+
+impl ReaderMeasure {
+    pub fn ch(self) -> u16 {
+        match self {
+            Self::Narrow => 58,
+            Self::Medium => 68,
+            Self::Wide => 78,
+        }
+    }
+}
+
+/// Interlineado unitless del cuerpo en modo lectura.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum ReaderLineHeight {
+    Compact,
+    #[default]
+    Normal,
+    Relaxed,
+}
+
+impl ReaderLineHeight {
+    pub fn css_value(self) -> &'static str {
+        match self {
+            Self::Compact => "1.5",
+            Self::Normal => "1.7",
+            Self::Relaxed => "1.9",
+        }
+    }
+}
+
 /// Opciones de presentación del modo lectura.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ReaderOptions {
     pub look: ColorLook,
+    pub theme: Option<ReaderTheme>,
+    pub font: ReaderFont,
+    pub measure: ReaderMeasure,
+    pub line_height: ReaderLineHeight,
     pub font_size_px: i32,
 }
 
@@ -22,6 +105,10 @@ impl Default for ReaderOptions {
     fn default() -> Self {
         Self {
             look: ColorLook::System,
+            theme: None,
+            font: ReaderFont::Serif,
+            measure: ReaderMeasure::Medium,
+            line_height: ReaderLineHeight::Normal,
             font_size_px: 18,
         }
     }
@@ -59,15 +146,48 @@ impl ReaderArticle {
         len >= MIN_ARTICLE_TEXT_CHARS && !self.content_html.trim().is_empty()
     }
 
+    /// Cuenta las palabras visibles del artículo a partir del HTML extraído.
+    pub fn word_count(&self) -> usize {
+        let mut in_tag = false;
+        let mut words = 0usize;
+        let mut in_word = false;
+        for ch in self.content_html.chars() {
+            match ch {
+                '<' => {
+                    in_tag = true;
+                    if in_word {
+                        words += 1;
+                        in_word = false;
+                    }
+                }
+                '>' => in_tag = false,
+                _ if !in_tag => {
+                    if ch.is_whitespace() {
+                        if in_word {
+                            words += 1;
+                            in_word = false;
+                        }
+                    } else {
+                        in_word = true;
+                    }
+                }
+                _ => {}
+            }
+        }
+        if in_word {
+            words += 1;
+        }
+        if words > 0 {
+            words
+        } else {
+            self.text_length / 5
+        }
+    }
+
     /// Estima el tiempo de lectura en minutos (220 palabras/minuto, mínimo 1 min).
     pub fn estimated_minutes(&self) -> u32 {
-        let chars = if self.text_length > 0 {
-            self.text_length
-        } else {
-            visible_text_len(&self.content_html)
-        };
-        let approx_words = chars / 5;
-        ((approx_words as f64) / 220.0).round().max(1.0) as u32
+        let words = self.word_count();
+        ((words as f64) / 220.0).round().max(1.0) as u32
     }
 
     pub fn display_source(&self) -> String {
@@ -546,11 +666,15 @@ pub const READER_CSS: &str = r#"
   --r-aside: #525252;
   --r-rule: #e6e6e6;
   --r-code: #f5f5f5;
+  --r-accent: #2563eb;
   --r-picture: none;
   --r-font-size: 18px;
+  --r-font-family: ui-serif, Georgia, "Liberation Serif", "DejaVu Serif", "Times New Roman", serif;
+  --r-measure: 68ch;
+  --r-line-height: 1.7;
 }
 @media (prefers-color-scheme: dark) {
-  :root:not([data-office-look="light"]) {
+  :root:not([data-office-look="light"]):not([data-office-theme]) {
     color-scheme: dark;
     --r-ground: #1c1c1c;
     --r-ink: #e0e0e0;
@@ -558,6 +682,7 @@ pub const READER_CSS: &str = r#"
     --r-aside: #a8a8a8;
     --r-rule: #333333;
     --r-code: #2a2a2a;
+    --r-accent: #60a5fa;
     --r-picture: brightness(.92);
   }
 }
@@ -569,7 +694,52 @@ pub const READER_CSS: &str = r#"
   --r-aside: #a8a8a8;
   --r-rule: #333333;
   --r-code: #2a2a2a;
+  --r-accent: #60a5fa;
   --r-picture: brightness(.92);
+}
+:root[data-office-theme="paper"] {
+  color-scheme: light;
+  --r-ground: #fcfbf8;
+  --r-ink: #1b1a17;
+  --r-quiet: #6f6b63;
+  --r-aside: #4b4842;
+  --r-rule: #e7e3da;
+  --r-code: #f3f0e8;
+  --r-accent: #2563eb;
+  --r-picture: none;
+}
+:root[data-office-theme="sepia"] {
+  color-scheme: light;
+  --r-ground: #f4ecd8;
+  --r-ink: #3b2e1e;
+  --r-quiet: #7a6852;
+  --r-aside: #594835;
+  --r-rule: #dfd3b8;
+  --r-code: #eadfc6;
+  --r-accent: #9a5b13;
+  --r-picture: sepia(.08);
+}
+:root[data-office-theme="charcoal"] {
+  color-scheme: dark;
+  --r-ground: #1e1f22;
+  --r-ink: #e2e4e9;
+  --r-quiet: #8e939e;
+  --r-aside: #b0b5bf;
+  --r-rule: #32353b;
+  --r-code: #282a2f;
+  --r-accent: #60a5fa;
+  --r-picture: brightness(.92);
+}
+:root[data-office-theme="amoled"] {
+  color-scheme: dark;
+  --r-ground: #000000;
+  --r-ink: #e4e4e7;
+  --r-quiet: #82828a;
+  --r-aside: #a1a1aa;
+  --r-rule: #222226;
+  --r-code: #121214;
+  --r-accent: #60a5fa;
+  --r-picture: brightness(.88);
 }
 html, body {
   background: var(--r-ground);
@@ -578,13 +748,29 @@ html, body {
   padding: 0;
   -webkit-font-smoothing: antialiased;
 }
+#office-reader-progress {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 3px;
+  z-index: 9999;
+  background: transparent;
+  pointer-events: none;
+}
+#office-reader-progress-bar {
+  height: 100%;
+  width: 0%;
+  background: var(--r-accent);
+  transition: width 80ms linear;
+}
 #office-reader {
-  max-width: 68ch;
+  max-width: var(--r-measure);
   margin: 0 auto;
   padding: 64px 24px 140px;
-  font-family: ui-serif, Georgia, "Liberation Serif", "DejaVu Serif", "Times New Roman", serif;
+  font-family: var(--r-font-family);
   font-size: var(--r-font-size);
-  line-height: 1.72;
+  line-height: var(--r-line-height);
   color: var(--r-ink);
   word-wrap: break-word;
 }
@@ -604,6 +790,7 @@ html, body {
   margin: 0 0 28px;
   text-transform: uppercase;
   letter-spacing: 0.06em;
+  font-variant-numeric: tabular-nums;
 }
 #office-reader .office-byline {
   font-family: system-ui, -apple-system, "Cantarell", sans-serif;
@@ -706,6 +893,34 @@ html, body {
   vertical-align: top;
 }
 #office-reader th { font-weight: 600; }
+@media print {
+  :root, :root[data-office-look], :root[data-office-theme] {
+    color-scheme: light !important;
+    --r-ground: #ffffff !important;
+    --r-ink: #000000 !important;
+    --r-quiet: #444444 !important;
+    --r-aside: #333333 !important;
+    --r-rule: #cccccc !important;
+    --r-code: #f5f5f5 !important;
+    --r-picture: none !important;
+  }
+  #office-reader-progress { display: none !important; }
+  html, body { background: #ffffff !important; color: #000000 !important; }
+  #office-reader {
+    max-width: 100% !important;
+    margin: 0 !important;
+    padding: 0 !important;
+    font-size: 11pt !important;
+    line-height: 1.5 !important;
+  }
+  #office-reader h1, #office-reader h2, #office-reader h3, #office-reader h4 {
+    break-after: avoid;
+  }
+  #office-reader pre, #office-reader blockquote, #office-reader figure, #office-reader img, #office-reader table {
+    break-inside: avoid;
+  }
+  #office-reader a { text-decoration: underline; }
+}
 "#;
 
 /// Renderiza el documento HTML5 completo y saneado para mostrar el artículo en modo lectura.
@@ -716,10 +931,17 @@ pub fn render_reader_document(article: &ReaderArticle, options: ReaderOptions) -
         article.title.trim()
     });
     let font_size = options.clamped_font_size();
+    let font_family = options.font.css_stack();
+    let measure_ch = options.measure.ch();
+    let line_height = options.line_height.css_value();
     let look_attr = match options.look {
         ColorLook::System => String::new(),
         ColorLook::Light => r#" data-office-look="light""#.to_string(),
         ColorLook::Dark => r#" data-office-look="dark""#.to_string(),
+    };
+    let theme_attr = match options.theme {
+        Some(t) => format!(r#" data-office-theme="{}""#, t.as_attr()),
+        None => String::new(),
     };
     let base_tag = if article.url.starts_with("http://") || article.url.starts_with("https://") {
         format!("<base href=\"{}\">", escape_html(&article.url))
@@ -728,11 +950,12 @@ pub fn render_reader_document(article: &ReaderArticle, options: ReaderOptions) -
     };
 
     let source = article.display_source();
+    let words = article.word_count();
     let minutes = article.estimated_minutes();
     let meta_line = if source.is_empty() {
-        format!("{minutes} min de lectura")
+        format!("{words} palabras · {minutes} min de lectura")
     } else {
-        format!("{source} · {minutes} min de lectura")
+        format!("{source} · {words} palabras · {minutes} min de lectura")
     };
 
     let byline_html = article
@@ -747,7 +970,7 @@ pub fn render_reader_document(article: &ReaderArticle, options: ReaderOptions) -
 
     format!(
         r#"{READER_INTERNAL_MARKER}<!doctype html>
-<html{look_attr} style="--r-font-size:{font_size}px">
+<html{look_attr}{theme_attr} style="--r-font-size:{font_size}px;--r-font-family:{font_family};--r-measure:{measure_ch}ch;--r-line-height:{line_height}">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
@@ -756,29 +979,42 @@ pub fn render_reader_document(article: &ReaderArticle, options: ReaderOptions) -
 <style id="office-reader-sheet">{READER_CSS}</style>
 </head>
 <body>
+  <div id="office-reader-progress" aria-hidden="true"><div id="office-reader-progress-bar"></div></div>
   <article id="office-reader">
     <h1>{safe_title}</h1>
     <p class="office-from">{meta_line}</p>
     {byline_html}
     <div class="office-reader-body">{clean_body}</div>
   </article>
+  <script>(function(){{var bar=document.getElementById('office-reader-progress-bar');if(!bar)return;function u(){{var doc=document.documentElement;var max=doc.scrollHeight-window.innerHeight;var pct=max>0?Math.min(100,Math.max(0,(window.scrollY/max)*100)):0;bar.style.width=pct.toFixed(1)+'%';}}window.addEventListener('scroll',u,{{passive:true}});window.addEventListener('resize',u,{{passive:true}});u();}})();</script>
 </body>
 </html>"#,
         meta_line = escape_html(&meta_line)
     )
 }
 
-/// Script mínimo para actualizar en vivo el tema (claro/oscuro/sistema) y el tamaño de fuente
+/// Script mínimo para actualizar en vivo el tema, tipografía, medida, interlineado y tamaño
 /// dentro de una vista de modo lectura ya abierta sin recargar el documento.
 pub fn build_apply_reader_options_script(options: ReaderOptions) -> String {
     let font_size = options.clamped_font_size();
+    let font_family = options.font.css_stack();
+    let measure_ch = options.measure.ch();
+    let line_height = options.line_height.css_value();
     let look_js = match options.look {
         ColorLook::System => "document.documentElement.removeAttribute('data-office-look');",
         ColorLook::Light => "document.documentElement.setAttribute('data-office-look','light');",
         ColorLook::Dark => "document.documentElement.setAttribute('data-office-look','dark');",
     };
+    let theme_js = match options.theme {
+        Some(t) => format!(
+            "document.documentElement.setAttribute('data-office-theme','{}');",
+            t.as_attr()
+        ),
+        None => "document.documentElement.removeAttribute('data-office-theme');".to_string(),
+    };
     format!(
-        "(function(){{{look_js}document.documentElement.style.setProperty('--r-font-size','{font_size}px');}})();"
+        "(function(){{var s=document.documentElement.style;{look_js}{theme_js}s.setProperty('--r-font-size','{font_size}px');s.setProperty('--r-font-family',{font_family_js});s.setProperty('--r-measure','{measure_ch}ch');s.setProperty('--r-line-height','{line_height}');}})();",
+        font_family_js = serde_json::to_string(font_family).unwrap_or_else(|_| "\"serif\"".to_string())
     )
 }
 
@@ -835,15 +1071,24 @@ mod tests {
             &article,
             ReaderOptions {
                 look: ColorLook::Dark,
+                theme: Some(ReaderTheme::Sepia),
+                font: ReaderFont::Sans,
+                measure: ReaderMeasure::Wide,
+                line_height: ReaderLineHeight::Relaxed,
                 font_size_px: 22,
             },
         );
         assert!(html.starts_with(READER_INTERNAL_MARKER));
         assert!(html.contains(r#"data-office-look="dark""#));
+        assert!(html.contains(r#"data-office-theme="sepia""#));
         assert!(html.contains("--r-font-size:22px"));
-        assert!(html.contains("max-width: 68ch;"));
+        assert!(html.contains("--r-measure:78ch"));
+        assert!(html.contains("--r-line-height:1.9"));
+        assert!(html.contains("max-width: var(--r-measure);"));
+        assert!(html.contains("office-reader-progress-bar"));
+        assert!(html.contains("@media print"));
         assert!(html.contains("Un título &lt;seguro&gt;"));
-        assert!(html.contains("example.org · 1 min de lectura"));
+        assert!(html.contains("example.org · 210 palabras · 1 min de lectura"));
         assert!(html.contains("Por Ada Lovelace"));
         assert!(html.contains(r#"<base href="https://www.example.org/blog/rust">"#));
     }
@@ -865,16 +1110,30 @@ mod tests {
     fn live_options_script_clamps_font_size_and_sets_look() {
         let js_dark = build_apply_reader_options_script(ReaderOptions {
             look: ColorLook::Dark,
+            theme: Some(ReaderTheme::Amoled),
+            font: ReaderFont::Mono,
+            measure: ReaderMeasure::Narrow,
+            line_height: ReaderLineHeight::Compact,
             font_size_px: 99,
         });
         assert!(js_dark.contains("setAttribute('data-office-look','dark')"));
+        assert!(js_dark.contains("setAttribute('data-office-theme','amoled')"));
         assert!(js_dark.contains("36px"));
+        assert!(js_dark.contains("58ch"));
+        assert!(js_dark.contains("1.5"));
 
         let js_sys = build_apply_reader_options_script(ReaderOptions {
             look: ColorLook::System,
+            theme: None,
+            font: ReaderFont::Serif,
+            measure: ReaderMeasure::Medium,
+            line_height: ReaderLineHeight::Normal,
             font_size_px: 4,
         });
         assert!(js_sys.contains("removeAttribute('data-office-look')"));
+        assert!(js_sys.contains("removeAttribute('data-office-theme')"));
         assert!(js_sys.contains("12px"));
+        assert!(js_sys.contains("68ch"));
+        assert!(js_sys.contains("1.7"));
     }
 }
