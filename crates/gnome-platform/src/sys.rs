@@ -626,12 +626,20 @@ extern "C" {
     pub fn g_variant_unref(value: *mut GVariant);
 }
 
+#[repr(C)]
+pub struct GWeakRef {
+    priv_ptr: gpointer,
+}
+
 #[link(name = "gobject-2.0")]
 extern "C" {
     pub fn g_object_ref(object: gpointer) -> gpointer;
     pub fn g_object_ref_sink(object: gpointer) -> gpointer;
     pub fn g_object_unref(object: gpointer);
     pub fn g_object_is_floating(object: gpointer) -> gboolean;
+    pub fn g_weak_ref_init(weak_ref: *mut GWeakRef, object: gpointer);
+    pub fn g_weak_ref_clear(weak_ref: *mut GWeakRef);
+    pub fn g_weak_ref_get(weak_ref: *mut GWeakRef) -> gpointer;
     pub fn g_signal_connect_data(
         instance: gpointer,
         detailed_signal: *const c_char,

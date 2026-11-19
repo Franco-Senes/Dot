@@ -24,6 +24,7 @@ use gnome_platform::gtk::{
     EventControllerKey, EventControllerMotion, EventControllerScroll, GestureClick, GestureSwipe,
     Label, Overlay, Picture, ScrollFlags,
 };
+use gnome_platform::object::ObjectSubclass;
 use percent_encoding::{percent_decode_str, utf8_percent_encode, NON_ALPHANUMERIC};
 use search_core::address::{is_same_site, sanitize_url_for_ui, strip_click_ids};
 use search_core::curtain::{
@@ -36,7 +37,7 @@ use serde::Deserialize;
 use std::cell::{Cell, RefCell};
 use std::collections::{HashMap, HashSet};
 use std::io::Read;
-use std::rc::Rc;
+use std::rc::{Rc, Weak};
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, RwLock};
 
@@ -785,6 +786,10 @@ impl BrowserView {
             host.close_browser(1);
         }
         *self.shared.browser.borrow_mut() = None;
+        self.shared.picture.set_texture(None);
+        *self.shared.callbacks.borrow_mut() = BrowserCallbacks::default();
+        self.shared.pending_evals.borrow_mut().clear();
+        self.shared.vault_frames.borrow_mut().clear();
         if self.shared.counted_active.replace(false) {
             ACTIVE_BROWSER_COUNT.fetch_sub(1, Ordering::SeqCst);
         }
@@ -857,11 +862,22 @@ impl BrowserView {
         self.browser().and_then(|b| b.main_frame())
     }
 
+    fn downgrade(&self) -> Weak<SharedState> {
+        Rc::downgrade(&self.shared)
+    }
+
+    fn upgrade_weak(weak: &Weak<SharedState>) -> Option<Self> {
+        weak.upgrade().map(|shared| Self { shared })
+    }
+
     fn attach_gtk_controllers(&self, resize_sensor: &DrawingArea) {
         // 1. Redimensionado lógico y factor de escala HiDPI.
         {
-            let v = self.clone();
+            let weak = self.downgrade();
             resize_sensor.connect_resize(move |width, height| {
+                let Some(v) = Self::upgrade_weak(&weak) else {
+                    return;
+                };
                 let scale = v.shared.picture.scale_factor() as f32;
                 let prev_scale = v.shared.scale_factor.replace(scale.max(1.0));
                 if width > 0 && height > 0 {
@@ -880,8 +896,11 @@ impl BrowserView {
         }
 
         {
-            let v = self.clone();
+            let weak = self.downgrade();
             self.shared.picture.connect_scale_factor_notify(move || {
+                let Some(v) = Self::upgrade_weak(&weak) else {
+                    return;
+                };
                 let scale = v.shared.picture.scale_factor() as f32;
                 v.shared.scale_factor.set(scale.max(1.0));
                 if let Some(host) = v.host() {
@@ -895,45 +914,60 @@ impl BrowserView {
         // 2. Movimiento del puntero.
         {
             let motion = EventControllerMotion::new();
-            let v_enter = self.clone();
-            let motion_enter = motion.clone();
+            let weak_enter = self.downgrade();
+            let motion_enter = motion.downgrade();
             motion.connect_enter(move |x, y| {
+                let (Some(v_enter), Some(motion_ref)) =
+                    (Self::upgrade_weak(&weak_enter), motion_enter.upgrade())
+                else {
+                    return;
+                };
                 let (ix, iy) = (x.round() as i32, y.round() as i32);
                 v_enter.shared.last_pointer.set((ix, iy));
                 if let Some(host) = v_enter.host() {
                     let ev = MouseEvent {
                         x: ix,
                         y: iy,
-                        modifiers: gdk_mods_to_cef(motion_enter.current_event_state()),
+                        modifiers: gdk_mods_to_cef(motion_ref.current_event_state()),
                     };
                     host.send_mouse_move_event(Some(&ev), 0);
                 }
             });
 
-            let v_move = self.clone();
-            let motion_move = motion.clone();
+            let weak_move = self.downgrade();
+            let motion_move = motion.downgrade();
             motion.connect_motion(move |x, y| {
+                let (Some(v_move), Some(motion_ref)) =
+                    (Self::upgrade_weak(&weak_move), motion_move.upgrade())
+                else {
+                    return;
+                };
                 let (ix, iy) = (x.round() as i32, y.round() as i32);
                 v_move.shared.last_pointer.set((ix, iy));
                 if let Some(host) = v_move.host() {
                     let ev = MouseEvent {
                         x: ix,
                         y: iy,
-                        modifiers: gdk_mods_to_cef(motion_move.current_event_state()),
+                        modifiers: gdk_mods_to_cef(motion_ref.current_event_state()),
                     };
                     host.send_mouse_move_event(Some(&ev), 0);
                 }
             });
 
-            let v_leave = self.clone();
-            let motion_leave = motion.clone();
+            let weak_leave = self.downgrade();
+            let motion_leave = motion.downgrade();
             motion.connect_leave(move || {
+                let (Some(v_leave), Some(motion_ref)) =
+                    (Self::upgrade_weak(&weak_leave), motion_leave.upgrade())
+                else {
+                    return;
+                };
                 let (ix, iy) = v_leave.shared.last_pointer.get();
                 if let Some(host) = v_leave.host() {
                     let ev = MouseEvent {
                         x: ix,
                         y: iy,
-                        modifiers: gdk_mods_to_cef(motion_leave.current_event_state()),
+                        modifiers: gdk_mods_to_cef(motion_ref.current_event_state()),
                     };
                     host.send_mouse_move_event(Some(&ev), 1);
                 }
@@ -947,38 +981,48 @@ impl BrowserView {
             let click = GestureClick::new();
             click.set_button(0);
 
-            let v_press = self.clone();
-            let click_press = click.clone();
+            let weak_press = self.downgrade();
+            let click_press = click.downgrade();
             click.connect_pressed(move |n_press, x, y| {
+                let (Some(v_press), Some(click_ref)) =
+                    (Self::upgrade_weak(&weak_press), click_press.upgrade())
+                else {
+                    return;
+                };
                 v_press.grab_focus();
                 let (ix, iy) = (x.round() as i32, y.round() as i32);
                 v_press.shared.last_pointer.set((ix, iy));
-                let Some(btn) = gdk_button_to_cef(click_press.current_button()) else {
+                let Some(btn) = gdk_button_to_cef(click_ref.current_button()) else {
                     return;
                 };
                 if let Some(host) = v_press.host() {
                     let ev = MouseEvent {
                         x: ix,
                         y: iy,
-                        modifiers: gdk_mods_to_cef(click_press.current_event_state()),
+                        modifiers: gdk_mods_to_cef(click_ref.current_event_state()),
                     };
                     host.send_mouse_click_event(Some(&ev), btn, 0, n_press.clamp(1, 3));
                 }
             });
 
-            let v_release = self.clone();
-            let click_release = click.clone();
+            let weak_release = self.downgrade();
+            let click_release = click.downgrade();
             click.connect_released(move |n_press, x, y| {
+                let (Some(v_release), Some(click_ref)) =
+                    (Self::upgrade_weak(&weak_release), click_release.upgrade())
+                else {
+                    return;
+                };
                 let (ix, iy) = (x.round() as i32, y.round() as i32);
                 v_release.shared.last_pointer.set((ix, iy));
-                let Some(btn) = gdk_button_to_cef(click_release.current_button()) else {
+                let Some(btn) = gdk_button_to_cef(click_ref.current_button()) else {
                     return;
                 };
                 if let Some(host) = v_release.host() {
                     let ev = MouseEvent {
                         x: ix,
                         y: iy,
-                        modifiers: gdk_mods_to_cef(click_release.current_event_state()),
+                        modifiers: gdk_mods_to_cef(click_ref.current_event_state()),
                     };
                     host.send_mouse_click_event(Some(&ev), btn, 1, n_press.clamp(1, 3));
                 }
@@ -990,9 +1034,14 @@ impl BrowserView {
         // 4. Rueda de desplazamiento y zoom con Ctrl + rueda.
         {
             let scroll = EventControllerScroll::new(ScrollFlags::BOTH_AXES);
-            let v_scroll = self.clone();
-            let scroll_ref = scroll.clone();
+            let weak_scroll = self.downgrade();
+            let scroll_weak = scroll.downgrade();
             scroll.connect_scroll(move |dx, dy| {
+                let (Some(v_scroll), Some(scroll_ref)) =
+                    (Self::upgrade_weak(&weak_scroll), scroll_weak.upgrade())
+                else {
+                    return false;
+                };
                 let mods = scroll_ref.current_event_state();
                 if mods.contains(ModifierType::CONTROL_MASK) && dy.abs() > f64::EPSILON {
                     if dy < 0.0 {
@@ -1025,8 +1074,11 @@ impl BrowserView {
         // 5. Gestos táctiles horizontales atrás/adelante (`Swipe.swift`).
         {
             let swipe = GestureSwipe::new();
-            let v_swipe = self.clone();
+            let weak_swipe = self.downgrade();
             swipe.connect_swipe(move |vx, vy| {
+                let Some(v_swipe) = Self::upgrade_weak(&weak_swipe) else {
+                    return;
+                };
                 if vx.abs() > 480.0 && vx.abs() > vy.abs() * 2.0 {
                     if vx > 0.0 {
                         v_swipe.go_back();
@@ -1041,14 +1093,20 @@ impl BrowserView {
         // 6. Foco de teclado.
         {
             let focus = EventControllerFocus::new();
-            let v_in = self.clone();
+            let weak_in = self.downgrade();
             focus.connect_enter(move || {
+                let Some(v_in) = Self::upgrade_weak(&weak_in) else {
+                    return;
+                };
                 if let Some(host) = v_in.host() {
                     host.set_focus(1);
                 }
             });
-            let v_out = self.clone();
+            let weak_out = self.downgrade();
             focus.connect_leave(move || {
+                let Some(v_out) = Self::upgrade_weak(&weak_out) else {
+                    return;
+                };
                 if let Some(host) = v_out.host() {
                     host.set_focus(0);
                 }
@@ -1059,8 +1117,11 @@ impl BrowserView {
         // 7. Teclado y entrada de texto.
         {
             let key = EventControllerKey::new();
-            let v_down = self.clone();
+            let weak_down = self.downgrade();
             key.connect_key_pressed(move |keyval, keycode, raw_state| {
+                let Some(v_down) = Self::upgrade_weak(&weak_down) else {
+                    return false;
+                };
                 let mods = ModifierType::from_bits_truncate(raw_state);
                 if should_propagate_shortcut_to_window(
                     keyval,
@@ -1133,8 +1194,11 @@ impl BrowserView {
                 true
             });
 
-            let v_up = self.clone();
+            let weak_up = self.downgrade();
             key.connect_key_released(move |keyval, keycode, raw_state| {
+                let Some(v_up) = Self::upgrade_weak(&weak_up) else {
+                    return;
+                };
                 let mods = ModifierType::from_bits_truncate(raw_state);
                 let Some(host) = v_up.host() else {
                     return;
@@ -2776,5 +2840,58 @@ fn cef_cursor_to_css_name(cursor: CursorType) -> &'static str {
         "ns-resize"
     } else {
         "default"
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn ipc_prefix_ordering_allows_curtain_reader_and_vault_without_collision() {
+        let ipc_nonce = "0123456789abcdef0123456789abcdef";
+        let page_ipc_prefix = format!("__search_ipc_{ipc_nonce}:");
+        let curtain_msg = format!("{page_ipc_prefix}{}", r#"{"kind":"curtain_off"}"#);
+        let reader_msg = format!(
+            "{page_ipc_prefix}{}",
+            r#"{"kind":"reader_article","ok":false,"reason":"empty"}"#
+        );
+        let vault_msg = format!("{IPC_PREFIX}vault_token_123:{{}}");
+
+        assert!(curtain_msg.starts_with(IPC_PREFIX));
+        assert!(curtain_msg.strip_prefix(&page_ipc_prefix).is_some());
+        assert!(reader_msg.strip_prefix(&page_ipc_prefix).is_some());
+        assert!(vault_msg.strip_prefix(&page_ipc_prefix).is_none());
+        assert!(vault_msg.starts_with(IPC_PREFIX));
+    }
+
+    #[test]
+    fn weak_gtk_controller_closures_break_rc_cycles() {
+        let _guard = crate::GTK_TEST_MUTEX
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        if !gnome_platform::init() || gnome_platform::gdk::Display::default_display().is_none() {
+            return;
+        }
+        let picture = Picture::new();
+        let state = Rc::new(Cell::new(1usize));
+        let weak_state = Rc::downgrade(&state);
+
+        let motion = EventControllerMotion::new();
+        let weak_motion = motion.downgrade();
+        let state_in_cb = weak_state.clone();
+        let motion_in_cb = weak_motion.clone();
+        motion.connect_motion(move |_x, _y| {
+            let _ = (state_in_cb.upgrade(), motion_in_cb.upgrade());
+        });
+        picture.add_controller(&motion);
+        drop(motion);
+
+        assert_eq!(Weak::strong_count(&weak_state), 1);
+        drop(state);
+        assert_eq!(Weak::strong_count(&weak_state), 0);
+
+        drop(picture);
+        assert!(weak_motion.upgrade().is_none());
     }
 }

@@ -14,7 +14,7 @@
 | 7 — Bench, D-Bus, tests | ✅ | `9738c46` | 2026-11-18 | Socket Unix `bench.sock` (`0600`, `SO_PEERCRED`, desactivado por defecto / `SEARCH_BENCH=1`, GLib non-blocking), D-Bus `io.github.searchlinux.Search1` vía `GDBus` + `HANDLES_OPEN`, tests headless en Rust puro (`headless_integration.rs` + `scripts/test-headless.sh`) y mediciones reales `--release` en `PORTING.md` §12 (`435 ms` ventana / `500 ms` OSR, `885,7 MiB` 1 pestaña). |
 | 8 — Empaquetado y CI | ✅ | `83163b2` | 2026-11-18 | Botón «Hacer navegador predeterminado» (`xdg-settings`) y estado/comprobación de `search_core::updater` (desactivado en Flatpak `/.flatpak-info`) cableados en `plasma://settings`, más `README.md` con lista final de flags y `SEARCH_CHROMIUM_FLAGS`. |
 | 9 — Extensiones | ✅ | `83163b2` | 2026-11-18 | Paso 2B aplicado tras verificar que CEF 156 Alloy/OSR (`CEF_RUNTIME_STYLE_ALLOY`) no soporta `CefExtension` ni MV3 sin UI de Chrome: `search_core::crx` + `ExtensionStore` (`$XDG_DATA_HOME/search/extensions`) cableados tras `extensions_enabled = false` en `settings.rs` y `plasma://settings`, documentado en `PORTING.md` §13 y `README.md`. |
-| 10 — Revisión final | ⬜ | | | |
+| 10 — Revisión final | ✅ | `—` | 2026-11-18 | Auditoría integral (`REVISION.md`, `ISSUES.md`), verificación de orden de prefijos IPC, corrección de ciclos `Rc` ↔ `GObject` (`GWeakRef` en `gnome-platform`, `Weak` en `browser_view.rs`/`window.rs`/`actions.rs`/`tab_switcher.rs`, `unsubscribe` en `SettingsStore`/`PinFoldersManager`), corrección del pánico reentrante `RefCell` en `window.rs` al cerrar y suite completa (`fmt`, `clippy`, `test`, `--release`, `test-headless.sh`) en verde. |
 
 Leyenda: ⬜ pendiente · 🟡 en curso · ✅ hecha · ⚠️ hecha con pendientes
 

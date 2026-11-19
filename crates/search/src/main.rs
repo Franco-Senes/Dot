@@ -101,6 +101,9 @@ fn main() -> ExitCode {
     }
 }
 
+#[cfg(test)]
+pub(crate) static GTK_TEST_MUTEX: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
 enum CliParseOutcome {
     Run(CliOptions),
     ExitZero,

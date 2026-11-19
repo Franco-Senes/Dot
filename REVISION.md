@@ -2,7 +2,7 @@
 
 Revisión integral de seguridad, privacidad, corrección, rendimiento, arquitectura y cumplimiento de `AGENTS.md` sobre el workspace Rust (`gnome-platform`, `search-core`, `search`, `search-bench`, `xtask`).
 
-> **Resumen ejecutivo:** Se identificaron **2 hallazgos Críticos** (ambos **corregidos en Fase 10**: el orden de prefijos IPC heredado de Fase 5/4 ya resuelto en `feat/phase7-bench-dbus` `9738c46` y los ciclos de referencia `Rc` ↔ `GObject` resueltos en la integración de Fase 10), **2 Altos**, **6 Medios** (dos de ellos —`bench.rs` y `dbus.rs`— ya implementados en `feat/phase7-bench-dbus` `9738c46`) y **4 Bajos**. Todos los puntos no críticos pendientes quedan registrados como tareas accionables en [`ISSUES.md`](ISSUES.md).
+> **Resumen ejecutivo:** Se identificaron **3 hallazgos Críticos** (todos **corregidos en Fase 10**: el orden de prefijos IPC heredado de Fase 5/4 ya resuelto en `feat/phase7-bench-dbus` `9738c46`, los ciclos de referencia `Rc` ↔ `GObject` y el pánico reentrante de `RefCell` en `window.rs:1864` durante el cierre), **2 Altos**, **6 Medios** (dos de ellos —`bench.rs` y `dbus.rs`— ya implementados en `feat/phase7-bench-dbus` `9738c46`) y **4 Bajos**. Todos los puntos no críticos pendientes quedan registrados como tareas accionables en [`ISSUES.md`](ISSUES.md).
 
 ---
 
@@ -21,7 +21,12 @@ Revisión integral de seguridad, privacidad, corrección, rendimiento, arquitect
   - `crates/search/src/window.rs:572, 578, 2974-3018, 3045, 3092, 3256`: `wire_signals` capturaba `Rc<WindowState>` fuertemente en señales de `address_bar`, `side_split`, `find_bar`, `tab_view` y `window.connect_close_request`; además, `window.rs:572, 578` se suscribían a `SettingsStore` y `PinFoldersManager` sin `unsubscribe`.
   - `crates/search/src/tab_switcher.rs:195-202`: `key.connect_key_pressed` capturaba `dialog.clone()` y `list_box.clone()`, creando un ciclo `AdwDialog` ↔ `EventControllerKey` en cada apertura de `Ctrl+Tab`.
 - **Por qué importa:** Cada pestaña cerrada, ventana cerrada o diálogo `Ctrl+Tab` retenía en memoria el estado Rust, los widgets GTK y la última `GdkMemoryTexture` OSR sin liberarse nunca.
-- **Cómo arreglarlo / Estado:** **Corregido en Fase 10** añadiendo `WeakRef` (`GWeakRef`) en `crates/gnome-platform/src/object.rs`, sustituyendo capturas fuertes por referencias débiles en señales GTK, limpiando `picture.set_texture(None)`/`callbacks` al cerrar la pestaña y desuscribiendo los observadores al cerrar la ventana.
+- **Cómo arreglarlo / Estado:** **Corregido en Fase 10** añadiendo `WeakRef` (`GWeakRef`) en `crates/gnome-platform/src/object.rs`, sustituyendo capturas fuertes por referencias débiles en señales GTK (`browser_view.rs`, `window.rs`, `actions.rs`, `tab_switcher.rs`), limpiando `picture.set_texture(None)`/`callbacks` al cerrar la pestaña y desuscribiendo los observadores (`SettingsStore`/`PinFoldersManager`) al cerrar la ventana, con tests unitarios que verifican `Weak::strong_count() == 0`.
+
+### C-3. Pánico reentrante `RefCell already mutably borrowed` al cerrar (`window.rs:1864`) — **CORREGIDO en Fase 10**
+- **Ubicación:** `crates/search/src/window.rs` (`close_all_browsers`, `put_tab_to_sleep`, `mount_settings_page_in_tab`).
+- **Problema:** `close_all_browsers` mantenía `self.inner.tabs.borrow_mut()` mientras invocaba `bv.close_browser()`, cuya cascada de cierre en CEF/GTK podía reentrar en `selected_tab_id()` (`self.inner.tabs.borrow()`), provocando `RefCell already mutably borrowed` durante `headless_session_save_and_lazy_restore`.
+- **Cómo arreglarlo / Estado:** **Corregido en Fase 10** extrayendo los `BrowserView` de `self.inner.tabs` y soltando el `RefMut` antes de llamar a `bv.close_browser()`.
 
 ---
 

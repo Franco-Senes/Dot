@@ -12,6 +12,7 @@ use gnome_platform::gtk::{
     Label, ListBox, ListBoxRow, Orientation, PolicyType, PropagationPhase, ScrolledWindow,
     SearchEntry, SelectionMode,
 };
+use gnome_platform::object::ObjectSubclass;
 use search_core::address::sanitize_url_for_ui;
 use search_core::fuzzy::fuzzy_match_tab;
 use std::cell::{Cell, RefCell};
@@ -40,6 +41,12 @@ pub struct TabSwitcherCallbacks {
 
 /// Abre el diálogo centrado `Ctrl+K` sobre `parent`.
 pub fn present_tab_switcher(parent: &ApplicationWindow, callbacks: TabSwitcherCallbacks) {
+    let (dialog, search) = build_tab_switcher_dialog(callbacks);
+    dialog.present(Some(parent));
+    search.grab_focus();
+}
+
+fn build_tab_switcher_dialog(callbacks: TabSwitcherCallbacks) -> (Dialog, SearchEntry) {
     let dialog = Dialog::new();
     dialog.set_title("Cambiar de pestaña");
     dialog.set_content_width(580);
@@ -82,11 +89,15 @@ pub fn present_tab_switcher(parent: &ApplicationWindow, callbacks: TabSwitcherCa
 
     let refresh = {
         let cbs_ref = cbs.clone();
-        let list_ref = list_box.clone();
+        let list_weak = list_box.downgrade();
         let filt_ref = filtered.clone();
         let sel_ref = selected_idx.clone();
-        let search_ref = search.clone();
+        let search_weak = search.downgrade();
         Rc::new(move |preferred_index: Option<usize>| {
+            let (Some(list_ref), Some(search_ref)) = (list_weak.upgrade(), search_weak.upgrade())
+            else {
+                return;
+            };
             let query = search_ref.text();
             let all_tabs = (cbs_ref.list_tabs)();
 
@@ -137,14 +148,16 @@ pub fn present_tab_switcher(parent: &ApplicationWindow, callbacks: TabSwitcherCa
 
     // Enter desde el cuadro de búsqueda activa la fila seleccionada.
     {
-        let dialog_act = dialog.clone();
+        let dialog_weak = dialog.downgrade();
         let cbs_act = cbs.clone();
         let filt_act = filtered.clone();
         let sel_act = selected_idx.clone();
         search.connect_activate(move || {
             let item = filt_act.borrow().get(sel_act.get()).cloned();
             if let Some(it) = item {
-                dialog_act.force_close();
+                if let Some(dialog_act) = dialog_weak.upgrade() {
+                    dialog_act.force_close();
+                }
                 (cbs_act.on_activate)(it.window_id, it.tab_id);
             }
         });
@@ -152,15 +165,17 @@ pub fn present_tab_switcher(parent: &ApplicationWindow, callbacks: TabSwitcherCa
 
     // Esc desde el cuadro de búsqueda cierra el selector.
     {
-        let dialog_stop = dialog.clone();
+        let dialog_weak = dialog.downgrade();
         search.connect_stop_search(move || {
-            dialog_stop.force_close();
+            if let Some(dialog_stop) = dialog_weak.upgrade() {
+                dialog_stop.force_close();
+            }
         });
     }
 
     // Clic sobre una fila activa esa pestaña.
     {
-        let dialog_row = dialog.clone();
+        let dialog_weak = dialog.downgrade();
         let cbs_row = cbs.clone();
         let filt_row = filtered.clone();
         list_box.connect_row_activated(move |row| {
@@ -168,7 +183,9 @@ pub fn present_tab_switcher(parent: &ApplicationWindow, callbacks: TabSwitcherCa
             if idx >= 0 {
                 let item = filt_row.borrow().get(idx as usize).cloned();
                 if let Some(it) = item {
-                    dialog_row.force_close();
+                    if let Some(dialog_row) = dialog_weak.upgrade() {
+                        dialog_row.force_close();
+                    }
                     (cbs_row.on_activate)(it.window_id, it.tab_id);
                 }
             }
@@ -192,8 +209,8 @@ pub fn present_tab_switcher(parent: &ApplicationWindow, callbacks: TabSwitcherCa
     {
         let key = EventControllerKey::new();
         key.set_propagation_phase(PropagationPhase::Capture);
-        let dialog_key = dialog.clone();
-        let list_key = list_box.clone();
+        let dialog_weak = dialog.downgrade();
+        let list_weak = list_box.downgrade();
         let filt_key = filtered.clone();
         let sel_key = selected_idx.clone();
         let cbs_key = cbs.clone();
@@ -206,7 +223,9 @@ pub fn present_tab_switcher(parent: &ApplicationWindow, callbacks: TabSwitcherCa
             let count = filt_key.borrow().len();
 
             if keyval == gdk::keys::ESCAPE {
-                dialog_key.force_close();
+                if let Some(dialog_key) = dialog_weak.upgrade() {
+                    dialog_key.force_close();
+                }
                 return true;
             }
 
@@ -214,8 +233,10 @@ pub fn present_tab_switcher(parent: &ApplicationWindow, callbacks: TabSwitcherCa
                 if count > 0 {
                     let next = (sel_key.get() + 1) % count;
                     sel_key.set(next);
-                    if let Some(row) = list_key.row_at_index(next as i32) {
-                        list_key.select_row(Some(&row));
+                    if let Some(list_key) = list_weak.upgrade() {
+                        if let Some(row) = list_key.row_at_index(next as i32) {
+                            list_key.select_row(Some(&row));
+                        }
                     }
                 }
                 return true;
@@ -229,8 +250,10 @@ pub fn present_tab_switcher(parent: &ApplicationWindow, callbacks: TabSwitcherCa
                         sel_key.get() - 1
                     };
                     sel_key.set(prev);
-                    if let Some(row) = list_key.row_at_index(prev as i32) {
-                        list_key.select_row(Some(&row));
+                    if let Some(list_key) = list_weak.upgrade() {
+                        if let Some(row) = list_key.row_at_index(prev as i32) {
+                            list_key.select_row(Some(&row));
+                        }
                     }
                 }
                 return true;
@@ -239,7 +262,9 @@ pub fn present_tab_switcher(parent: &ApplicationWindow, callbacks: TabSwitcherCa
             if keyval == gdk::keys::RETURN || keyval == gdk::keys::KP_ENTER {
                 let item = filt_key.borrow().get(sel_key.get()).cloned();
                 if let Some(it) = item {
-                    dialog_key.force_close();
+                    if let Some(dialog_key) = dialog_weak.upgrade() {
+                        dialog_key.force_close();
+                    }
                     (cbs_key.on_activate)(it.window_id, it.tab_id);
                 }
                 return true;
@@ -261,8 +286,7 @@ pub fn present_tab_switcher(parent: &ApplicationWindow, callbacks: TabSwitcherCa
         root.add_controller(&key);
     }
 
-    dialog.present(Some(parent));
-    search.grab_focus();
+    (dialog, search)
 }
 
 fn build_switcher_row(item: &SwitcherTabItem) -> ListBoxRow {
@@ -341,4 +365,28 @@ fn build_switcher_row(item: &SwitcherTabItem) -> ListBoxRow {
 
     row.set_child(Some(&hbox));
     row
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn tab_switcher_dialog_has_no_reference_cycle() {
+        let _guard = crate::GTK_TEST_MUTEX
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        if !gnome_platform::init() || gnome_platform::gdk::Display::default_display().is_none() {
+            return;
+        }
+        let (dialog, _search) = build_tab_switcher_dialog(TabSwitcherCallbacks {
+            list_tabs: Box::new(Vec::new),
+            on_activate: Box::new(|_, _| {}),
+            on_close_tab: Box::new(|_, _| false),
+        });
+        let weak = dialog.downgrade();
+        assert!(weak.upgrade().is_some());
+        drop(dialog);
+        assert!(weak.upgrade().is_none());
+    }
 }

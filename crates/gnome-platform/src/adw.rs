@@ -1689,3 +1689,5 @@ impl ActionRow {
         }
     }
 }
+
+crate::object::impl_object_subclass!(ApplicationWindow, Dialog, OverlaySplitView, TabView,);

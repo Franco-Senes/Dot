@@ -54,7 +54,7 @@ use search_core::session::{now_unix_secs, ClosedTab, PinStyle, SessionTab, Sessi
 use search_core::settings::{AppSettings, NewTabPosition, UiMotion};
 use search_core::split::TabSplit;
 use std::cell::{Cell, RefCell};
-use std::rc::Rc;
+use std::rc::{Rc, Weak};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
@@ -239,6 +239,8 @@ struct WindowState {
     folded: Cell<bool>,
     suppress_auto_wake: Cell<bool>,
     closing_window: Cell<bool>,
+    settings_sub_id: Cell<Option<u64>>,
+    pin_folders_sub_id: Cell<Option<u64>>,
     callbacks: WindowCallbacks,
 }
 
@@ -247,7 +249,23 @@ pub struct BrowserWindow {
     inner: Rc<WindowState>,
 }
 
+#[derive(Clone)]
+pub struct WeakBrowserWindow {
+    inner: Weak<WindowState>,
+}
+
+impl WeakBrowserWindow {
+    pub fn upgrade(&self) -> Option<BrowserWindow> {
+        self.inner.upgrade().map(|inner| BrowserWindow { inner })
+    }
+}
+
 impl BrowserWindow {
+    pub fn downgrade(&self) -> WeakBrowserWindow {
+        WeakBrowserWindow {
+            inner: Rc::downgrade(&self.inner),
+        }
+    }
     pub fn new(
         app: &Application,
         request_context: RequestContext,
@@ -519,6 +537,8 @@ impl BrowserWindow {
                 folded: Cell::new(false),
                 suppress_auto_wake: Cell::new(false),
                 closing_window: Cell::new(false),
+                settings_sub_id: Cell::new(None),
+                pin_folders_sub_id: Cell::new(None),
                 callbacks,
             }),
         };
@@ -568,21 +588,29 @@ impl BrowserWindow {
 
         // Suscripción en vivo para aplicar cambios de disposición, tema, tarjetas y movimiento sin reiniciar.
         {
-            let w_sub = bw.clone();
-            settings.subscribe(move |updated| {
-                w_sub.apply_layout_from_settings(updated);
+            let w_sub = bw.downgrade();
+            let sub_id = settings.subscribe(move |updated| {
+                if let Some(w) = w_sub.upgrade() {
+                    w.apply_layout_from_settings(updated);
+                }
             });
+            bw.inner.settings_sub_id.set(Some(sub_id));
         }
         {
-            let w_pf = bw.clone();
-            bw.inner.stores.pin_folders.subscribe(move || {
-                w_pf.sync_sidebar();
+            let w_pf = bw.downgrade();
+            let sub_id = bw.inner.stores.pin_folders.subscribe(move || {
+                if let Some(w) = w_pf.upgrade() {
+                    w.sync_sidebar();
+                }
             });
+            bw.inner.pin_folders_sub_id.set(Some(sub_id));
         }
         {
-            let w_dark = bw.clone();
+            let w_dark = bw.downgrade();
             bw.inner.app.style_manager().connect_dark_notify(move || {
-                w_dark.refresh_theme_icons();
+                if let Some(w) = w_dark.upgrade() {
+                    w.refresh_theme_icons();
+                }
             });
         }
 
@@ -1835,6 +1863,12 @@ impl BrowserWindow {
 
     /// Cierra limpiamente todos los `cef::Browser` activos de esta ventana (p. ej. al salir).
     pub fn close_all_browsers(&self) {
+        if let Some(id) = self.inner.settings_sub_id.take() {
+            self.inner.settings.unsubscribe(id);
+        }
+        if let Some(id) = self.inner.pin_folders_sub_id.take() {
+            self.inner.stores.pin_folders.unsubscribe(id);
+        }
         self.hide_toast();
         self.inner.address_bar.cleanup();
         self.inner.sidebar_tabs.cleanup();
@@ -1849,11 +1883,12 @@ impl BrowserWindow {
         if let Some(pop) = self.inner.active_popover.borrow_mut().take() {
             pop.unparent();
         }
-        let mut tabs = self.inner.tabs.borrow_mut();
-        for tab in tabs.iter_mut() {
-            if let Some(bv) = tab.browser.take() {
-                bv.close_browser();
-            }
+        let browsers: Vec<_> = {
+            let mut tabs = self.inner.tabs.borrow_mut();
+            tabs.iter_mut().filter_map(|t| t.browser.take()).collect()
+        };
+        for bv in browsers {
+            bv.close_browser();
         }
     }
 
@@ -1877,30 +1912,36 @@ impl BrowserWindow {
     }
 
     fn put_tab_to_sleep(&self, tab_id: u64) {
-        let mut tabs = self.inner.tabs.borrow_mut();
-        let Some(tab) = tabs.iter_mut().find(|t| t.id == tab_id) else {
-            return;
-        };
-        if let Some(bv) = tab.browser.take() {
-            tab.slot.remove(bv.widget());
-            bv.close_browser();
-        }
-        tab.loading = false;
-        tab.audible = false;
-        tab.page.set_loading(false);
-        Self::apply_page_audio_indicator(&tab.page, false, tab.muted);
-    }
-
-    fn mount_settings_page_in_tab(&self, tab_id: u64, canonical_url: &str, section: Option<&str>) {
-        let dark = self.inner.app.style_manager().is_dark();
-        let existing_sp = {
+        let taken_bv = {
             let mut tabs = self.inner.tabs.borrow_mut();
             let Some(tab) = tabs.iter_mut().find(|t| t.id == tab_id) else {
                 return;
             };
-            if let Some(bv) = tab.browser.take() {
-                tab.slot.remove(bv.widget());
-                bv.close_browser();
+            let bv = tab.browser.take();
+            if let Some(ref view) = bv {
+                tab.slot.remove(view.widget());
+            }
+            tab.loading = false;
+            tab.audible = false;
+            tab.page.set_loading(false);
+            Self::apply_page_audio_indicator(&tab.page, false, tab.muted);
+            bv
+        };
+        if let Some(bv) = taken_bv {
+            bv.close_browser();
+        }
+    }
+
+    fn mount_settings_page_in_tab(&self, tab_id: u64, canonical_url: &str, section: Option<&str>) {
+        let dark = self.inner.app.style_manager().is_dark();
+        let (existing_sp, taken_bv) = {
+            let mut tabs = self.inner.tabs.borrow_mut();
+            let Some(tab) = tabs.iter_mut().find(|t| t.id == tab_id) else {
+                return;
+            };
+            let bv = tab.browser.take();
+            if let Some(ref view) = bv {
+                tab.slot.remove(view.widget());
             }
             tab.url = canonical_url.to_string();
             tab.title = "Ajustes".to_string();
@@ -1915,8 +1956,11 @@ impl BrowserWindow {
             tab.page
                 .set_icon(Some(&icons::gicon(IconId::Settings, dark)));
             Self::apply_page_audio_indicator(&tab.page, false, false);
-            (tab.settings_page.clone(), tab.slot.clone())
+            ((tab.settings_page.clone(), tab.slot.clone()), bv)
         };
+        if let Some(bv) = taken_bv {
+            bv.close_browser();
+        }
 
         if let Some(sp) = existing_sp.0 {
             if let Some(sec) = section {
@@ -2957,24 +3001,31 @@ impl BrowserWindow {
         // Barra de direcciones: envío, autocompletado unificado, cambio de pestaña,
         // borrado con Shift+Supr y tecla Escape.
         {
-            let w = self.clone();
+            let weak = self.downgrade();
             self.inner.address_bar.connect_submit(move |typed| {
-                w.navigate_typed_input(&typed);
-            });
-        }
-        {
-            let w = self.clone();
-            self.inner.address_bar.connect_escape(move || {
-                if let Some(bv) = w.active_browser_view() {
-                    bv.grab_focus();
+                if let Some(w) = weak.upgrade() {
+                    w.navigate_typed_input(&typed);
                 }
             });
         }
         {
-            let w = self.clone();
+            let weak = self.downgrade();
+            self.inner.address_bar.connect_escape(move || {
+                if let Some(w) = weak.upgrade() {
+                    if let Some(bv) = w.active_browser_view() {
+                        bv.grab_focus();
+                    }
+                }
+            });
+        }
+        {
+            let weak = self.downgrade();
             self.inner
                 .address_bar
                 .connect_suggest_provider(move |typed| {
+                    let Some(w) = weak.upgrade() else {
+                        return Vec::new();
+                    };
                     let open_tabs = w
                         .inner
                         .callbacks
@@ -2992,10 +3043,13 @@ impl BrowserWindow {
                 });
         }
         {
-            let w = self.clone();
+            let weak = self.downgrade();
             self.inner
                 .address_bar
                 .connect_switch_tab(move |win_id, tab_id| {
+                    let Some(w) = weak.upgrade() else {
+                        return;
+                    };
                     if let Some(ref cb) = w.inner.callbacks.on_switch_to_tab {
                         cb(win_id, tab_id);
                     } else if win_id == w.inner.id {
@@ -3004,16 +3058,21 @@ impl BrowserWindow {
                 });
         }
         {
-            let w = self.clone();
+            let weak = self.downgrade();
             self.inner.address_bar.connect_delete_history(move |key| {
-                w.inner.stores.history.remove_by_key(&key);
+                if let Some(w) = weak.upgrade() {
+                    w.inner.stores.history.remove_by_key(&key);
+                }
             });
         }
 
         // Sincronizar estado del panel lateral derecho al cerrarse haciendo clic fuera.
         {
-            let w = self.clone();
+            let weak = self.downgrade();
             self.inner.side_split.connect_show_sidebar_notify(move || {
+                let Some(w) = weak.upgrade() else {
+                    return;
+                };
                 if !w.inner.side_split.shows_sidebar() {
                     w.inner.active_panel.set(SidePanelKind::None);
                     if let Some(ref p) = *w.inner.history_panel.borrow() {
@@ -3031,65 +3090,80 @@ impl BrowserWindow {
 
         // Barra de búsqueda en página.
         {
-            let w = self.clone();
+            let weak = self.downgrade();
             self.inner
                 .find_bar
                 .connect_find(move |query, forward, find_next| {
-                    if let Some(bv) = w.ensure_active_browser_view() {
-                        bv.find(&query, forward, false, find_next);
+                    if let Some(w) = weak.upgrade() {
+                        if let Some(bv) = w.ensure_active_browser_view() {
+                            bv.find(&query, forward, false, find_next);
+                        }
                     }
                 });
         }
         {
-            let w = self.clone();
+            let weak = self.downgrade();
             self.inner.find_bar.connect_close(move || {
-                if let Some(bv) = w.active_browser_view() {
-                    bv.stop_finding(true);
-                    bv.grab_focus();
+                if let Some(w) = weak.upgrade() {
+                    if let Some(bv) = w.active_browser_view() {
+                        bv.stop_finding(true);
+                        bv.grab_focus();
+                    }
                 }
             });
         }
 
         // Señales del modelo único `AdwTabView`.
         {
-            let w = self.clone();
+            let weak = self.downgrade();
             self.inner.tab_view.connect_selected_page_notify(move || {
-                w.on_active_tab_changed();
+                if let Some(w) = weak.upgrade() {
+                    w.on_active_tab_changed();
+                }
             });
         }
         {
-            let w = self.clone();
+            let weak = self.downgrade();
             self.inner
                 .tab_view
                 .connect_page_reordered(move |_page, _pos| {
-                    w.sync_order_with_tab_view();
-                    w.sync_sidebar();
-                    w.notify_session_dirty();
-                });
-        }
-        {
-            let w = self.clone();
-            self.inner
-                .tab_view
-                .connect_indicator_activated(move |page| {
-                    if let Some(id) = w.tab_id_for_page(&page) {
-                        w.toggle_mute_tab(id);
+                    if let Some(w) = weak.upgrade() {
+                        w.sync_order_with_tab_view();
+                        w.sync_sidebar();
+                        w.notify_session_dirty();
                     }
                 });
         }
         {
-            let w = self.clone();
+            let weak = self.downgrade();
+            self.inner
+                .tab_view
+                .connect_indicator_activated(move |page| {
+                    if let Some(w) = weak.upgrade() {
+                        if let Some(id) = w.tab_id_for_page(&page) {
+                            w.toggle_mute_tab(id);
+                        }
+                    }
+                });
+        }
+        {
+            let weak = self.downgrade();
             self.inner.tab_view.connect_setup_menu(move |opt_page| {
-                if let Some(page) = opt_page {
-                    if let Some(id) = w.tab_id_for_page(&page) {
-                        w.populate_tab_context_menu(id);
+                if let Some(w) = weak.upgrade() {
+                    if let Some(page) = opt_page {
+                        if let Some(id) = w.tab_id_for_page(&page) {
+                            w.populate_tab_context_menu(id);
+                        }
                     }
                 }
             });
         }
         {
-            let w = self.clone();
+            let weak = self.downgrade();
             self.inner.tab_view.connect_close_page(move |page| {
+                let Some(w) = weak.upgrade() else {
+                    return false;
+                };
                 // Proteger siempre las pestañas fijadas contra cierre (clic central o botón).
                 if page.is_pinned() {
                     w.inner.tab_view.close_page_finish(&page, false);
@@ -3129,9 +3203,11 @@ impl BrowserWindow {
                 w.notify_session_dirty();
 
                 if w.inner.tab_view.n_pages() == 0 && !w.inner.closing_window.get() {
-                    let win_close = w.clone();
+                    let win_close = w.downgrade();
                     glib::idle_add_local_once(move || {
-                        win_close.inner.window.close();
+                        if let Some(w_close) = win_close.upgrade() {
+                            w_close.inner.window.close();
+                        }
                     });
                 }
                 true
@@ -3141,26 +3217,35 @@ impl BrowserWindow {
         // Callbacks de la barra lateral vertical (`SidebarTabs`).
         let mut scbs = SidebarCallbacks::default();
         {
-            let w = self.clone();
+            let weak = self.downgrade();
             scbs.on_select = Some(Box::new(move |id| {
-                w.select_tab_by_id(id);
+                if let Some(w) = weak.upgrade() {
+                    w.select_tab_by_id(id);
+                }
             }));
         }
         {
-            let w = self.clone();
+            let weak = self.downgrade();
             scbs.on_close = Some(Box::new(move |id| {
-                let _ = w.close_tab_by_id(id);
+                if let Some(w) = weak.upgrade() {
+                    let _ = w.close_tab_by_id(id);
+                }
             }));
         }
         {
-            let w = self.clone();
+            let weak = self.downgrade();
             scbs.on_toggle_mute = Some(Box::new(move |id| {
-                w.toggle_mute_tab(id);
+                if let Some(w) = weak.upgrade() {
+                    w.toggle_mute_tab(id);
+                }
             }));
         }
         {
-            let w = self.clone();
+            let weak = self.downgrade();
             scbs.on_context_menu = Some(Box::new(move |id, anchor, x, y| {
+                let Some(w) = weak.upgrade() else {
+                    return;
+                };
                 w.populate_tab_context_menu(id);
                 if let Some(old) = w.inner.active_popover.borrow_mut().take() {
                     old.unparent();
@@ -3180,8 +3265,11 @@ impl BrowserWindow {
             }));
         }
         {
-            let w = self.clone();
+            let weak = self.downgrade();
             scbs.on_reorder = Some(Box::new(move |src_id, dst_id| {
+                let Some(w) = weak.upgrade() else {
+                    return;
+                };
                 let pages = {
                     let tabs = w.inner.tabs.borrow();
                     let src = tabs
@@ -3205,56 +3293,73 @@ impl BrowserWindow {
             }));
         }
         {
-            let w = self.clone();
+            let weak = self.downgrade();
             scbs.on_drop_tab_into_folder = Some(Box::new(move |tab_id, folder_id| {
-                w.move_tab_to_folder(tab_id, Some(folder_id));
+                if let Some(w) = weak.upgrade() {
+                    w.move_tab_to_folder(tab_id, Some(folder_id));
+                }
             }));
         }
         {
-            let w = self.clone();
+            let weak = self.downgrade();
             scbs.on_new_tab = Some(Box::new(move || {
-                let _ = w.open_tab(None, true, false, false);
+                if let Some(w) = weak.upgrade() {
+                    let _ = w.open_tab(None, true, false, false);
+                }
             }));
         }
         {
-            let w = self.clone();
+            let weak = self.downgrade();
             scbs.on_open_settings = Some(Box::new(move || {
-                w.open_settings_tab(None);
+                if let Some(w) = weak.upgrade() {
+                    w.open_settings_tab(None);
+                }
             }));
         }
         {
-            let w = self.clone();
+            let weak = self.downgrade();
             scbs.on_create_folder = Some(Box::new(move |name, parent_id, move_tab_id| {
-                w.create_pin_folder(&name, parent_id.as_deref(), move_tab_id);
+                if let Some(w) = weak.upgrade() {
+                    w.create_pin_folder(&name, parent_id.as_deref(), move_tab_id);
+                }
             }));
         }
         {
-            let w = self.clone();
+            let weak = self.downgrade();
             scbs.on_rename_folder = Some(Box::new(move |folder_id, new_name| {
-                w.rename_pin_folder(&folder_id, &new_name);
+                if let Some(w) = weak.upgrade() {
+                    w.rename_pin_folder(&folder_id, &new_name);
+                }
             }));
         }
         {
-            let w = self.clone();
+            let weak = self.downgrade();
             scbs.on_delete_folder = Some(Box::new(move |folder_id| {
-                w.delete_pin_folder(&folder_id);
+                if let Some(w) = weak.upgrade() {
+                    w.delete_pin_folder(&folder_id);
+                }
             }));
         }
         {
-            let w = self.clone();
+            let weak = self.downgrade();
             scbs.on_toggle_folder_collapsed = Some(Box::new(move |folder_id, collapsed| {
-                w.inner
-                    .stores
-                    .pin_folders
-                    .set_collapsed_silent(&folder_id, collapsed);
+                if let Some(w) = weak.upgrade() {
+                    w.inner
+                        .stores
+                        .pin_folders
+                        .set_collapsed_silent(&folder_id, collapsed);
+                }
             }));
         }
         self.inner.sidebar_tabs.set_callbacks(scbs);
 
         // Al cerrarse la ventana: avisar al controlador (guarda sesión antes de destruir) y cerrar CEF.
         {
-            let w = self.clone();
+            let weak = self.downgrade();
             self.inner.window.connect_close_request(move || {
+                let Some(w) = weak.upgrade() else {
+                    return false;
+                };
                 w.inner.closing_window.set(true);
                 if w.inner.pip.is_active() {
                     w.inner.pip.close(false, true);

@@ -22,7 +22,8 @@ struct SettingsStoreInner {
     file_path: PathBuf,
     settings: AppSettings,
     gsettings: Option<gio::Settings>,
-    listeners: Vec<Listener>,
+    next_listener_id: u64,
+    listeners: Vec<(u64, Listener)>,
 }
 
 impl SettingsStore {
@@ -48,6 +49,7 @@ impl SettingsStore {
                 file_path,
                 settings,
                 gsettings,
+                next_listener_id: 1,
                 listeners: Vec::new(),
             })),
         }
@@ -79,14 +81,31 @@ impl SettingsStore {
             inner.settings.clone()
         };
 
-        let listeners: Vec<Listener> = self.inner.borrow().listeners.clone();
+        let listeners: Vec<Listener> = self
+            .inner
+            .borrow()
+            .listeners
+            .iter()
+            .map(|(_, l)| l.clone())
+            .collect();
         for listener in listeners {
             listener(&snapshot);
         }
     }
 
-    pub fn subscribe(&self, listener: impl Fn(&AppSettings) + 'static) {
-        self.inner.borrow_mut().listeners.push(Rc::new(listener));
+    pub fn subscribe(&self, listener: impl Fn(&AppSettings) + 'static) -> u64 {
+        let mut inner = self.inner.borrow_mut();
+        let id = inner.next_listener_id;
+        inner.next_listener_id += 1;
+        inner.listeners.push((id, Rc::new(listener)));
+        id
+    }
+
+    pub fn unsubscribe(&self, id: u64) {
+        self.inner
+            .borrow_mut()
+            .listeners
+            .retain(|(lid, _)| *lid != id);
     }
 }
 
@@ -189,4 +208,31 @@ fn push_to_gsettings(gs: &gio::Settings, s: &AppSettings) {
     let _ = gs.set_boolean("bench-enabled", s.bench_enabled);
     let _ = gs.set_boolean("update-check", s.update_check);
     let _ = gs.set_boolean("experimental-extensions", s.extensions_enabled);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::cell::Cell;
+    use std::rc::Weak;
+
+    #[test]
+    fn settings_subscribe_unsubscribe_drops_listener_rc() {
+        let dir =
+            std::env::temp_dir().join(format!("search-settings-unsub-test-{}", std::process::id()));
+        let _ = std::fs::create_dir_all(&dir);
+        let store = SettingsStore::load(dir.join("settings.json"));
+
+        let sentinel = Rc::new(Cell::new(0usize));
+        let weak = Rc::downgrade(&sentinel);
+        let sub_id = store.subscribe(move |_| {
+            sentinel.set(sentinel.get() + 1);
+        });
+        assert_eq!(Weak::strong_count(&weak), 1);
+
+        store.unsubscribe(sub_id);
+        assert_eq!(Weak::strong_count(&weak), 0);
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 }

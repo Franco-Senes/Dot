@@ -45,6 +45,21 @@ impl ObjectRef {
         Some(Self { ptr: nn })
     }
 
+    /// Adopta una referencia fuerte ya poseída (`transfer full`, p. ej. de `g_weak_ref_get`)
+    /// sin incrementar el contador de referencias.
+    ///
+    /// # Safety
+    /// `ptr` debe ser nulo o una instancia `GObject` válida cuya propiedad de referencia
+    /// se transfiere al llamador.
+    pub unsafe fn from_transfer_full(ptr: *mut c_void) -> Option<Self> {
+        let nn = NonNull::new(ptr)?;
+        Some(Self { ptr: nn })
+    }
+
+    pub fn downgrade(&self) -> WeakObjectRef {
+        WeakObjectRef::new(self)
+    }
+
     pub fn as_ptr(&self) -> *mut c_void {
         self.ptr.as_ptr()
     }
@@ -66,6 +81,94 @@ impl Drop for ObjectRef {
         }
     }
 }
+
+struct WeakRefInner {
+    raw: std::cell::UnsafeCell<sys::GWeakRef>,
+}
+
+impl Drop for WeakRefInner {
+    fn drop(&mut self) {
+        // SAFETY: `raw` fue inicializado con `g_weak_ref_init` y vive anclado en `Rc`.
+        unsafe {
+            sys::g_weak_ref_clear(self.raw.get());
+        }
+    }
+}
+
+/// Referencia débil (`GWeakRef`) sobre un `GObject` que no impide su destrucción.
+#[derive(Clone)]
+pub struct WeakObjectRef {
+    inner: std::rc::Rc<WeakRefInner>,
+}
+
+impl WeakObjectRef {
+    pub fn new(obj: &ObjectRef) -> Self {
+        let inner = std::rc::Rc::new(WeakRefInner {
+            raw: std::cell::UnsafeCell::new(unsafe { std::mem::zeroed() }),
+        });
+        // SAFETY: `inner` está en el heap (`Rc`) y su dirección no se moverá hasta `Drop`.
+        unsafe {
+            sys::g_weak_ref_init(inner.raw.get(), obj.as_ptr());
+        }
+        Self { inner }
+    }
+
+    pub fn upgrade(&self) -> Option<ObjectRef> {
+        // SAFETY: `g_weak_ref_get` devuelve una nueva referencia fuerte o NULL si el objeto ya murió.
+        let ptr = unsafe { sys::g_weak_ref_get(self.inner.raw.get()) };
+        unsafe { ObjectRef::from_transfer_full(ptr) }
+    }
+}
+
+/// Rasgo para envoltorios tipados de `GObject` que permiten crear referencias débiles (`WeakRef<T>`).
+pub trait ObjectSubclass: Clone {
+    fn as_object_ref(&self) -> &ObjectRef;
+    fn from_object_ref(obj: ObjectRef) -> Self;
+
+    fn downgrade(&self) -> WeakRef<Self> {
+        WeakRef {
+            inner: self.as_object_ref().downgrade(),
+            _marker: std::marker::PhantomData,
+        }
+    }
+}
+
+/// Referencia débil tipada sobre un envoltorio de `GObject`.
+pub struct WeakRef<T> {
+    inner: WeakObjectRef,
+    _marker: std::marker::PhantomData<T>,
+}
+
+impl<T> Clone for WeakRef<T> {
+    fn clone(&self) -> Self {
+        Self {
+            inner: self.inner.clone(),
+            _marker: std::marker::PhantomData,
+        }
+    }
+}
+
+impl<T: ObjectSubclass> WeakRef<T> {
+    pub fn upgrade(&self) -> Option<T> {
+        self.inner.upgrade().map(T::from_object_ref)
+    }
+}
+
+macro_rules! impl_object_subclass {
+    ($($ty:ty),* $(,)?) => {
+        $(
+            impl crate::object::ObjectSubclass for $ty {
+                fn as_object_ref(&self) -> &crate::object::ObjectRef {
+                    &self.obj
+                }
+                fn from_object_ref(obj: crate::object::ObjectRef) -> Self {
+                    Self { obj }
+                }
+            }
+        )*
+    };
+}
+pub(crate) use impl_object_subclass;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct SignalHandlerId(pub sys::gulong);

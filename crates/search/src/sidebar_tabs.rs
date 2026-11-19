@@ -35,7 +35,8 @@ struct PinFoldersManagerInner {
     file_path: PathBuf,
     store: PinFolderStore,
     save_debounce: Cell<Option<gnome_platform::glib::SourceId>>,
-    listeners: Vec<Listener>,
+    next_listener_id: u64,
+    listeners: Vec<(u64, Listener)>,
 }
 
 /// Almacén compartido de carpetas de pines estilo Arc con persistencia atómica y debounce (~1 s).
@@ -52,6 +53,7 @@ impl PinFoldersManager {
                 file_path,
                 store,
                 save_debounce: Cell::new(None),
+                next_listener_id: 1,
                 listeners: Vec::new(),
             })),
         }
@@ -104,8 +106,19 @@ impl PinFoldersManager {
         Some(promoted_parent)
     }
 
-    pub fn subscribe(&self, listener: impl Fn() + 'static) {
-        self.inner.borrow_mut().listeners.push(Rc::new(listener));
+    pub fn subscribe(&self, listener: impl Fn() + 'static) -> u64 {
+        let mut inner = self.inner.borrow_mut();
+        let id = inner.next_listener_id;
+        inner.next_listener_id += 1;
+        inner.listeners.push((id, Rc::new(listener)));
+        id
+    }
+
+    pub fn unsubscribe(&self, id: u64) {
+        self.inner
+            .borrow_mut()
+            .listeners
+            .retain(|(lid, _)| *lid != id);
     }
 
     pub fn flush_now(&self) {
@@ -143,7 +156,13 @@ impl PinFoldersManager {
     }
 
     fn notify_listeners(&self) {
-        let listeners: Vec<Listener> = self.inner.borrow().listeners.clone();
+        let listeners: Vec<Listener> = self
+            .inner
+            .borrow()
+            .listeners
+            .iter()
+            .map(|(_, l)| l.clone())
+            .collect();
         for cb in listeners {
             cb();
         }
@@ -1280,4 +1299,32 @@ fn attach_drag_and_drop(
         false
     });
     widget.add_controller(&drop);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::rc::Weak;
+
+    #[test]
+    fn pin_folders_subscribe_unsubscribe_drops_listener_rc() {
+        let dir = std::env::temp_dir().join(format!(
+            "search-pin-folders-unsub-test-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::create_dir_all(&dir);
+        let mgr = PinFoldersManager::load(dir.join("pin-folders.json"));
+
+        let sentinel = Rc::new(Cell::new(0usize));
+        let weak = Rc::downgrade(&sentinel);
+        let sub_id = mgr.subscribe(move || {
+            sentinel.set(sentinel.get() + 1);
+        });
+        assert_eq!(Weak::strong_count(&weak), 1);
+
+        mgr.unsubscribe(sub_id);
+        assert_eq!(Weak::strong_count(&weak), 0);
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 }

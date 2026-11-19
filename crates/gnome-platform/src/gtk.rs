@@ -2654,3 +2654,19 @@ impl AsWidget for AspectFrame {
         self.obj.as_ptr().cast()
     }
 }
+
+crate::object::impl_object_subclass!(
+    BoxWidget,
+    DrawingArea,
+    EventControllerFocus,
+    EventControllerKey,
+    EventControllerMotion,
+    EventControllerScroll,
+    GestureClick,
+    GestureSwipe,
+    ListBox,
+    Overlay,
+    Picture,
+    SearchEntry,
+    Window,
+);

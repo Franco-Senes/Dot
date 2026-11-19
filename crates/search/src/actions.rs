@@ -125,284 +125,166 @@ pub fn install_app_actions_and_accels(app: &Application, settings: &SettingsStor
 /// Registra todas las acciones de ventana (`win.*`) sobre `gtk_win`.
 pub fn install_window_actions(gtk_win: &ApplicationWindow, win: &BrowserWindow) {
     // Fase 1.
-    add_win_action(gtk_win, "focus-address", {
-        let w = win.clone();
-        move || w.focus_address_bar()
-    });
+    add_win_action(gtk_win, "focus-address", win, |w| w.focus_address_bar());
 
-    add_win_action(gtk_win, "reload", {
-        let w = win.clone();
-        move || {
-            if let Some(bv) = w.ensure_active_browser_view() {
-                bv.reload();
-            }
+    add_win_action(gtk_win, "reload", win, |w| {
+        if let Some(bv) = w.ensure_active_browser_view() {
+            bv.reload();
         }
     });
 
-    add_win_action(gtk_win, "reload-ignore-cache", {
-        let w = win.clone();
-        move || {
-            if let Some(bv) = w.ensure_active_browser_view() {
-                bv.reload_ignore_cache();
-            }
+    add_win_action(gtk_win, "reload-ignore-cache", win, |w| {
+        if let Some(bv) = w.ensure_active_browser_view() {
+            bv.reload_ignore_cache();
         }
     });
 
-    add_win_action(gtk_win, "stop-or-escape", {
-        let w = win.clone();
-        move || w.handle_escape()
-    });
+    add_win_action(gtk_win, "stop-or-escape", win, |w| w.handle_escape());
 
-    add_win_action(gtk_win, "go-back", {
-        let w = win.clone();
-        move || {
-            if let Some(bv) = w.active_browser_view() {
-                bv.go_back();
-            }
+    add_win_action(gtk_win, "go-back", win, |w| {
+        if let Some(bv) = w.active_browser_view() {
+            bv.go_back();
         }
     });
 
-    add_win_action(gtk_win, "go-forward", {
-        let w = win.clone();
-        move || {
-            if let Some(bv) = w.active_browser_view() {
-                bv.go_forward();
-            }
+    add_win_action(gtk_win, "go-forward", win, |w| {
+        if let Some(bv) = w.active_browser_view() {
+            bv.go_forward();
         }
     });
 
-    add_win_action(gtk_win, "find", {
-        let w = win.clone();
-        move || w.open_find_bar()
-    });
+    add_win_action(gtk_win, "find", win, |w| w.open_find_bar());
 
-    add_win_action(gtk_win, "find-next", {
-        let w = win.clone();
-        move || w.find_bar().find_next()
-    });
+    add_win_action(gtk_win, "find-next", win, |w| w.find_bar().find_next());
 
-    add_win_action(gtk_win, "find-prev", {
-        let w = win.clone();
-        move || w.find_bar().find_previous()
-    });
+    add_win_action(gtk_win, "find-prev", win, |w| w.find_bar().find_previous());
 
-    add_win_action(gtk_win, "zoom-in", {
-        let w = win.clone();
-        move || w.zoom_in()
-    });
+    add_win_action(gtk_win, "zoom-in", win, |w| w.zoom_in());
 
-    add_win_action(gtk_win, "zoom-out", {
-        let w = win.clone();
-        move || w.zoom_out()
-    });
+    add_win_action(gtk_win, "zoom-out", win, |w| w.zoom_out());
 
-    add_win_action(gtk_win, "zoom-reset", {
-        let w = win.clone();
-        move || w.zoom_reset()
-    });
+    add_win_action(gtk_win, "zoom-reset", win, |w| w.zoom_reset());
 
-    add_win_action(gtk_win, "dev-tools", {
-        let w = win.clone();
-        move || {
-            if let Some(bv) = w.ensure_active_browser_view() {
-                bv.toggle_dev_tools();
-            }
+    add_win_action(gtk_win, "dev-tools", win, |w| {
+        if let Some(bv) = w.ensure_active_browser_view() {
+            bv.toggle_dev_tools();
         }
     });
 
-    add_win_action(gtk_win, "copy-clean-url", {
-        let w = win.clone();
-        move || {
-            if let Some(bv) = w.active_browser_view() {
-                let current = bv.current_url();
-                if !current.is_empty() && current != "about:blank" {
-                    let cleaned = clean_link(&current);
-                    if let Some(display) = Display::default_display() {
-                        display.set_clipboard_text(&cleaned);
-                    }
+    add_win_action(gtk_win, "copy-clean-url", win, |w| {
+        if let Some(bv) = w.active_browser_view() {
+            let current = bv.current_url();
+            if !current.is_empty() && current != "about:blank" {
+                let cleaned = clean_link(&current);
+                if let Some(display) = Display::default_display() {
+                    display.set_clipboard_text(&cleaned);
                 }
             }
         }
     });
 
-    add_win_action(gtk_win, "paste-and-go", {
-        let w = win.clone();
-        move || {
-            if let Some(display) = Display::default_display() {
-                let w_async = w.clone();
-                display.read_clipboard_text_async(move |opt_text| {
-                    if let Some(text) = opt_text {
-                        let trimmed = text.trim();
-                        if !trimmed.is_empty() {
-                            w_async.navigate_typed_input(trimmed);
+    add_win_action(gtk_win, "paste-and-go", win, |w| {
+        if let Some(display) = Display::default_display() {
+            let w_async = w.downgrade();
+            display.read_clipboard_text_async(move |opt_text| {
+                if let Some(text) = opt_text {
+                    let trimmed = text.trim();
+                    if !trimmed.is_empty() {
+                        if let Some(w_live) = w_async.upgrade() {
+                            w_live.navigate_typed_input(trimmed);
                         }
                     }
-                });
-            }
+                }
+            });
         }
     });
 
-    add_win_action(gtk_win, "toggle-fullscreen", {
-        let w = win.clone();
-        move || w.toggle_fullscreen()
-    });
+    add_win_action(gtk_win, "toggle-fullscreen", win, |w| w.toggle_fullscreen());
 
     // Fase 2.
-    add_win_action(gtk_win, "new-tab", {
-        let w = win.clone();
-        move || {
-            let _ = w.open_tab(None, true, false, false);
-        }
+    add_win_action(gtk_win, "new-tab", win, |w| {
+        let _ = w.open_tab(None, true, false, false);
     });
 
-    add_win_action(gtk_win, "close-tab", {
-        let w = win.clone();
-        move || w.close_active_tab()
-    });
+    add_win_action(gtk_win, "close-tab", win, |w| w.close_active_tab());
 
-    add_win_action(gtk_win, "reopen-tab", {
-        let w = win.clone();
-        move || w.reopen_closed_tab()
-    });
+    add_win_action(gtk_win, "reopen-tab", win, |w| w.reopen_closed_tab());
 
-    add_win_action(gtk_win, "next-tab", {
-        let w = win.clone();
-        move || w.select_next_tab()
-    });
+    add_win_action(gtk_win, "next-tab", win, |w| w.select_next_tab());
 
-    add_win_action(gtk_win, "prev-tab", {
-        let w = win.clone();
-        move || w.select_previous_tab()
-    });
+    add_win_action(gtk_win, "prev-tab", win, |w| w.select_previous_tab());
 
     for idx in 1..=8 {
-        let w = win.clone();
         let name = format!("tab-{idx}");
-        add_win_action(gtk_win, &name, move || w.select_tab_shortcut(idx));
+        add_win_action(gtk_win, &name, win, move |w| w.select_tab_shortcut(idx));
     }
 
-    add_win_action(gtk_win, "tab-last", {
-        let w = win.clone();
-        move || w.select_tab_shortcut(9)
+    add_win_action(gtk_win, "tab-last", win, |w| w.select_tab_shortcut(9));
+
+    add_win_action(gtk_win, "tab-switcher", win, |w| w.open_tab_switcher());
+
+    add_win_action(gtk_win, "new-window", win, |w| w.request_new_window());
+
+    add_win_action(gtk_win, "new-private-window", win, |w| {
+        w.request_new_private_window()
     });
 
-    add_win_action(gtk_win, "tab-switcher", {
-        let w = win.clone();
-        move || w.open_tab_switcher()
-    });
+    add_win_action(gtk_win, "toggle-tab-layout", win, |w| w.toggle_tab_layout());
 
-    add_win_action(gtk_win, "new-window", {
-        let w = win.clone();
-        move || w.request_new_window()
-    });
+    add_win_action(gtk_win, "toggle-fold-tabs", win, |w| w.toggle_fold_tabs());
 
-    add_win_action(gtk_win, "new-private-window", {
-        let w = win.clone();
-        move || w.request_new_private_window()
-    });
+    add_win_action(gtk_win, "duplicate-tab", win, |w| w.duplicate_active_tab());
 
-    add_win_action(gtk_win, "toggle-tab-layout", {
-        let w = win.clone();
-        move || w.toggle_tab_layout()
-    });
+    add_win_action(gtk_win, "toggle-mute", win, |w| w.toggle_mute_active_tab());
 
-    add_win_action(gtk_win, "toggle-fold-tabs", {
-        let w = win.clone();
-        move || w.toggle_fold_tabs()
-    });
+    add_win_action(gtk_win, "open-settings", win, |w| w.open_settings_tab(None));
 
-    add_win_action(gtk_win, "duplicate-tab", {
-        let w = win.clone();
-        move || w.duplicate_active_tab()
-    });
-
-    add_win_action(gtk_win, "toggle-mute", {
-        let w = win.clone();
-        move || w.toggle_mute_active_tab()
-    });
-
-    add_win_action(gtk_win, "open-settings", {
-        let w = win.clone();
-        move || w.open_settings_tab(None)
-    });
-
-    add_win_action(gtk_win, "open-shortcuts", {
-        let w = win.clone();
-        move || present_shortcuts_dialog(w.gtk_window())
+    add_win_action(gtk_win, "open-shortcuts", win, |w| {
+        present_shortcuts_dialog(w.gtk_window())
     });
 
     // Fase 3.
-    add_win_action(gtk_win, "toggle-history", {
-        let w = win.clone();
-        move || w.toggle_history_panel()
+    add_win_action(gtk_win, "toggle-history", win, |w| w.toggle_history_panel());
+
+    add_win_action(gtk_win, "bookmark-page", win, |w| w.open_bookmark_popover());
+
+    add_win_action(gtk_win, "toggle-bookmarks", win, |w| {
+        w.toggle_bookmarks_panel()
     });
 
-    add_win_action(gtk_win, "bookmark-page", {
-        let w = win.clone();
-        move || w.open_bookmark_popover()
-    });
-
-    add_win_action(gtk_win, "toggle-bookmarks", {
-        let w = win.clone();
-        move || w.toggle_bookmarks_panel()
-    });
-
-    add_win_action(gtk_win, "toggle-downloads", {
-        let w = win.clone();
-        move || w.toggle_downloads_panel()
+    add_win_action(gtk_win, "toggle-downloads", win, |w| {
+        w.toggle_downloads_panel()
     });
 
     // Fase 4.
-    add_win_action(gtk_win, "toggle-reader", {
-        let w = win.clone();
-        move || w.toggle_reader_mode()
-    });
+    add_win_action(gtk_win, "toggle-reader", win, |w| w.toggle_reader_mode());
 
-    add_win_action(gtk_win, "curtain-pick", {
-        let w = win.clone();
-        move || w.toggle_curtain_picker()
-    });
+    add_win_action(gtk_win, "curtain-pick", win, |w| w.toggle_curtain_picker());
 
-    add_win_action(gtk_win, "toggle-curtain", {
-        let w = win.clone();
-        move || w.toggle_curtain_panel()
-    });
+    add_win_action(gtk_win, "toggle-curtain", win, |w| w.toggle_curtain_panel());
 
     // Fase 5.
-    add_win_action(gtk_win, "open-passwords", {
-        let w = win.clone();
-        move || w.open_passwords_panel()
-    });
+    add_win_action(gtk_win, "open-passwords", win, |w| w.open_passwords_panel());
 
     // Fase 6.
-    add_win_action(gtk_win, "split-tab", {
-        let w = win.clone();
-        move || w.split_current_tab(None)
+    add_win_action(gtk_win, "split-tab", win, |w| w.split_current_tab(None));
+
+    add_win_action(gtk_win, "split-focus-other", win, |w| {
+        w.focus_other_split_pane()
     });
 
-    add_win_action(gtk_win, "split-focus-other", {
-        let w = win.clone();
-        move || w.focus_other_split_pane()
+    add_win_action(gtk_win, "split-separate", win, |w| {
+        w.separate_active_split()
     });
 
-    add_win_action(gtk_win, "split-separate", {
-        let w = win.clone();
-        move || w.separate_active_split()
+    add_win_action(gtk_win, "split-swap", win, |w| w.swap_active_split());
+
+    add_win_action(gtk_win, "split-close-pane", win, |w| {
+        w.close_active_split_pane()
     });
 
-    add_win_action(gtk_win, "split-swap", {
-        let w = win.clone();
-        move || w.swap_active_split()
-    });
-
-    add_win_action(gtk_win, "split-close-pane", {
-        let w = win.clone();
-        move || w.close_active_split_pane()
-    });
-
-    add_win_action(gtk_win, "toggle-pip", {
-        let w = win.clone();
-        move || w.toggle_pip_for_active_tab()
+    add_win_action(gtk_win, "toggle-pip", win, |w| {
+        w.toggle_pip_for_active_tab()
     });
 }
 
@@ -498,8 +380,18 @@ pub fn present_shortcuts_dialog(parent: &ApplicationWindow) {
     dialog.present(Some(parent));
 }
 
-fn add_win_action(win: &ApplicationWindow, name: &str, cb: impl Fn() + 'static) {
+fn add_win_action(
+    gtk_win: &ApplicationWindow,
+    name: &str,
+    win: &BrowserWindow,
+    cb: impl Fn(&BrowserWindow) + 'static,
+) {
+    let weak = win.downgrade();
     let action = SimpleAction::new(name);
-    action.connect_activate(cb);
-    win.add_action(&action);
+    action.connect_activate(move || {
+        if let Some(w) = weak.upgrade() {
+            cb(&w);
+        }
+    });
+    gtk_win.add_action(&action);
 }
