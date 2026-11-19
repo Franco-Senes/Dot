@@ -10,7 +10,7 @@ use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
 use base64::Engine as _;
 use ring::digest::{Context as Sha256Context, SHA256};
 use ring::signature::{self, UnparsedPublicKey};
-use semver::Version;
+pub use semver::Version;
 use serde::{Deserialize, Serialize};
 use std::fs::File;
 use std::io::{self, Read};

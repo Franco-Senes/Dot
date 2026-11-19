@@ -7,6 +7,7 @@
 //!   y cero sobrecarga de CEF (100 % GTK4/libadwaita nativo).
 
 use crate::downloads::{default_system_downloads_dir, DownloadManager};
+use crate::extensions;
 use crate::history_ui::HistoryManager;
 use crate::icons::{self, IconId};
 use crate::settings::SettingsStore;
@@ -298,12 +299,20 @@ impl SettingsPage {
             &mut index,
             &mut register_icon,
         );
-        let p_perf =
-            build_performance_section(settings, &snap, dark, &mut index, &mut register_icon);
+        let p_perf = build_performance_section(
+            parent_window,
+            paths,
+            settings,
+            &snap,
+            dark,
+            &mut index,
+            &mut register_icon,
+        );
         let p_passwords =
             build_passwords_section(settings, &snap, dark, &mut index, &mut register_icon);
         let p_shortcuts = build_shortcuts_section(&mut index);
-        let p_about = build_about_section(paths, &mut index);
+        let p_about =
+            build_about_section(paths, settings, &snap, dark, &mut index, &mut register_icon);
 
         stack.add_named(&p_general, "general");
         stack.add_named(&p_appearance, "appearance");
@@ -804,10 +813,69 @@ fn build_general_section(
     def_group.set_title("Integración de escritorio");
     let def_row = ActionRow::new();
     def_row.set_title("Navegador web predeterminado");
-    def_row.set_subtitle(
-        "Configúralo en las Preferencias de tu escritorio o ejecuta: xdg-settings set default-web-browser io.github.searchlinux.Search.desktop",
-    );
     def_row.add_prefix(&make_prefix_icon(IconId::Globe, dark, register));
+
+    let initial_default_status = match std::process::Command::new("xdg-settings")
+        .args(["get", "default-web-browser"])
+        .output()
+    {
+        Ok(out) if out.status.success() => {
+            let current = String::from_utf8_lossy(&out.stdout).trim().to_string();
+            if current == "io.github.searchlinux.Search.desktop" {
+                "Search es actualmente tu navegador predeterminado.".to_string()
+            } else if current.is_empty() {
+                "No hay ningún navegador predeterminado configurado.".to_string()
+            } else {
+                format!("Actual: {current}")
+            }
+        }
+        Ok(_) => "No se pudo consultar el navegador predeterminado con xdg-settings.".to_string(),
+        Err(_) => {
+            "xdg-settings no está disponible; configúralo desde las preferencias de tu escritorio."
+                .to_string()
+        }
+    };
+    def_row.set_subtitle(&initial_default_status);
+
+    let set_default_btn = Button::with_label("Hacer navegador predeterminado");
+    set_default_btn.set_valign(Align::Center);
+    {
+        let row_ref = def_row.clone();
+        set_default_btn.connect_clicked(move || {
+            match std::process::Command::new("xdg-settings")
+                .args([
+                    "set",
+                    "default-web-browser",
+                    "io.github.searchlinux.Search.desktop",
+                ])
+                .output()
+            {
+                Ok(out) if out.status.success() => {
+                    row_ref.set_subtitle(
+                        "Search configurado como navegador predeterminado (io.github.searchlinux.Search.desktop).",
+                    );
+                }
+                Ok(out) => {
+                    let err_txt = String::from_utf8_lossy(&out.stderr).trim().to_string();
+                    let msg = if err_txt.is_empty() {
+                        format!(
+                            "xdg-settings devolvió código {}. Configúralo desde tu escritorio.",
+                            out.status.code().unwrap_or(-1)
+                        )
+                    } else {
+                        format!("No se pudo establecer: {err_txt}")
+                    };
+                    row_ref.set_subtitle(&msg);
+                }
+                Err(_) => {
+                    row_ref.set_subtitle(
+                        "xdg-settings no está disponible en este entorno; configúralo en tu escritorio.",
+                    );
+                }
+            }
+        });
+    }
+    def_row.add_suffix(&set_default_btn);
     def_group.add(&def_row);
     push_index(
         index,
@@ -1533,6 +1601,8 @@ fn build_privacy_section(
 // 5. Rendimiento y motor Chromium 156
 // ============================================================================
 fn build_performance_section(
+    parent_window: &ApplicationWindow,
+    paths: &SearchPaths,
     settings: &SettingsStore,
     snap: &search_core::settings::AppSettings,
     dark: bool,
@@ -1734,6 +1804,86 @@ fn build_performance_section(
     );
     col.append(&summary_group);
 
+    // Extensiones (experimental — Paso 2B)
+    let ext_group = PreferencesGroup::new();
+    ext_group.set_title("Extensiones de Chrome (experimental · desactivado por defecto)");
+
+    let ext_toggle_row = SwitchRow::new();
+    ext_toggle_row.set_title("Habilitar almacén experimental de extensiones CRX3");
+    ext_toggle_row.set_subtitle(extensions::runtime_limitation_summary());
+    ext_toggle_row.set_active(snap.extensions_enabled);
+    ext_group.add(&ext_toggle_row);
+
+    let ext_storage_row = ActionRow::new();
+    ext_storage_row.set_title("Almacén verificado de paquetes CRX3");
+    let ext_count = extensions::load_store(paths)
+        .map(|s| s.list().len())
+        .unwrap_or(0);
+    ext_storage_row.set_subtitle(&format!(
+        "{} · {ext_count} paquete(s) verificado(s) en disco (solo almacenamiento; ejecución MV3 no disponible en Alloy/OSR)",
+        extensions::storage_dir(paths).display()
+    ));
+    ext_storage_row.set_visible(snap.extensions_enabled);
+
+    let install_crx_btn = Button::with_label("Verificar .crx…");
+    install_crx_btn.set_valign(Align::Center);
+    {
+        let parent_ref = parent_window.clone();
+        let paths_ref = paths.clone();
+        let row_ref = ext_storage_row.clone();
+        install_crx_btn.connect_clicked(move || {
+            let dlg = FileDialog::new();
+            dlg.set_title("Seleccionar paquete de extensión (.crx)");
+            let p_done = paths_ref.clone();
+            let r_done = row_ref.clone();
+            dlg.open(Some(&parent_ref), move |opt_path| {
+                let Some(path) = opt_path else {
+                    return;
+                };
+                match extensions::install_crx_file(&p_done, &path, None) {
+                    Ok(ext) => {
+                        let count = extensions::load_store(&p_done)
+                            .map(|s| s.list().len())
+                            .unwrap_or(1);
+                        r_done.set_subtitle(&format!(
+                            "Verificada '{}' v{} (ID {}) · {count} paquete(s) en {}",
+                            ext.name,
+                            ext.version,
+                            ext.id,
+                            extensions::storage_dir(&p_done).display()
+                        ));
+                    }
+                    Err(err) => {
+                        r_done.set_subtitle(&format!("Paquete CRX3 rechazado: {err}"));
+                    }
+                }
+            });
+        });
+    }
+    ext_storage_row.add_suffix(&install_crx_btn);
+    ext_group.add(&ext_storage_row);
+
+    {
+        let st = settings.clone();
+        let row_ref = ext_toggle_row.clone();
+        let storage_ref = ext_storage_row.clone();
+        ext_toggle_row.connect_active_notify(move || {
+            let enabled = row_ref.is_active();
+            storage_ref.set_visible(enabled);
+            st.update(|s| s.extensions_enabled = enabled);
+        });
+    }
+
+    push_index(
+        index,
+        "performance",
+        "Rendimiento y motor",
+        "Extensiones de Chrome (CRX3 experimental)",
+        "Almacén CRX3 desactivado por defecto en CEF Alloy/OSR",
+        "extensiones extensions crx crx3 mv3 chrome experimental",
+    );
+    col.append(&ext_group);
+
     wrap_scrollable_section(&col)
 }
 
@@ -1908,7 +2058,14 @@ fn build_shortcuts_section(index: &mut Vec<SearchEntryItem>) -> ScrolledWindow {
 // ============================================================================
 // 8. Acerca de Search Linux
 // ============================================================================
-fn build_about_section(paths: &SearchPaths, index: &mut Vec<SearchEntryItem>) -> ScrolledWindow {
+fn build_about_section(
+    paths: &SearchPaths,
+    settings: &SettingsStore,
+    snap: &search_core::settings::AppSettings,
+    dark: bool,
+    index: &mut Vec<SearchEntryItem>,
+    register: &mut impl FnMut(&Image, IconId),
+) -> ScrolledWindow {
     let col = section_container(
         "Acerca de Search Linux",
         "Navegador web minimalista, rápido y privado para Linux escrito en Rust.",
@@ -1943,6 +2100,77 @@ fn build_about_section(paths: &SearchPaths, index: &mut Vec<SearchEntryItem>) ->
     info_group.add(&toolkit_row);
     col.append(&info_group);
 
+    // Actualizaciones firmadas (search_core::updater)
+    let updater_group = PreferencesGroup::new();
+    updater_group.set_title("Actualizaciones");
+    let in_flatpak = search_core::updater::is_flatpak();
+    let current_ver = search_core::updater::Version::parse(env!("CARGO_PKG_VERSION"))
+        .unwrap_or_else(|_| search_core::updater::Version::new(0, 1, 0));
+
+    if in_flatpak {
+        let fp_row = SwitchRow::new();
+        fp_row.set_title("Comprobar actualizaciones firmadas");
+        fp_row.set_subtitle(
+            "Desactivado automáticamente en Flatpak (/.flatpak-info): actualiza desde Flathub o tu tienda de software.",
+        );
+        fp_row.set_active(false);
+        fp_row.set_sensitive(false);
+        updater_group.add(&fp_row);
+    } else {
+        let upd_switch = SwitchRow::new();
+        upd_switch.set_title("Comprobar actualizaciones firmadas (Ed25519)");
+        upd_switch.set_subtitle(
+            "Comprobación diaria de manifiesto firmado; nunca descarga ni instala sin tu confirmación.",
+        );
+        upd_switch.add_prefix(&make_prefix_icon(IconId::Refresh, dark, register));
+        upd_switch.set_active(snap.update_check);
+        {
+            let st = settings.clone();
+            let row_ref = upd_switch.clone();
+            upd_switch.connect_active_notify(move || {
+                let enabled = row_ref.is_active();
+                st.update(|s| s.update_check = enabled);
+            });
+        }
+        updater_group.add(&upd_switch);
+
+        let upd_status_row = ActionRow::new();
+        upd_status_row.set_title("Estado de actualización");
+        let policy =
+            search_core::updater::UpdatePolicy::new(current_ver.clone(), 1, snap.update_check);
+        let init_msg = if !policy.check_enabled {
+            format!("v{current_ver} · Comprobación automática desactivada.")
+        } else {
+            format!("v{current_ver} · Verificación Ed25519 habilitada (sin descargas automáticas).")
+        };
+        upd_status_row.set_subtitle(&init_msg);
+
+        let check_btn = Button::with_label("Comprobar ahora");
+        check_btn.set_valign(Align::Center);
+        {
+            let st = settings.clone();
+            let row_ref = upd_status_row.clone();
+            let ver_clone = current_ver.clone();
+            check_btn.connect_clicked(move || {
+                let enabled = st.with(|s| s.update_check);
+                let pol = search_core::updater::UpdatePolicy::new(ver_clone.clone(), 1, enabled);
+                if pol.is_flatpak() {
+                    row_ref.set_subtitle("Desactivado en Flatpak: actualiza mediante Flathub.");
+                } else if !pol.check_enabled {
+                    row_ref.set_subtitle("Comprobación desactivada por el usuario.");
+                } else {
+                    row_ref.set_subtitle(&format!(
+                        "Search v{} · Verificación Ed25519 activa (sin manifiesto remoto configurado en modo local).",
+                        pol.current_version
+                    ));
+                }
+            });
+        }
+        upd_status_row.add_suffix(&check_btn);
+        updater_group.add(&upd_status_row);
+    }
+    col.append(&updater_group);
+
     let paths_group = PreferencesGroup::new();
     paths_group.set_title("Rutas de datos XDG (permisos 0700)");
     for (title, path) in [
@@ -1965,9 +2193,9 @@ fn build_about_section(paths: &SearchPaths, index: &mut Vec<SearchEntryItem>) ->
         index,
         "about",
         "Acerca de Search",
-        "Search Linux · Versiones y rutas XDG",
-        "MIT, driceroland/Search, CEF 156, Chromium 156, GTK4, libadwaita",
-        "about acerca version licencia mit cef chromium gtk adwaita xdg rutas",
+        "Search Linux · Versiones, actualizaciones y rutas XDG",
+        "MIT, driceroland/Search, CEF 156, Chromium 156, GTK4, libadwaita, updater, Flatpak",
+        "about acerca version licencia mit cef chromium gtk adwaita xdg rutas actualizaciones updater flatpak ed25519",
     );
 
     wrap_scrollable_section(&col)

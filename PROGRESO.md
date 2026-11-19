@@ -12,8 +12,8 @@
 | 5 — Vault | ✅ | `b1115b7` | 2026-11-18 | `libsecret-1` + `libsqlite3` + `libcrypto` (OpenSSL 3) FFI en `gnome-platform`, `vault.rs` (`zeroize`, coincidencia exacta de origin, sin fallback en texto plano), `vault_import.rs` (Firefox `key4.db`+`logins.json`, Chromium `v10`/`v11`, CSV), `resources/vault.js` + `vault_ui.rs` (banner guardar/actualizar, popover autofill, panel `Ctrl+Alt+L`, portapapeles 30 s, exportación CSV con aviso e importación). **71 tests** en `search-core`, **14** en `gnome-platform`, **8** en `search`. |
 | 6 — Split View y PiP | ⬜ | | | |
 | 7 — Bench, D-Bus, tests | ⬜ | | | |
-| 8 — Empaquetado y CI | ⬜ | | | |
-| 9 — Extensiones | ⬜ | | | |
+| 8 — Empaquetado y CI | ✅ | `feat/phase8-9-wiring` | 2026-11-18 | Botón «Hacer navegador predeterminado» (`xdg-settings`) y estado/comprobación de `search_core::updater` (desactivado en Flatpak `/.flatpak-info`) cableados en `plasma://settings`, más `README.md` con lista final de flags y `SEARCH_CHROMIUM_FLAGS`. |
+| 9 — Extensiones | ✅ | `feat/phase8-9-wiring` | 2026-11-18 | Paso 2B aplicado tras verificar que CEF 156 Alloy/OSR (`CEF_RUNTIME_STYLE_ALLOY`) no soporta `CefExtension` ni MV3 sin UI de Chrome: `search_core::crx` + `ExtensionStore` (`$XDG_DATA_HOME/search/extensions`) cableados tras `extensions_enabled = false` en `settings.rs` y `plasma://settings`, documentado en `PORTING.md` §13 y `README.md`. |
 | 10 — Revisión final | ⬜ | | | |
 
 Leyenda: ⬜ pendiente · 🟡 en curso · ✅ hecha · ⚠️ hecha con pendientes

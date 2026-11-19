@@ -164,7 +164,7 @@ fn pull_from_gsettings(gs: &gio::Settings, out: &mut AppSettings) {
         out.update_check = v;
     }
     if let Some(v) = gs.boolean("experimental-extensions") {
-        out.experimental_extensions = v;
+        out.extensions_enabled = v;
     }
 }
 
@@ -188,5 +188,5 @@ fn push_to_gsettings(gs: &gio::Settings, s: &AppSettings) {
     let _ = gs.set_boolean("vault-fill", s.vault_fill);
     let _ = gs.set_boolean("bench-enabled", s.bench_enabled);
     let _ = gs.set_boolean("update-check", s.update_check);
-    let _ = gs.set_boolean("experimental-extensions", s.experimental_extensions);
+    let _ = gs.set_boolean("experimental-extensions", s.extensions_enabled);
 }

@@ -36,6 +36,24 @@ Sintaxis admitida en `SEARCH_CHROMIUM_FLAGS`:
 - `+feature:Nombre`: habilita una `base::Feature` en `--enable-features`.
 - `-feature:Nombre`: deshabilita una `base::Feature` en `--disable-features` (cualquier intento de desactivar **Site Isolation** se rechaza automáticamente).
 
+### Flags y features activos en Chromium 156 (`chromium_flags.rs`)
+
+- **Switches de privacidad y minimalismo (`BASE_PRIVACY_SWITCHES`):** `--disable-background-networking`, `--disable-component-update`, `--disable-sync`, `--disable-default-apps`, `--disable-domain-reliability`, `--disable-breakpad`, `--no-pings`, `--no-first-run`, `--no-default-browser-check`, `--use-mock-keychain`, `--password-store=basic`, `--no-startup-window`, `--noerrdialogs`, `--hide-crash-restore-bubble`, `--disable-session-crashed-bubble`.
+- **Features desactivadas (`BASE_DISABLED_FEATURES`):** `Translate`, `OptimizationHints`, `OptimizationTargetPrediction`, `MediaRouter`, `DialMediaRouteProvider`, `AutofillServerCommunication`, `SafeBrowsing`, `PasswordManager`.
+- **Rendimiento y vídeo por hardware (configurables en `plasma://settings`):** `--renderer-process-limit=<N>` (por defecto `6`), `--process-per-site` (opcional), `--js-flags=--lite-mode` (opcional), `performance_tuning.high_efficiency_mode.state` (ahorro de memoria) y VA-API Linux (`AcceleratedVideoDecodeLinuxGL`, `AcceleratedVideoDecodeLinuxZeroCopyGL`, `VaapiIgnoreDriverChecks`).
+- **Seguridad inmutable:** `SitePerProcess` / `IsolateOrigins` (**Site Isolation**) permanece siempre activo y protegido contra overrides.
+
+## Extensiones de Chrome (estado actual — Fase 9 Paso 2B)
+
+Las extensiones de Chrome (Manifest V3) **no están disponibles para su ejecución todavía** en Search para Linux:
+- El renderizado windowless OSR de CEF 156 utiliza obligatoriamente `CEF_RUNTIME_STYLE_ALLOY` (`cef_types_runtime.h`), basado en la capa `//content` de Chromium, y la antigua API `CefExtension` fue eliminada en CEF 128+. Ejecutar extensiones MV3 (`chrome.runtime`, service workers) en Chromium 156 requiere `CEF_RUNTIME_STYLE_CHROME`, lo que activaría la interfaz propia de Chrome prohibida por los principios de diseño del navegador.
+- Siguiendo el **Paso 2B**, Search incluye el verificador completo de paquetes **CRX3** (`crates/search-core/src/crx.rs`: descarga CWS, parseo Protobuf, verificación RSA/ECDSA e ID criptográfico y extracción ZIP segura sin *path traversal*) y el almacén local `$XDG_DATA_HOME/search/extensions/installed.json` (`crates/search-core/src/extensions.rs`), ocultos detrás del ajuste experimental desactivado por defecto `extensions_enabled` (`extensions.experimental` en `settings.json` y `plasma://settings` → *Rendimiento y motor*).
+
+## Actualizaciones
+
+- **Flatpak:** cuando existe `/.flatpak-info`, el comprobador integrado se desactiva automáticamente; las actualizaciones llegan a través de Flathub / GNOME Software.
+- **Instalación independiente (tarball / AppImage):** `crates/search-core/src/updater.rs` verifica firmas **Ed25519** del manifiesto y hashes **SHA-256** antes de mostrar avisos, y nunca descarga ni instala sin confirmación explícita del usuario.
+
 ## Estructura del workspace Cargo
 
 | Crate | Descripción |

@@ -106,6 +106,10 @@ impl SearchPaths {
         self.data_dir.join("curtain.json")
     }
 
+    pub fn extensions_dir(&self) -> PathBuf {
+        self.data_dir.join("extensions")
+    }
+
     pub fn filters_cache_dir(&self) -> PathBuf {
         self.cache_dir.join("filters")
     }

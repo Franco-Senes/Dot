@@ -198,8 +198,8 @@ pub struct AppSettings {
     #[serde(rename = "bench")]
     pub bench_enabled: bool,
 
-    #[serde(rename = "extensions.experimental")]
-    pub experimental_extensions: bool,
+    #[serde(rename = "extensions.experimental", alias = "extensions.enabled")]
+    pub extensions_enabled: bool,
 }
 
 impl Default for AppSettings {
@@ -244,7 +244,7 @@ impl Default for AppSettings {
             v8_lite_mode: false,
             update_check: true,
             bench_enabled: false,
-            experimental_extensions: false,
+            extensions_enabled: false,
         }
     }
 }
