@@ -109,7 +109,7 @@ Estados: `pendiente` · `directo` · `adaptado` · `diferido` · `imposible` · 
 | `Sources/Search/Closing.swift` | Auto-cierre temporizado de pestañas inactivas | — | Secundario respecto a `PLAN.md` | diferido | — |
 | `Sources/Search/ColumnMenu.swift` | Menú contextual de la barra lateral de pestañas | `crates/search/src/sidebar_tabs.rs` | `gio::Menu`, `gtk4::PopoverMenu` | hecho | 2 |
 | `Sources/Search/Crx.swift` | Descarga, parseo Protobuf, verificación RSA y extracción segura CRX3 | `crates/search-core/src/crx.rs` | `rsa`, `sha2`, `zip`, parser varint en Rust puro | directo | 9 |
-| `Sources/Search/Curtain.swift` | Selector visual para ocultar elementos DOM y persistencia por dominio | `crates/search-core/src/curtain.rs` + `crates/search/src/curtain.rs` | `cef::Frame::execute_java_script`, puente IPC, Rust | adaptado | 4 |
+| `Sources/Search/Curtain.swift` | Selector visual para ocultar elementos DOM y persistencia por dominio | `crates/search-core/src/curtain.rs` + `crates/search/src/curtain.rs` | `cef::Frame::execute_java_script`, puente IPC, Rust | hecho | 4 |
 | `Sources/Search/Design.swift` | Paleta claro/oscuro, métricas y CSS base | `crates/search/src/style.rs` | `adw::StyleManager`, `gtk4::CssProvider` | hecho | 1 |
 | `Sources/Search/Dialogs.swift` | Diálogos JS (`alert`/`confirm`/`prompt`), archivos, HTTP Auth y TLS | `crates/search/src/browser_view.rs` | `cef::JSDialogHandler`, `cef::DialogHandler`, `on_certificate_error` | hecho | 1 |
 | `Sources/Search/DownloadsFloat.swift` | Popover/panel discreto de descargas | `crates/search/src/downloads_ui.rs` | `gtk4::Popover` / `adw::OverlaySplitView` | hecho | 3 |
@@ -142,7 +142,7 @@ Estados: `pendiente` · `directo` · `adaptado` · `diferido` · `imposible` · 
 | `Sources/Search/FrameRate.swift` | Tope privado de 60/120 FPS con `IOKit.ps` | `crates/search/src/browser_view.rs` | `BrowserSettings::windowless_frame_rate` (60 FPS por defecto) | hecho | 1 |
 | `Sources/Search/FullScreenEscape.swift` | Salida de pantalla completa con `Escape` | `crates/search/src/window.rs` | `cef::DisplayHandler::on_fullscreen_mode_change` | hecho | 1 |
 | `Sources/Search/Fuzzy.swift` | Coincidencia difusa rápida para autocompletado y `Ctrl+K` | `crates/search-core/src/fuzzy.rs` | `memchr` + subsecuencia + Damerau-Levenshtein (`strsim`) en Rust puro | hecho | 2 |
-| `Sources/Search/Hidden.swift` | Panel para inspeccionar y borrar reglas de Curtain por sitio o global | `crates/search/src/curtain.rs` | `adw::OverlaySplitView` / `gtk4::Popover`, `gtk4::ListBox` | adaptado | 4 |
+| `Sources/Search/Hidden.swift` | Panel para inspeccionar y borrar reglas de Curtain por sitio o global | `crates/search/src/curtain.rs` | `adw::OverlaySplitView` / `gtk4::Popover`, `gtk4::ListBox` | hecho | 4 |
 | `Sources/Search/History.swift` | Historial `history.json`, puntuación frecencia y autocompletado `<16ms` | `crates/search-core/src/history.rs` + `crates/search/src/history_ui.rs` | Rust puro (`serde_json`, índice en RAM) + `gtk4::ListView` | hecho | 3 |
 | `Sources/Search/HotKey.swift` | Atajo global de sistema Carbon (`RegisterEventHotKey`) | — | API Carbon exclusiva de macOS | imposible | — |
 | `Sources/Search/Icons.swift` | Obtención y caché de favicons | `crates/search/src/browser_view.rs` | `cef::DisplayHandler::on_favicon_urlchange` + `BrowserHost::download_image` | hecho | 2 |
@@ -191,22 +191,22 @@ Estados: `pendiente` · `directo` · `adaptado` · `diferido` · `imposible` · 
 | `Sources/Search/Privacy.swift` | Política de cookies (3rd-party bloqueadas), GPC y limpieza de click IDs | `crates/search/src/browser_view.rs` | `CefCookieAccessFilter`, cabecera `Sec-GPC: 1` en `on_before_resource_load` | hecho | 1 |
 | `Sources/Search/Profiles.swift` | Perfiles múltiples | — | Fuera de alcance de `PLAN.md` | diferido | — |
 | `Sources/Search/Proxy.swift` | Configuración de proxy de red | — | CEF respeta variables de proxy del entorno / sistema | hecho | 1 |
-| `Sources/Search/Reader.swift` | Modo lectura con tipografía limpia claro/oscuro y tamaño ajustable | `crates/search-core/src/reader.rs` + `crates/search/src/reader.rs` | `third_party/readability/Readability.js` (Apache-2.0) + vista HTML limpia | adaptado | 4 |
+| `Sources/Search/Reader.swift` | Modo lectura con tipografía limpia claro/oscuro y tamaño ajustable | `crates/search-core/src/reader.rs` + `crates/search/src/reader.rs` | `third_party/readability/readability.js` (MIT) + vista HTML limpia | hecho | 4 |
 | `Sources/Search/Recall.swift` | Paneles de Historial (`Ctrl+H`) y Descargas (`Ctrl+Shift+Y`) | `crates/search/src/history_ui.rs` + `downloads_ui.rs` | `adw::OverlaySplitView`, `gtk4::ListView`, `gtk4::SearchEntry` | hecho | 3 |
 | `Sources/Search/RecordingIndicator.swift` | Píldora de grabación de extensiones | — | Diferido a Fase 9 | diferido | 9 |
-| `Sources/Search/Registrable.swift` | Cálculo de dominio registrable (eTLD+1) y `sameSite` | `crates/search-core/src/domain.rs` | Rust puro (sufijos públicos / comparación exacta de origin) | directo | 4 |
+| `Sources/Search/Registrable.swift` | Cálculo de dominio registrable (eTLD+1) y `sameSite` | `crates/search-core/src/domain.rs` | Rust puro (sufijos públicos / comparación exacta de origin) | hecho | 4 |
 | `Sources/Search/Scripting.swift` | Interfaz de automatización externa (`Search.sdef`) | `crates/search/src/dbus.rs` | `zbus` (`io.github.searchlinux.Search1`) | adaptado | 7 |
 | `Sources/Search/Session.swift` | Persistencia y restauración diferida de ventanas, pestañas, fijadas y splits | `crates/search-core/src/session.rs` | `serde_json`, `paths::write_atomic`, debounce ~1 s, backup `.bak` | hecho | 2 |
 | `Sources/Search/SettingsIndex.swift` | Catálogo declarativo de ajustes | `crates/search-core/src/settings.rs` | Rust puro | hecho | 1 |
 | `Sources/Search/Settings.swift` | Ventana de preferencias del navegador | `crates/search/src/settings_ui.rs` | `adw::PreferencesDialog` | hecho | 2 |
 | `Sources/Search/Sharing.swift` | Menú nativo de compartir macOS (`NSSharingServicePicker`) | — | Exclusivo de AppKit | diferido | — |
-| `Sources/Search/Shield.swift` | Bloqueador de anuncios/rastreadores a nivel de red + excepciones por dominio | `crates/search-core/src/shield.rs` + `crates/search/src/shield.rs` | `CefResourceRequestHandler::on_before_resource_load` + CSS cosmético | adaptado | 4 |
+| `Sources/Search/Shield.swift` | Bloqueador de anuncios/rastreadores a nivel de red + excepciones por dominio | `crates/search-core/src/shield.rs` + `crates/search/src/shield.rs` | `CefResourceRequestHandler::on_before_resource_load` + CSS cosmético | hecho | 4 |
 | `Sources/Search/ShortcutsPage.swift` | Ventana de consulta de atajos de teclado | `crates/search/src/actions.rs` | `adw::ShortcutsDialog` | hecho | 2 |
 | `Sources/Search/Shortcuts.swift` | Definición de acciones y aceleradores con `Ctrl` | `crates/search/src/actions.rs` | `gio::SimpleAction`, `Application::set_accels_for_action` | hecho | 1 |
 | `Sources/Search/SideIcons.swift` | Variante compacta de barra lateral | `crates/search/src/sidebar_tabs.rs` | `gtk4::ListBox` | hecho | 2 |
 | `Sources/Search/SidePanel.swift` | Panel lateral auxiliar para historial, marcadores, descargas y Curtain | `crates/search/src/window.rs` | `adw::OverlaySplitView` | hecho | 3 |
 | `Sources/Search/Side.swift` | Barra lateral izquierda vertical de pestañas (fijadas arriba + normales + DnD) | `crates/search/src/sidebar_tabs.rs` | Widget propio `SidebarTabs` enlazado al `adw::TabView` | hecho | 2 |
-| `Sources/Search/SiteCard.swift` | Popover de estado del sitio (TLS, activar/pausar Shield en dominio) | `crates/search/src/window.rs` | `gtk4::Popover`, `cef::NavigationEntry::ssl_status` | adaptado | 4 |
+| `Sources/Search/SiteCard.swift` | Popover de estado del sitio (TLS, activar/pausar Shield en dominio) | `crates/search/src/shield.rs` | `gtk4::Popover` + contador de bloqueos + conmutador Shield | hecho | 4 |
 | `Sources/Search/SiteLocation.swift` | Puente CoreLocation en macOS | `crates/search/src/browser_view.rs` | `cef::PermissionHandler` | adaptado | 4 |
 | `Sources/Search/SiteSearch.swift` | Plantillas de búsqueda por sitio | `crates/search-core/src/address.rs` | Rust puro | diferido | 3 |
 | `Sources/Search/SiteStyles.swift` | Hojas CSS de usuario por dominio | `crates/search/src/curtain.rs` | Inyección CSS en `on_load_start` (`Curtain`) | adaptado | 4 |
@@ -246,7 +246,7 @@ Estados: `pendiente` · `directo` · `adaptado` · `diferido` · `imposible` · 
 | `Sources/Search/WhatsNew.swift` | Notas de versión | — | Cubierto en metainfo AppStream (`io.github.searchlinux.Search.metainfo.xml`) | adaptado | 8 |
 | `Sources/Search/Windows.swift` | Gestión multi-ventana (`Ctrl+N`, `Ctrl+Shift+N` privada, persistencia en sesión) | `crates/search/src/app.rs` + `crates/search-core/src/session.rs` | `adw::Application`, `cef::RequestContext` en memoria | hecho | 2 |
 | `Sources/Search/WindowTitle.swift` | Sincroniza el título de la ventana con la pestaña activa | `crates/search/src/window.rs` | `adw::ApplicationWindow::set_title` | hecho | 1 |
-| `Sources/Search/YouTubeAds.swift` | Reglas de red y scripts de bloqueo de anuncios en YouTube | `crates/search-core/src/shield.rs` | Integrado en `CompiledShield` (`on_before_resource_load` + JS) | adaptado | 4 |
+| `Sources/Search/YouTubeAds.swift` | Reglas de red y scripts de bloqueo de anuncios en YouTube | `crates/search-core/src/shield.rs` | Integrado en `CompiledShield` (`on_before_resource_load` + JS) | hecho | 4 |
 
 ## 4. Esquemas de datos (JSON)
 
@@ -415,9 +415,9 @@ Mismo formato JSON declarativo de `WKContentRuleList` (las 57 reglas de `Shield.
 | Panel de marcadores | Menú Bookmarks | `Ctrl+Shift+O` | ✅ |
 | Panel de historial | `⌘Y` | `Ctrl+H` (y alias `Ctrl+Y`) | ✅ |
 | Panel de descargas | `⇧⌘J` | `Ctrl+Shift+Y` (y alias `Ctrl+Shift+J`) | ✅ |
-| Modo lectura | `⇧⌘R` | `Ctrl+Alt+R` / `F9` | ⬜ |
-| Curtain: modo selección ("ocultar elemento") | `⇧⌘H` | `Ctrl+Shift+H` | ⬜ |
-| Curtain: ver elementos ocultos en este sitio | `⇧⌘U` | `Ctrl+Shift+E` | ⬜ |
+| Modo lectura | `⇧⌘R` | `Ctrl+Alt+R` / `F9` | ✅ |
+| Curtain: modo selección ("ocultar elemento") | `⇧⌘H` | `Ctrl+Shift+H` | ✅ |
+| Curtain: ver elementos ocultos en este sitio | `⇧⌘U` | `Ctrl+Shift+E` | ✅ |
 | Contraseñas (Vault) | `⌥⌘L` | `Ctrl+Alt+L` | ⬜ |
 | Split View: dividir / separar pestaña actual | `⌥⌘N` | `Ctrl+Alt+N` | ⬜ |
 | Split View: cambiar foco entre paneles (izq / der) | `⌃⌘←` / `⌃⌘→` | `Ctrl+Alt+Left` / `Ctrl+Alt+Right` | ⬜ |
@@ -532,7 +532,7 @@ Mismo formato JSON declarativo de `WKContentRuleList` (las 57 reglas de `Shield.
 ## 13. Pruebas en sitios reales
 | Sitio | Shield | Curtain | Lectura | Notas |
 |---|---|---|---|---|
-| *(Pendiente Fase 4)* | | | | |
+| *(Pendiente de red real; compilación offline en sandbox)* | Verificado con 6 tests unitarios (58 reglas embebidas, terceros vs first-party, pausas por sitio, caché SHA-256 y rutas/scripts de YouTube sin romper vídeo) | Verificado con 6 tests unitarios incluido fixture HTML real (ID estable, `data-testid`, clases hasheadas, ruta anclada y `curtain.json` atómico + `.bak`) | Verificado con 4 tests unitarios (saneamiento XSS/scripts/`on*`/`javascript:`/iframes, plantilla ~68ch claro/oscuro y tamaño de letra) | Entorno de desarrollo sin acceso a red; ejecutar pruebas en vivo sobre periódico, blog, sitio con anuncios y YouTube fuera del sandbox. |
 
 ## 14. Seguridad de Vault (modelo de amenazas)
 *(Se completará en detalle en la Fase 5: Secret Service `oo7` + `zeroize`, desactivación total del Password Manager y Autofill de Chromium en `chromium_flags.rs`, coincidencia exacta de `origin` sin degradación HTTPS→HTTP, borrado del portapapeles a los 30 s y tests con datos sintéticos).*

@@ -11,7 +11,10 @@
 //!   estricto por defecto y botón explícito autenticado por nonce aleatorio de 128 bits para
 //!   permitir temporalmente ese host concreto en la sesión actual.
 
+use crate::curtain::{build_curtain_picker_script, build_curtain_stop_script, CurtainManager};
+use crate::reader::build_reader_extract_script;
 use crate::settings::SettingsStore;
+use crate::shield::ShieldManager;
 use anyhow::{Context, Result};
 use cef::{rc::Rc as _, *};
 use gnome_platform::gdk::{self, MemoryFormat, MemoryTexture, ModifierType};
@@ -23,11 +26,19 @@ use gnome_platform::gtk::{
 };
 use percent_encoding::{percent_decode_str, utf8_percent_encode, NON_ALPHANUMERIC};
 use search_core::address::{is_same_site, sanitize_url_for_ui, strip_click_ids};
+use search_core::curtain::{
+    build_peek_script, build_unpeek_script, build_veil_style_script, ElementPickSnapshot,
+};
+use search_core::reader::{
+    build_apply_reader_options_script, ReaderArticle, ReaderOptions, READER_INTERNAL_MARKER,
+};
+use serde::Deserialize;
 use std::cell::{Cell, RefCell};
 use std::collections::HashSet;
 use std::io::Read;
 use std::rc::Rc;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
+use std::sync::{Arc, RwLock};
 
 static ACTIVE_BROWSER_COUNT: AtomicUsize = AtomicUsize::new(0);
 
@@ -78,6 +89,27 @@ pub struct DownloadUpdateEvent {
     pub callback: Option<DownloadItemCallback>,
 }
 
+#[derive(Deserialize)]
+#[serde(tag = "kind")]
+enum PageIpcMessage {
+    #[serde(rename = "curtain_pick")]
+    CurtainPick { snapshot: ElementPickSnapshot },
+    #[serde(rename = "curtain_off")]
+    CurtainOff,
+    #[serde(rename = "curtain_error")]
+    CurtainError { message: String },
+    #[serde(rename = "reader_article")]
+    ReaderArticle {
+        ok: bool,
+        #[serde(default)]
+        reason: Option<String>,
+        #[serde(default)]
+        article: Option<ReaderArticle>,
+    },
+}
+
+pub type ReaderExtractedCallback = Box<dyn Fn(bool, Option<String>, Option<ReaderArticle>)>;
+
 #[derive(Default)]
 pub struct BrowserCallbacks {
     pub on_title_changed: Option<Box<dyn Fn(String)>>,
@@ -94,11 +126,17 @@ pub struct BrowserCallbacks {
     pub on_non_empty_paint: Option<PaintFrameCallback>,
     pub on_before_download: Option<Box<dyn Fn(DownloadBeforeEvent)>>,
     pub on_download_updated: Option<Box<dyn Fn(DownloadUpdateEvent)>>,
+    pub on_curtain_pick: Option<Box<dyn Fn(ElementPickSnapshot)>>,
+    pub on_curtain_picking_changed: Option<Box<dyn Fn(bool)>>,
+    pub on_reader_extracted: Option<ReaderExtractedCallback>,
+    pub on_reader_state_changed: Option<Box<dyn Fn(bool)>>,
 }
 
 struct SharedState {
     browser: RefCell<Option<Browser>>,
     settings: SettingsStore,
+    shield: ShieldManager,
+    curtain: CurtainManager,
     overlay: Overlay,
     picture: Picture,
     status_pill: Label,
@@ -107,6 +145,8 @@ struct SharedState {
     last_pointer: Cell<(i32, i32)>,
     title: RefCell<String>,
     current_url: RefCell<String>,
+    top_url_shared: Arc<RwLock<String>>,
+    blocked_count: Arc<AtomicU64>,
     favicon_url: RefCell<Option<String>>,
     last_favicon_requested: RefCell<Option<String>>,
     is_loading: Cell<bool>,
@@ -120,6 +160,9 @@ struct SharedState {
     non_empty_frames: Cell<u64>,
     tls_nonce: String,
     audio_nonce: String,
+    ipc_nonce: String,
+    curtain_picking: Cell<bool>,
+    reader_original_url: RefCell<Option<String>>,
     tls_allowed_hosts: RefCell<HashSet<String>>,
     suppress_next_abort_error: Cell<bool>,
     last_load_was_error: Cell<bool>,
@@ -145,6 +188,8 @@ impl BrowserView {
     pub fn new(
         mut request_context: RequestContext,
         settings: SettingsStore,
+        shield: ShieldManager,
+        curtain: CurtainManager,
         initial_url: &str,
         dark_background: bool,
     ) -> Result<Self> {
@@ -187,6 +232,8 @@ impl BrowserView {
         let shared = Rc::new(SharedState {
             browser: RefCell::new(None),
             settings,
+            shield,
+            curtain,
             overlay,
             picture: picture.clone(),
             status_pill,
@@ -195,6 +242,8 @@ impl BrowserView {
             last_pointer: Cell::new((0, 0)),
             title: RefCell::new(String::new()),
             current_url: RefCell::new(initial_url.to_string()),
+            top_url_shared: Arc::new(RwLock::new(initial_url.to_string())),
+            blocked_count: Arc::new(AtomicU64::new(0)),
             favicon_url: RefCell::new(None),
             last_favicon_requested: RefCell::new(None),
             is_loading: Cell::new(false),
@@ -208,6 +257,9 @@ impl BrowserView {
             non_empty_frames: Cell::new(0),
             tls_nonce: generate_hex_nonce_128(),
             audio_nonce: generate_hex_nonce_128(),
+            ipc_nonce: generate_hex_nonce_128(),
+            curtain_picking: Cell::new(false),
+            reader_original_url: RefCell::new(None),
             tls_allowed_hosts: RefCell::new(HashSet::new()),
             suppress_next_abort_error: Cell::new(false),
             last_load_was_error: Cell::new(false),
@@ -294,10 +346,114 @@ impl BrowserView {
         } else {
             raw_url.to_string()
         };
+        if self
+            .shared
+            .reader_original_url
+            .borrow_mut()
+            .take()
+            .is_some()
+        {
+            if let Some(ref cb) = self.shared.callbacks.borrow().on_reader_state_changed {
+                cb(false);
+            }
+        }
         *self.shared.current_url.borrow_mut() = final_url.clone();
+        if let Ok(mut guard) = self.shared.top_url_shared.write() {
+            *guard = final_url.clone();
+        }
         if let Some(frame) = self.main_frame() {
             let cs = CefString::from(final_url.as_str());
             frame.load_url(Some(&cs));
+        }
+    }
+
+    pub fn blocked_count(&self) -> u64 {
+        self.shared.blocked_count.load(Ordering::Relaxed)
+    }
+
+    pub fn execute_js(&self, js: &str, source_name: &str) {
+        if let Some(frame) = self.main_frame() {
+            let cef_js = CefString::from(js);
+            let cef_src = CefString::from(source_name);
+            frame.execute_java_script(Some(&cef_js), Some(&cef_src), 1);
+        }
+    }
+
+    pub fn is_curtain_picking(&self) -> bool {
+        self.shared.curtain_picking.get()
+    }
+
+    pub fn set_curtain_picking(&self, active: bool) {
+        self.shared.curtain_picking.set(active);
+        if active {
+            let script = build_curtain_picker_script(&self.shared.ipc_nonce);
+            self.execute_js(&script, "search://curtain-picker");
+        } else {
+            self.execute_js(build_curtain_stop_script(), "search://curtain-stop");
+        }
+        if let Some(ref cb) = self.shared.callbacks.borrow().on_curtain_picking_changed {
+            cb(active);
+        }
+    }
+
+    pub fn apply_curtain_css(&self, css: &str) {
+        let js = build_veil_style_script(css);
+        self.execute_js(&js, "search://curtain-css");
+    }
+
+    pub fn peek_curtain_selector(&self, css_without: &str, selector: &str) {
+        let js = build_peek_script(css_without, selector);
+        self.execute_js(&js, "search://curtain-peek");
+    }
+
+    pub fn unpeek_curtain(&self, full_css: &str) {
+        let js = build_unpeek_script(full_css);
+        self.execute_js(&js, "search://curtain-unpeek");
+    }
+
+    pub fn is_reader_active(&self) -> bool {
+        self.shared.reader_original_url.borrow().is_some()
+    }
+
+    pub fn trigger_reader_extract(&self) {
+        let script = build_reader_extract_script(&self.shared.ipc_nonce);
+        self.execute_js(&script, "search://reader-extract");
+    }
+
+    pub fn enter_reader_html(&self, original_url: &str, rendered_html: &str) {
+        if self.shared.curtain_picking.replace(false) {
+            if let Some(ref cb) = self.shared.callbacks.borrow().on_curtain_picking_changed {
+                cb(false);
+            }
+        }
+        *self.shared.reader_original_url.borrow_mut() = Some(original_url.to_string());
+        *self.shared.current_url.borrow_mut() = original_url.to_string();
+        if let Some(frame) = self.main_frame() {
+            let data_url = reader_html_to_internal_data_url(rendered_html);
+            let cs = CefString::from(data_url.as_str());
+            frame.load_url(Some(&cs));
+        }
+        if let Some(ref cb) = self.shared.callbacks.borrow().on_reader_state_changed {
+            cb(true);
+        }
+    }
+
+    pub fn exit_reader_mode(&self) {
+        if let Some(orig) = self.shared.reader_original_url.borrow_mut().take() {
+            if let Some(ref cb) = self.shared.callbacks.borrow().on_reader_state_changed {
+                cb(false);
+            }
+            if let Some(frame) = self.main_frame() {
+                let cs = CefString::from(orig.as_str());
+                frame.load_url(Some(&cs));
+            }
+        }
+    }
+
+    pub fn apply_reader_options(&self, options: ReaderOptions) {
+        if self.is_reader_active() {
+            let js = build_apply_reader_options_script(options);
+            self.execute_js(&js, "search://reader-options");
         }
     }
 
@@ -711,7 +867,11 @@ impl BrowserView {
             let v_down = self.clone();
             key.connect_key_pressed(move |keyval, keycode, raw_state| {
                 let mods = ModifierType::from_bits_truncate(raw_state);
-                if should_propagate_shortcut_to_window(keyval, mods, v_down.is_loading()) {
+                if should_propagate_shortcut_to_window(
+                    keyval,
+                    mods,
+                    v_down.is_loading() || v_down.is_curtain_picking(),
+                ) {
                     return false;
                 }
                 let Some(host) = v_down.host() else {
@@ -1034,6 +1194,41 @@ wrap_display_handler! {
                 }
                 return 1;
             }
+            let ipc_prefix = format!("__search_ipc_{}:", self.shared.ipc_nonce);
+            if let Some(json_str) = msg.strip_prefix(&ipc_prefix) {
+                match serde_json::from_str::<PageIpcMessage>(json_str) {
+                    Ok(PageIpcMessage::CurtainPick { snapshot }) => {
+                        if let Some(ref cb) = self.shared.callbacks.borrow().on_curtain_pick {
+                            cb(snapshot);
+                        }
+                    }
+                    Ok(PageIpcMessage::CurtainOff) => {
+                        if self.shared.curtain_picking.replace(false) {
+                            if let Some(ref cb) =
+                                self.shared.callbacks.borrow().on_curtain_picking_changed
+                            {
+                                cb(false);
+                            }
+                        }
+                    }
+                    Ok(PageIpcMessage::CurtainError { message }) => {
+                        search_core::warn!("Curtain error en página: {message}");
+                    }
+                    Ok(PageIpcMessage::ReaderArticle {
+                        ok,
+                        reason,
+                        article,
+                    }) => {
+                        if let Some(ref cb) = self.shared.callbacks.borrow().on_reader_extracted {
+                            cb(ok, reason, article);
+                        }
+                    }
+                    Err(err) => {
+                        search_core::warn!("Mensaje IPC inválido descartado: {err}");
+                    }
+                }
+                return 1;
+            }
             0
         }
 
@@ -1112,18 +1307,64 @@ wrap_load_handler! {
             frame: Option<&mut Frame>,
             _transition_type: TransitionType,
         ) {
-            if let Some(ref frame) = frame {
-                if frame.is_main() != 0 {
-                    let url = CefString::from(&frame.url()).to_string();
-                    if !url.starts_with("data:text/html;charset=utf-8,<!--search-internal-->") {
-                        self.shared.last_load_was_error.set(false);
+            let Some(frame) = frame else {
+                return;
+            };
+            let is_main = frame.is_main() != 0;
+            let url = CefString::from(&frame.url()).to_string();
+            let is_internal = url.starts_with("data:text/html;charset=utf-8,<!--search-internal-->");
+
+            if is_main && !is_internal {
+                self.shared.last_load_was_error.set(false);
+                self.shared.blocked_count.store(0, Ordering::Relaxed);
+                if let Ok(mut guard) = self.shared.top_url_shared.write() {
+                    *guard = url.clone();
+                }
+                if self.shared.curtain_picking.replace(false) {
+                    if let Some(ref cb) = self.shared.callbacks.borrow().on_curtain_picking_changed
+                    {
+                        cb(false);
+                    }
+                }
+                if self.shared.reader_original_url.borrow_mut().take().is_some() {
+                    if let Some(ref cb) = self.shared.callbacks.borrow().on_reader_state_changed {
+                        cb(false);
                     }
                 }
             }
-            if !self.shared.settings.with(|s| s.send_gpc) {
-                return;
+
+            if !is_internal && (url.starts_with("http://") || url.starts_with("https://")) {
+                // Inyección temprana de CSS cosmético de Shield (sin parpadeo).
+                if is_main {
+                    if let Some(cosmetic_js) = self.shared.shield.cosmetic_inject_script_for_url(&url)
+                    {
+                        let cef_js = CefString::from(cosmetic_js.as_str());
+                        let src = CefString::from("search://shield-cosmetic");
+                        frame.execute_java_script(Some(&cef_js), Some(&src), 1);
+                    }
+                    // Inyección temprana de reglas Curtain por dominio (sin parpadeo).
+                    if let Some(veil_css) = self.shared.curtain.css_for_url(&url) {
+                        let veil_js = build_veil_style_script(&veil_css);
+                        let cef_js = CefString::from(veil_js.as_str());
+                        let src = CefString::from("search://curtain-css");
+                        frame.execute_java_script(Some(&cef_js), Some(&src), 1);
+                    }
+                }
+
+                // Scripts anti-anuncios en hosts reproductores de YouTube (`YouTubeAds.swift`).
+                if let Some((page_js, skipper_js)) = self.shared.shield.youtube_scripts_for_url(&url)
+                {
+                    let cef_page = CefString::from(page_js.as_str());
+                    let src_page = CefString::from("search://shield-yt-page");
+                    frame.execute_java_script(Some(&cef_page), Some(&src_page), 1);
+
+                    let cef_skip = CefString::from(skipper_js.as_str());
+                    let src_skip = CefString::from("search://shield-yt-skip");
+                    frame.execute_java_script(Some(&cef_skip), Some(&src_skip), 1);
+                }
             }
-            if let Some(frame) = frame {
+
+            if self.shared.settings.with(|s| s.send_gpc) {
                 let gpc_js = CefString::from(
                     "try{Object.defineProperty(Navigator.prototype,'globalPrivacyControl',{get:()=>true,configurable:true});}catch(_){}",
                 );
@@ -1358,14 +1599,40 @@ wrap_resource_request_handler! {
 
         fn on_before_resource_load(
             &self,
-            _browser: Option<&mut Browser>,
-            _frame: Option<&mut Frame>,
+            browser: Option<&mut Browser>,
+            frame: Option<&mut Frame>,
             request: Option<&mut Request>,
             _callback: Option<&mut Callback>,
         ) -> ReturnValue {
             let Some(request) = request else {
                 return ReturnValue::CONTINUE;
             };
+
+            let req_url = CefString::from(&request.url()).to_string();
+            let mut top_url = CefString::from(&request.first_party_for_cookies()).to_string();
+            if top_url.is_empty() {
+                if let Some(b) = browser {
+                    if let Some(mf) = b.main_frame() {
+                        top_url = CefString::from(&mf.url()).to_string();
+                    }
+                }
+            }
+            if top_url.is_empty() {
+                if let Some(f) = frame {
+                    top_url = CefString::from(&f.url()).to_string();
+                }
+            }
+            if top_url.is_empty() {
+                if let Ok(guard) = self.shared.top_url_shared.read() {
+                    top_url = guard.clone();
+                }
+            }
+
+            // Shield: bloqueo de red antes de enviar la petición (`Shield.swift` + `YouTubeAds.swift`).
+            if self.shared.shield.should_block_request(&req_url, &top_url) {
+                self.shared.blocked_count.fetch_add(1, Ordering::Relaxed);
+                return ReturnValue::CANCEL;
+            }
 
             let (send_gpc, strip_ids) = self
                 .shared
@@ -1379,9 +1646,8 @@ wrap_resource_request_handler! {
             }
 
             if strip_ids && request.is_read_only() == 0 {
-                let orig = CefString::from(&request.url()).to_string();
-                let cleaned = strip_click_ids(&orig);
-                if cleaned != orig {
+                let cleaned = strip_click_ids(&req_url);
+                if cleaned != req_url {
                     let cs = CefString::from(cleaned.as_str());
                     request.set_url(Some(&cs));
                 }
@@ -1717,6 +1983,12 @@ fn html_to_internal_data_url(html: &str) -> String {
     format!("data:text/html;charset=utf-8,<!--search-internal-->{encoded}")
 }
 
+fn reader_html_to_internal_data_url(html: &str) -> String {
+    let body = html.strip_prefix(READER_INTERNAL_MARKER).unwrap_or(html);
+    let encoded = utf8_percent_encode(body, NON_ALPHANUMERIC).to_string();
+    format!("data:text/html;charset=utf-8,<!--search-internal-->{encoded}")
+}
+
 fn escape_html(raw: &str) -> String {
     let mut out = String::with_capacity(raw.len());
     for ch in raw.chars() {
@@ -1903,7 +2175,7 @@ fn should_propagate_shortcut_to_window(keyval: u32, mods: ModifierType, is_loadi
 
     if matches!(
         keyval,
-        gdk::keys::F5 | gdk::keys::F6 | gdk::keys::F11 | gdk::keys::F12
+        gdk::keys::F5 | gdk::keys::F6 | gdk::keys::F9 | gdk::keys::F11 | gdk::keys::F12
     ) {
         return true;
     }
@@ -1919,10 +2191,12 @@ fn should_propagate_shortcut_to_window(keyval: u32, mods: ModifierType, is_loadi
 
     if ctrl && !alt {
         match lower {
-            // Ctrl+L, Ctrl+F, Ctrl+G, Ctrl+R, Ctrl+Q, Ctrl+T, Ctrl+W, Ctrl+K, Ctrl+N, Ctrl+S
-            0x6c | 0x66 | 0x67 | 0x72 | 0x71 | 0x74 | 0x77 | 0x6b | 0x6e | 0x73 => return true,
-            // Ctrl+Shift+I, Ctrl+Shift+C, Ctrl+Shift+V, Ctrl+Shift+M
-            0x69 | 0x63 | 0x76 | 0x6d if shift => return true,
+            // Ctrl+L, Ctrl+F, Ctrl+G, Ctrl+R, Ctrl+Q, Ctrl+T, Ctrl+W, Ctrl+K, Ctrl+N, Ctrl+S,
+            // Ctrl+H, Ctrl+Y, Ctrl+D
+            0x6c | 0x66 | 0x67 | 0x72 | 0x71 | 0x74 | 0x77 | 0x6b | 0x6e | 0x73 | 0x68 | 0x79
+            | 0x64 => return true,
+            // Ctrl+Shift+I, C, V, M, B, O, J, E (Curtain panel), H (Curtain pick)
+            0x69 | 0x63 | 0x76 | 0x6d | 0x62 | 0x6f | 0x6a | 0x65 if shift => return true,
             // Ctrl+1..9
             gdk::keys::KEY_1..=gdk::keys::KEY_9 => return true,
             // Cambio de pestañas, preferencias y atajos

@@ -249,6 +249,50 @@ box.search-panel-editor {
     border-radius: 8px;
     background-color: alpha(currentColor, 0.05);
 }
+
+box.search-reader-pill {
+    background-color: alpha(@window_bg_color, 0.92);
+    border: 1px solid alpha(currentColor, 0.14);
+    border-radius: 999px;
+    padding: 3px 6px;
+    opacity: 0.72;
+    transition: opacity 120ms ease;
+}
+
+box.search-reader-pill:hover {
+    opacity: 1.0;
+}
+
+button.search-reader-btn {
+    min-width: 24px;
+    min-height: 24px;
+    padding: 2px 7px;
+    border-radius: 999px;
+    font-size: 0.78rem;
+}
+
+button.search-reader-btn.active {
+    background-color: alpha(@accent_bg_color, 0.22);
+    color: @accent_color;
+    font-weight: 600;
+}
+
+label.search-reader-size {
+    font-variant-numeric: tabular-nums;
+    font-size: 0.78rem;
+    opacity: 0.75;
+    padding: 0 4px;
+}
+
+label.search-toast-pill {
+    background-color: alpha(@window_bg_color, 0.94);
+    color: @window_fg_color;
+    border: 1px solid alpha(currentColor, 0.14);
+    border-radius: 999px;
+    padding: 6px 14px;
+    font-size: 0.84rem;
+    font-weight: 500;
+}
 "#;
 
 /// Registra el proveedor CSS de la aplicación en el `GdkDisplay` activo.

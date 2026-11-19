@@ -98,6 +98,14 @@ impl SearchPaths {
         self.data_dir.join("downloads.json")
     }
 
+    pub fn curtain_file(&self) -> PathBuf {
+        self.data_dir.join("curtain.json")
+    }
+
+    pub fn filters_cache_dir(&self) -> PathBuf {
+        self.cache_dir.join("filters")
+    }
+
     pub fn cef_cache_dir(&self) -> PathBuf {
         self.cache_dir.join("cef")
     }
