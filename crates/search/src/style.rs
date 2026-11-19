@@ -890,6 +890,89 @@ button.search-pip-btn {
 button.search-pip-btn:hover {
     background-color: alpha(#ffffff, 0.18);
 }
+
+/* ============================================================================
+ * Arc Spaces, Omnibox Superpowers, Peek Card y Tidy Tabs
+ * ============================================================================ */
+.space-pill,
+button.space-pill {
+    font-size: 0.78rem;
+    font-weight: 500;
+    padding: 3px 10px;
+    border-radius: 999px;
+    border: 1px solid transparent;
+    background-color: alpha(currentColor, 0.06);
+    transition: background-color 120ms cubic-bezier(0.2, 0, 0, 1),
+                border-color 120ms cubic-bezier(0.2, 0, 0, 1),
+                color 120ms cubic-bezier(0.2, 0, 0, 1);
+}
+
+.space-pill:hover,
+button.space-pill:hover {
+    background-color: alpha(currentColor, 0.11);
+}
+
+.space-pill.active,
+button.space-pill.active {
+    background-color: alpha(@accent_bg_color, 0.18);
+    border-color: alpha(@accent_bg_color, 0.45);
+    color: @accent_color;
+    font-weight: 600;
+}
+
+row.omnibox-calc-row,
+listbox.search-omnibox-list row.omnibox-calc-row {
+    border-radius: 8px;
+    margin: 2px 0;
+    background-color: alpha(@accent_bg_color, 0.10);
+    border: 1px solid alpha(@accent_bg_color, 0.24);
+    transition: background-color 120ms cubic-bezier(0.2, 0, 0, 1),
+                border-color 120ms cubic-bezier(0.2, 0, 0, 1);
+}
+
+row.omnibox-calc-row:hover,
+listbox.search-omnibox-list row.omnibox-calc-row:hover,
+row.omnibox-calc-row:selected,
+listbox.search-omnibox-list row.omnibox-calc-row:selected {
+    background-color: alpha(@accent_bg_color, 0.18);
+    border-color: alpha(@accent_bg_color, 0.42);
+}
+
+.color-swatch {
+    min-width: 24px;
+    min-height: 24px;
+    border-radius: 6px;
+    border: 1px solid alpha(currentColor, 0.22);
+    box-shadow: 0 1px 3px alpha(#000000, 0.12);
+}
+
+.peek-card {
+    background-color: @window_bg_color;
+    color: @window_fg_color;
+    border-radius: 14px;
+    border: 1px solid alpha(currentColor, 0.12);
+    box-shadow: 0 16px 40px alpha(#000000, 0.24), 0 4px 12px alpha(#000000, 0.10);
+    padding: 8px;
+}
+
+.tidy-btn,
+button.tidy-btn {
+    font-size: 0.76rem;
+    font-weight: 600;
+    padding: 3px 10px;
+    border-radius: 999px;
+    border: 1px solid alpha(@accent_bg_color, 0.28);
+    background-color: alpha(@accent_bg_color, 0.10);
+    color: @accent_color;
+    transition: background-color 120ms cubic-bezier(0.2, 0, 0, 1),
+                border-color 120ms cubic-bezier(0.2, 0, 0, 1);
+}
+
+.tidy-btn:hover,
+button.tidy-btn:hover {
+    background-color: alpha(@accent_bg_color, 0.18);
+    border-color: alpha(@accent_bg_color, 0.45);
+}
 "#;
 
 /// Registra el proveedor CSS de la aplicación en el `GdkDisplay` activo.
@@ -956,5 +1039,19 @@ mod tests {
         }
         let provider = CssProvider::new();
         provider.load_from_string(BASE_CSS);
+    }
+
+    #[test]
+    fn base_css_contains_arc_and_omnibox_superpower_classes() {
+        for selector in [
+            ".space-pill",
+            ".space-pill.active",
+            ".omnibox-calc-row",
+            ".color-swatch",
+            ".peek-card",
+            ".tidy-btn",
+        ] {
+            assert!(BASE_CSS.contains(selector), "missing selector {selector}");
+        }
     }
 }
