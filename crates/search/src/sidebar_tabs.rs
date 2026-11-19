@@ -19,12 +19,150 @@ use search_core::address::clean_link;
 use search_core::pin_folders::{PinFolder, PinFolderStore, MAX_PIN_FOLDER_DEPTH};
 use search_core::session::PinStyle;
 use search_core::settings::{AppSettings, TabGlyph};
+use search_core::workspaces::WorkspaceStore;
 use std::cell::{Cell, RefCell};
+use std::collections::HashMap;
 use std::path::PathBuf;
-use std::rc::Rc;
+use std::rc::{Rc, Weak};
 use std::time::Duration;
 
 const PIN_FOLDERS_DEBOUNCE_MS: u64 = 1000;
+
+/// Identificador de un espacio de trabajo estilo Arc.
+pub type WorkspaceId = String;
+
+/// Paleta curada de colores de acento para espacios (`color_id`, etiqueta, `#RRGGBB`).
+pub const SPACE_ACCENT_COLORS: &[(&str, &str, &str)] = &[
+    ("blue", "Azul", "#3584e4"),
+    ("purple", "Violeta", "#9141ac"),
+    ("green", "Verde", "#2ec27e"),
+    ("amber", "Ámbar", "#e5a50a"),
+    ("rose", "Rosa", "#e01b24"),
+    ("teal", "Turquesa", "#26a269"),
+    ("slate", "Pizarra", "#5e5c64"),
+];
+
+/// Devuelve el color hexadecimal de acento para un `color_id` de espacio.
+pub fn space_accent_hex(color_id: &str) -> &'static str {
+    let normalized = color_id.trim().to_ascii_lowercase();
+    for (id, _label, hex) in SPACE_ACCENT_COLORS {
+        if *id == normalized {
+            return hex;
+        }
+    }
+    "#3584e4"
+}
+
+fn space_icon_id(icon_id: &str) -> IconId {
+    match icon_id.trim().to_ascii_lowercase().as_str() {
+        "home" => IconId::Home,
+        "layers" => IconId::Layers,
+        "code" => IconId::Code,
+        "star" => IconId::Star,
+        "globe" => IconId::Globe,
+        "folder" => IconId::Folder,
+        _ => IconId::Spaces,
+    }
+}
+
+fn default_workspace_store() -> WorkspaceStore {
+    let mut store = WorkspaceStore::new();
+    let personal_id = store.create("Personal", "blue", "home").id.clone();
+    store.create("Trabajo", "purple", "layers");
+    store.create("Dev", "green", "code");
+    let _ = store.switch(&personal_id);
+    store
+}
+
+/// Extrae el dominio normalizado de una URL para agrupar/ordenar pestañas.
+pub fn extract_domain(url: &str) -> String {
+    let trimmed = url.trim();
+    if trimmed.is_empty() {
+        return "local".to_string();
+    }
+    if let Some(rest) = trimmed.strip_prefix("plasma://") {
+        let host = rest.split(['/', '?', '#']).next().unwrap_or("plasma");
+        return format!("plasma://{host}");
+    }
+    let after_scheme = match trimmed.split_once("://") {
+        Some((_scheme, rest)) => rest,
+        None => trimmed,
+    };
+    let authority = after_scheme.split(['/', '?', '#']).next().unwrap_or("");
+    let host_port = authority
+        .rsplit_once('@')
+        .map(|(_, h)| h)
+        .unwrap_or(authority);
+    let host = if host_port.starts_with('[') {
+        host_port
+            .split(']')
+            .next()
+            .unwrap_or(host_port)
+            .trim_start_matches('[')
+    } else {
+        host_port.split(':').next().unwrap_or(host_port)
+    };
+    let lower = host.trim().to_ascii_lowercase();
+    let bare = lower.strip_prefix("www.").unwrap_or(&lower);
+    if bare.is_empty() {
+        "local".to_string()
+    } else {
+        bare.to_string()
+    }
+}
+
+fn tab_belongs_to_workspace(
+    item: &SidebarTabItem,
+    active_workspace_id: Option<&str>,
+    tab_workspaces: &HashMap<u64, WorkspaceId>,
+) -> bool {
+    let Some(active_id) = active_workspace_id else {
+        return true;
+    };
+    match tab_workspaces.get(&item.id) {
+        Some(ws_id) => ws_id == active_id,
+        None => true,
+    }
+}
+
+/// Ordena de forma estable las pestañas no fijadas del espacio activo por dominio.
+pub fn tidy_items_by_domain(
+    items: &mut [SidebarTabItem],
+    active_workspace_id: Option<&str>,
+    tab_workspaces: &HashMap<u64, WorkspaceId>,
+) {
+    let mut positions = Vec::new();
+    let mut unpinned = Vec::new();
+    for (idx, item) in items.iter().enumerate() {
+        if !item.is_pinned() && tab_belongs_to_workspace(item, active_workspace_id, tab_workspaces)
+        {
+            positions.push(idx);
+            unpinned.push((extract_domain(&item.url), idx, item.clone()));
+        }
+    }
+    unpinned.sort_by(|a, b| a.0.cmp(&b.0).then_with(|| a.1.cmp(&b.1)));
+    for (slot, (_domain, _orig_idx, sorted_item)) in positions.into_iter().zip(unpinned) {
+        items[slot] = sorted_item;
+    }
+}
+
+/// Recopila los IDs de pestañas no fijadas y no activas del espacio activo para "Limpiar".
+pub fn collect_clearable_tab_ids(
+    items: &[SidebarTabItem],
+    active_workspace_id: Option<&str>,
+    tab_workspaces: &HashMap<u64, WorkspaceId>,
+) -> Vec<u64> {
+    items
+        .iter()
+        .filter(|item| {
+            !item.is_pinned()
+                && !item.selected
+                && !item.split_hidden
+                && tab_belongs_to_workspace(item, active_workspace_id, tab_workspaces)
+        })
+        .map(|item| item.id)
+        .collect()
+}
 
 // ============================================================================
 // Gestor reactivo compartido de carpetas de pines (`pin-folders.json`)
@@ -250,6 +388,9 @@ pub struct SidebarCallbacks {
     pub on_rename_folder: Option<Box<dyn Fn(String, String)>>,
     pub on_delete_folder: Option<Box<dyn Fn(String)>>,
     pub on_toggle_folder_collapsed: Option<Box<dyn Fn(String, bool)>>,
+    pub on_workspace_changed: Option<Box<dyn Fn(WorkspaceId, String)>>,
+    pub on_clear_today: Option<Box<dyn Fn(Vec<u64>)>>,
+    pub on_tidy_tabs: Option<Box<dyn Fn()>>,
 }
 
 #[derive(Clone)]
@@ -265,6 +406,11 @@ enum FolderEditorMode {
 
 #[derive(Clone)]
 pub struct SidebarTabs {
+    inner: Rc<SidebarTabsInner>,
+}
+
+struct SidebarTabsInner {
+    weak: Weak<SidebarTabsInner>,
     root: BoxWidget,
     filter_entry: SearchEntry,
     filter_empty_box: BoxWidget,
@@ -275,21 +421,130 @@ pub struct SidebarTabs {
     folder_editor_mode: Rc<RefCell<Option<FolderEditorMode>>>,
     pinned_tree_box: BoxWidget,
     pinned_sep: Separator,
+    today_header: BoxWidget,
+    tidy_btn: Button,
+    tidy_icon: Image,
+    clear_today_btn: Button,
+    clear_today_icon: Image,
     list_box: ListBox,
+    spaces_bar: BoxWidget,
+    spaces_pills_box: BoxWidget,
+    add_space_icon: Image,
     new_tab_icon: Image,
     settings_icon: Image,
     add_folder_icon: Image,
     folder_popover: Rc<RefCell<Option<Popover>>>,
+    space_popover: Rc<RefCell<Option<Popover>>>,
     current_width: Rc<Cell<i32>>,
     motion_ms: Rc<Cell<u32>>,
     last_items: Rc<RefCell<Vec<SidebarTabItem>>>,
     last_folders: Rc<RefCell<Vec<PinFolder>>>,
     last_opts: Rc<Cell<SidebarRenderOptions>>,
+    workspace_store: Rc<RefCell<WorkspaceStore>>,
+    tab_workspaces: Rc<RefCell<HashMap<u64, WorkspaceId>>>,
     callbacks: Rc<RefCell<SidebarCallbacks>>,
 }
 
 impl SidebarTabs {
     pub fn new(width: i32) -> Self {
+        Self {
+            inner: SidebarTabsInner::new(width),
+        }
+    }
+
+    pub fn widget(&self) -> &BoxWidget {
+        &self.inner.root
+    }
+
+    pub fn set_callbacks(&self, cbs: SidebarCallbacks) {
+        self.inner.set_callbacks(cbs);
+    }
+
+    pub fn set_width(&self, width: i32) {
+        self.inner.set_width(width);
+    }
+
+    pub fn width(&self) -> i32 {
+        self.inner.width()
+    }
+
+    pub fn set_motion_duration(&self, ms: u32) {
+        self.inner.set_motion_duration(ms);
+    }
+
+    pub fn set_roomy(&self, roomy: bool) {
+        self.inner.set_roomy(roomy);
+    }
+
+    pub fn refresh_theme_icons(&self, dark: bool) {
+        self.inner.refresh_theme_icons(dark);
+    }
+
+    pub fn cleanup(&self) {
+        self.inner.cleanup();
+    }
+
+    #[allow(dead_code)]
+    pub fn set_workspace_store(&self, store: WorkspaceStore) {
+        self.inner.set_workspace_store(store);
+    }
+
+    #[allow(dead_code)]
+    pub fn workspace_store(&self) -> WorkspaceStore {
+        self.inner.workspace_store()
+    }
+
+    #[allow(dead_code)]
+    pub fn active_workspace_id(&self) -> Option<WorkspaceId> {
+        self.inner.active_workspace_id()
+    }
+
+    #[allow(dead_code)]
+    pub fn set_tab_workspace(&self, tab_id: u64, workspace_id: &str) {
+        self.inner.set_tab_workspace(tab_id, workspace_id);
+    }
+
+    #[allow(dead_code)]
+    pub fn switch_workspace(&self, workspace_id: &str) -> bool {
+        self.inner.switch_workspace(workspace_id)
+    }
+
+    pub fn begin_create_folder(&self, parent_id: Option<String>, move_tab_id: Option<u64>) {
+        self.inner.begin_create_folder(parent_id, move_tab_id);
+    }
+
+    #[allow(dead_code)]
+    pub fn begin_rename_folder(&self, folder_id: String, current_name: &str) {
+        self.inner.begin_rename_folder(folder_id, current_name);
+    }
+
+    pub fn sync(
+        &self,
+        items: &[SidebarTabItem],
+        folders: &[PinFolder],
+        opts: SidebarRenderOptions,
+    ) {
+        self.inner.sync(items, folders, opts);
+    }
+
+    #[allow(clippy::too_many_arguments, dead_code)]
+    pub fn open_tab_context_menu(
+        &self,
+        tab_id: u64,
+        tab_url: &str,
+        is_muted: bool,
+        is_pinned: bool,
+        anchor: &BoxWidget,
+        x: f64,
+        y: f64,
+    ) {
+        self.inner
+            .open_tab_context_menu(tab_id, tab_url, is_muted, is_pinned, anchor, x, y);
+    }
+}
+
+impl SidebarTabsInner {
+    fn new(width: i32) -> Rc<Self> {
         let dark = icons::is_dark_theme();
         let clamped_width = width.clamp(
             AppSettings::SIDEBAR_WIDTH_MIN as i32,
@@ -371,7 +626,44 @@ impl SidebarTabs {
         pinned_sep.add_css_class("search-sidebar-divider");
         pinned_sep.set_visible(false);
 
-        // 3. Lista desplazable de pestañas regulares (Hoy).
+        // 3. Cabecera de pestañas de Hoy (Limpiar + Ordenar) y lista desplazable.
+        let today_header = BoxWidget::new(Orientation::Horizontal, 4);
+        today_header.add_css_class("search-sidebar-section-header");
+        today_header.set_visible(false);
+        let today_title = Label::new(Some("Hoy"));
+        today_title.add_css_class("search-sidebar-section-label");
+        today_title.set_xalign(0.0);
+        today_title.set_hexpand(true);
+        today_header.append(&today_title);
+
+        let tidy_btn = Button::new();
+        tidy_btn.add_css_class("flat");
+        tidy_btn.add_css_class("search-tab-mini-btn");
+        tidy_btn.add_css_class("tidy-btn");
+        tidy_btn.set_tooltip_text(Some("Ordenar pestañas por dominio"));
+        let tidy_row = BoxWidget::new(Orientation::Horizontal, 3);
+        tidy_row.set_valign(Align::Center);
+        let tidy_icon = icons::image_for_theme(IconId::Layers, 12, dark);
+        let tidy_lbl = Label::new(Some("Ordenar"));
+        tidy_row.append(&tidy_icon);
+        tidy_row.append(&tidy_lbl);
+        tidy_btn.set_child(Some(&tidy_row));
+        today_header.append(&tidy_btn);
+
+        let clear_today_btn = Button::new();
+        clear_today_btn.add_css_class("flat");
+        clear_today_btn.add_css_class("search-tab-mini-btn");
+        clear_today_btn.add_css_class("tidy-btn");
+        clear_today_btn.set_tooltip_text(Some("Limpiar pestañas no activas de hoy"));
+        let clear_today_row = BoxWidget::new(Orientation::Horizontal, 3);
+        clear_today_row.set_valign(Align::Center);
+        let clear_today_icon = icons::image_for_theme(IconId::Broom, 12, dark);
+        let clear_today_lbl = Label::new(Some("Limpiar"));
+        clear_today_row.append(&clear_today_icon);
+        clear_today_row.append(&clear_today_lbl);
+        clear_today_btn.set_child(Some(&clear_today_row));
+        today_header.append(&clear_today_btn);
+
         let list_box = ListBox::new();
         list_box.add_css_class("search-sidebar-list");
         list_box.set_selection_mode(SelectionMode::None);
@@ -384,12 +676,34 @@ impl SidebarTabs {
         scroll_inner.append(&folder_editor_box);
         scroll_inner.append(&pinned_tree_box);
         scroll_inner.append(&pinned_sep);
+        scroll_inner.append(&today_header);
         scroll_inner.append(&list_box);
 
         let scrolled = ScrolledWindow::new();
         scrolled.set_policy(PolicyType::Never, PolicyType::Automatic);
         scrolled.set_vexpand(true);
         scrolled.set_child(Some(&scroll_inner));
+
+        // 3b. Barra de Espacios estilo Arc (`Personal`, `Trabajo`, `Dev`, `+`).
+        let spaces_bar = BoxWidget::new(Orientation::Horizontal, 4);
+        spaces_bar.add_css_class("search-sidebar-spaces-bar");
+        let spaces_scroll = ScrolledWindow::new();
+        spaces_scroll.set_policy(PolicyType::Automatic, PolicyType::Never);
+        spaces_scroll.set_propagate_natural_height(true);
+        spaces_scroll.set_hexpand(true);
+        let spaces_pills_box = BoxWidget::new(Orientation::Horizontal, 4);
+        spaces_pills_box.set_valign(Align::Center);
+        spaces_scroll.set_child(Some(&spaces_pills_box));
+        spaces_bar.append(&spaces_scroll);
+
+        let add_space_btn = Button::new();
+        add_space_btn.add_css_class("flat");
+        add_space_btn.add_css_class("search-tab-mini-btn");
+        add_space_btn.add_css_class("space-pill");
+        add_space_btn.set_tooltip_text(Some("Nuevo espacio"));
+        let add_space_icon = icons::image_for_theme(IconId::Plus, 13, dark);
+        add_space_btn.set_child(Some(&add_space_icon));
+        spaces_bar.append(&add_space_btn);
 
         // 4. Pie discreto: `+ Nueva pestaña` + botón compacto de Ajustes (`plasma://settings`).
         let footer = BoxWidget::new(Orientation::Horizontal, 4);
@@ -422,14 +736,19 @@ impl SidebarTabs {
         root.append(&filter_entry);
         root.append(&favorites_box);
         root.append(&scrolled);
+        root.append(&spaces_bar);
         root.append(&footer);
 
         let callbacks = Rc::new(RefCell::new(SidebarCallbacks::default()));
         let folder_editor_mode = Rc::new(RefCell::new(None));
         let folder_popover = Rc::new(RefCell::new(None));
+        let space_popover = Rc::new(RefCell::new(None));
         let motion_ms = Rc::new(Cell::new(180u32));
+        let workspace_store = Rc::new(RefCell::new(default_workspace_store()));
+        let tab_workspaces = Rc::new(RefCell::new(HashMap::new()));
 
-        let sidebar = Self {
+        let sidebar = Rc::new_cyclic(|weak| Self {
+            weak: weak.clone(),
             root,
             filter_entry: filter_entry.clone(),
             filter_empty_box,
@@ -440,23 +759,36 @@ impl SidebarTabs {
             folder_editor_mode,
             pinned_tree_box,
             pinned_sep,
+            today_header,
+            tidy_btn: tidy_btn.clone(),
+            tidy_icon,
+            clear_today_btn: clear_today_btn.clone(),
+            clear_today_icon,
             list_box,
+            spaces_bar,
+            spaces_pills_box,
+            add_space_icon,
             new_tab_icon,
             settings_icon,
             add_folder_icon,
             folder_popover,
+            space_popover,
             current_width: Rc::new(Cell::new(clamped_width)),
             motion_ms,
             last_items: Rc::new(RefCell::new(Vec::new())),
             last_folders: Rc::new(RefCell::new(Vec::new())),
             last_opts: Rc::new(Cell::new(SidebarRenderOptions::default())),
+            workspace_store,
+            tab_workspaces,
             callbacks: callbacks.clone(),
-        };
+        });
 
         {
-            let s = sidebar.clone();
+            let weak = sidebar.weak.clone();
             filter_entry.connect_search_changed(move || {
-                s.render_filtered();
+                if let Some(s) = weak.upgrade() {
+                    s.render_filtered();
+                }
             });
         }
         {
@@ -487,44 +819,84 @@ impl SidebarTabs {
 
         // Botón `+ Carpeta` y editor inline.
         {
-            let s = sidebar.clone();
+            let weak = sidebar.weak.clone();
             add_folder_btn.connect_clicked(move || {
-                s.begin_create_folder(None, None);
+                if let Some(s) = weak.upgrade() {
+                    s.begin_create_folder(None, None);
+                }
             });
         }
         {
-            let s = sidebar.clone();
-            folder_ok_btn.connect_clicked(move || s.commit_folder_editor());
+            let weak = sidebar.weak.clone();
+            folder_ok_btn.connect_clicked(move || {
+                if let Some(s) = weak.upgrade() {
+                    s.commit_folder_editor();
+                }
+            });
         }
         {
-            let s = sidebar.clone();
-            folder_editor_entry.connect_activate(move || s.commit_folder_editor());
+            let weak = sidebar.weak.clone();
+            folder_editor_entry.connect_activate(move || {
+                if let Some(s) = weak.upgrade() {
+                    s.commit_folder_editor();
+                }
+            });
         }
         {
-            let s = sidebar.clone();
-            folder_cancel_btn.connect_clicked(move || s.cancel_folder_editor());
+            let weak = sidebar.weak.clone();
+            folder_cancel_btn.connect_clicked(move || {
+                if let Some(s) = weak.upgrade() {
+                    s.cancel_folder_editor();
+                }
+            });
         }
 
         // Clic derecho en el fondo vacío de la barra lateral -> Nueva carpeta / Nueva pestaña.
         {
             let bg_right = GestureClick::new();
             bg_right.set_button(3);
-            let s = sidebar.clone();
-            let anchor = sidebar.root.clone();
+            let weak = sidebar.weak.clone();
             bg_right.connect_pressed(move |_n, x, y| {
-                s.open_sidebar_background_menu(&anchor, x, y);
+                if let Some(s) = weak.upgrade() {
+                    s.open_sidebar_background_menu(&s.root, x, y);
+                }
             });
             sidebar.list_box.add_controller(&bg_right);
         }
 
+        // Botones "Ordenar" y "Limpiar" de la sección Hoy.
+        {
+            let weak = sidebar.weak.clone();
+            tidy_btn.connect_clicked(move || {
+                if let Some(s) = weak.upgrade() {
+                    s.tidy_tabs_now();
+                }
+            });
+        }
+        {
+            let weak = sidebar.weak.clone();
+            clear_today_btn.connect_clicked(move || {
+                if let Some(s) = weak.upgrade() {
+                    s.clear_today_tabs();
+                }
+            });
+        }
+
+        // Botón `+` para crear un nuevo Espacio.
+        {
+            let weak = sidebar.weak.clone();
+            add_space_btn.connect_clicked(move || {
+                if let Some(s) = weak.upgrade() {
+                    s.open_space_editor_popover(&s.spaces_bar, None);
+                }
+            });
+        }
+
+        sidebar.render_spaces_bar();
         sidebar
     }
 
-    pub fn widget(&self) -> &BoxWidget {
-        &self.root
-    }
-
-    pub fn set_callbacks(&self, cbs: SidebarCallbacks) {
+    fn set_callbacks(&self, cbs: SidebarCallbacks) {
         *self.callbacks.borrow_mut() = cbs;
     }
 
@@ -562,6 +934,9 @@ impl SidebarTabs {
         icons::set_image_icon(&self.new_tab_icon, IconId::Plus, dark);
         icons::set_image_icon(&self.settings_icon, IconId::Settings, dark);
         icons::set_image_icon(&self.add_folder_icon, IconId::FolderPlus, dark);
+        icons::set_image_icon(&self.add_space_icon, IconId::Plus, dark);
+        icons::set_image_icon(&self.tidy_icon, IconId::Layers, dark);
+        icons::set_image_icon(&self.clear_today_icon, IconId::Broom, dark);
     }
 
     pub fn cleanup(&self) {
@@ -569,6 +944,343 @@ impl SidebarTabs {
             pop.popdown();
             pop.unparent();
         }
+        if let Some(pop) = self.space_popover.borrow_mut().take() {
+            pop.popdown();
+            pop.unparent();
+        }
+    }
+
+    /// Reemplaza el almacén de Espacios y actualiza la barra de píldoras y pestañas visibles.
+    #[allow(dead_code)]
+    pub fn set_workspace_store(&self, mut store: WorkspaceStore) {
+        if store.workspaces.is_empty() {
+            store = default_workspace_store();
+        } else {
+            store.sanitize();
+        }
+        *self.workspace_store.borrow_mut() = store;
+        self.render_spaces_bar();
+        self.render_filtered();
+    }
+
+    /// Devuelve una instantánea del almacén de Espacios actual.
+    #[allow(dead_code)]
+    pub fn workspace_store(&self) -> WorkspaceStore {
+        self.workspace_store.borrow().clone()
+    }
+
+    /// Devuelve el ID del Espacio activo actualmente.
+    #[allow(dead_code)]
+    pub fn active_workspace_id(&self) -> Option<WorkspaceId> {
+        self.workspace_store.borrow().active_workspace_id.clone()
+    }
+
+    /// Asigna una pestaña no fijada a un Espacio concreto.
+    #[allow(dead_code)]
+    pub fn set_tab_workspace(&self, tab_id: u64, workspace_id: &str) {
+        self.tab_workspaces
+            .borrow_mut()
+            .insert(tab_id, workspace_id.to_string());
+        self.render_filtered();
+    }
+
+    /// Cambia al Espacio `workspace_id`, filtra las pestañas no fijadas y dispara `on_workspace_changed`.
+    pub fn switch_workspace(&self, workspace_id: &str) -> bool {
+        let switched = {
+            let mut store = self.workspace_store.borrow_mut();
+            store
+                .switch(workspace_id)
+                .ok()
+                .map(|ws| (ws.id.clone(), space_accent_hex(&ws.color_id).to_string()))
+        };
+        let Some((ws_id, accent_hex)) = switched else {
+            return false;
+        };
+        self.render_spaces_bar();
+        self.render_filtered();
+        if let Some(ref cb) = self.callbacks.borrow().on_workspace_changed {
+            cb(ws_id, accent_hex);
+        }
+        true
+    }
+
+    fn clear_today_tabs(&self) {
+        let active_ws = self.active_workspace_id();
+        let ids = {
+            let items = self.last_items.borrow();
+            let tab_ws = self.tab_workspaces.borrow();
+            collect_clearable_tab_ids(&items, active_ws.as_deref(), &tab_ws)
+        };
+        if ids.is_empty() {
+            return;
+        }
+        let cbs = self.callbacks.borrow();
+        if let Some(ref cb) = cbs.on_clear_today {
+            cb(ids);
+        } else if let Some(ref close_cb) = cbs.on_close {
+            for id in ids {
+                close_cb(id);
+            }
+        }
+    }
+
+    fn tidy_tabs_now(&self) {
+        let active_ws = self.active_workspace_id();
+        {
+            let mut items = self.last_items.borrow_mut();
+            let tab_ws = self.tab_workspaces.borrow();
+            tidy_items_by_domain(&mut items, active_ws.as_deref(), &tab_ws);
+        }
+        self.render_filtered();
+        if let Some(ref cb) = self.callbacks.borrow().on_tidy_tabs {
+            cb();
+        }
+    }
+
+    fn render_spaces_bar(&self) {
+        let dark = icons::is_dark_theme();
+        let (workspaces, active_id) = {
+            let store = self.workspace_store.borrow();
+            (store.workspaces.clone(), store.active_workspace_id.clone())
+        };
+
+        let weak = self.weak.clone();
+        rebuild_box_children(&self.spaces_pills_box, || {
+            let mut pills = Vec::new();
+            for ws in &workspaces {
+                let is_active = active_id.as_deref() == Some(ws.id.as_str());
+                let pill_holder = BoxWidget::new(Orientation::Horizontal, 0);
+
+                let btn = Button::new();
+                btn.add_css_class("flat");
+                btn.add_css_class("space-pill");
+                if is_active {
+                    btn.add_css_class("active");
+                }
+                let accent = space_accent_hex(&ws.color_id);
+                btn.set_tooltip_text(Some(&format!(
+                    "Espacio {} ({accent}) — clic derecho para editar",
+                    ws.name
+                )));
+
+                let row = BoxWidget::new(Orientation::Horizontal, 4);
+                row.set_valign(Align::Center);
+                let icon = icons::image_for_theme(space_icon_id(&ws.icon_id), 13, dark);
+                let lbl = Label::new(Some(&ws.name));
+                lbl.set_ellipsize(EllipsizeMode::End);
+                row.append(&icon);
+                row.append(&lbl);
+                btn.set_child(Some(&row));
+
+                {
+                    let weak_click = weak.clone();
+                    let ws_id = ws.id.clone();
+                    btn.connect_clicked(move || {
+                        if let Some(s) = weak_click.upgrade() {
+                            s.switch_workspace(&ws_id);
+                        }
+                    });
+                }
+
+                {
+                    let right = GestureClick::new();
+                    right.set_button(3);
+                    let weak_right = weak.clone();
+                    let ws_id = ws.id.clone();
+                    right.connect_pressed(move |_n, _x, _y| {
+                        if let Some(s) = weak_right.upgrade() {
+                            s.open_space_editor_popover(&s.spaces_bar, Some(ws_id.clone()));
+                        }
+                    });
+                    btn.add_controller(&right);
+                }
+
+                pill_holder.append(&btn);
+                pills.push(pill_holder);
+            }
+            pills
+        });
+    }
+
+    fn open_space_editor_popover(&self, anchor: &impl AsWidget, edit_ws_id: Option<String>) {
+        if let Some(old) = self.space_popover.borrow_mut().take() {
+            old.popdown();
+            old.unparent();
+        }
+        let pop = Popover::new();
+        pop.set_parent(anchor);
+        pop.set_has_arrow(true);
+        pop.set_position(PositionType::Top);
+
+        let (initial_name, initial_color, can_delete) = if let Some(ref ws_id) = edit_ws_id {
+            let store = self.workspace_store.borrow();
+            let ws = store.workspaces.iter().find(|w| &w.id == ws_id);
+            let name = ws.map(|w| w.name.clone()).unwrap_or_default();
+            let color = ws
+                .map(|w| w.color_id.clone())
+                .unwrap_or_else(|| "blue".to_string());
+            (name, color, store.workspaces.len() > 1)
+        } else {
+            (String::new(), "blue".to_string(), false)
+        };
+
+        let container = BoxWidget::new(Orientation::Vertical, 6);
+        container.set_margins(8, 8, 8, 8);
+
+        let heading = Label::new(Some(if edit_ws_id.is_some() {
+            "Editar espacio"
+        } else {
+            "Nuevo espacio"
+        }));
+        heading.add_css_class("search-sidebar-section-label");
+        heading.set_xalign(0.0);
+        container.append(&heading);
+
+        let name_entry = Entry::new();
+        name_entry.set_placeholder_text("Nombre del espacio…");
+        name_entry.set_text(&initial_name);
+        container.append(&name_entry);
+
+        let selected_color = Rc::new(RefCell::new(initial_color));
+        let color_row = BoxWidget::new(Orientation::Horizontal, 4);
+        let swatch_buttons: Rc<RefCell<Vec<(String, Button)>>> = Rc::new(RefCell::new(Vec::new()));
+        for (color_id, color_label, hex) in SPACE_ACCENT_COLORS {
+            let swatch = Button::with_label(color_label);
+            swatch.add_css_class("flat");
+            swatch.add_css_class("space-pill");
+            if *color_id == selected_color.borrow().as_str() {
+                swatch.add_css_class("active");
+            }
+            swatch.set_tooltip_text(Some(&format!("{color_label} ({hex})")));
+
+            let cid = (*color_id).to_string();
+            let sel_ref = selected_color.clone();
+            let btns_weak = Rc::downgrade(&swatch_buttons);
+            swatch.connect_clicked(move || {
+                *sel_ref.borrow_mut() = cid.clone();
+                if let Some(btns) = btns_weak.upgrade() {
+                    for (id, b) in btns.borrow().iter() {
+                        if id == &cid {
+                            b.add_css_class("active");
+                        } else {
+                            b.remove_css_class("active");
+                        }
+                    }
+                }
+            });
+            swatch_buttons
+                .borrow_mut()
+                .push(((*color_id).to_string(), swatch.clone()));
+            color_row.append(&swatch);
+        }
+        container.append(&color_row);
+
+        let actions_row = BoxWidget::new(Orientation::Horizontal, 4);
+        let save_btn = Button::with_label(if edit_ws_id.is_some() {
+            "Guardar"
+        } else {
+            "Crear"
+        });
+        save_btn.add_css_class("suggested-action");
+        save_btn.set_hexpand(true);
+        actions_row.append(&save_btn);
+
+        if can_delete {
+            if let Some(ref ws_id) = edit_ws_id {
+                let del_btn = Button::with_label("Eliminar");
+                del_btn.add_css_class("flat");
+                del_btn.add_css_class("destructive-action");
+                let weak = self.weak.clone();
+                let del_id = ws_id.clone();
+                del_btn.connect_clicked(move || {
+                    if let Some(s) = weak.upgrade() {
+                        if let Some(p) = s.space_popover.borrow_mut().take() {
+                            p.popdown();
+                            p.unparent();
+                        }
+                        let fallback_ws = {
+                            let mut store = s.workspace_store.borrow_mut();
+                            let _ = store.delete(&del_id);
+                            store.active().map(|w| w.id.clone())
+                        };
+                        if let Some(next_id) = fallback_ws {
+                            let mut map = s.tab_workspaces.borrow_mut();
+                            for ws in map.values_mut() {
+                                if ws == &del_id {
+                                    *ws = next_id.clone();
+                                }
+                            }
+                            drop(map);
+                            s.switch_workspace(&next_id);
+                        } else {
+                            s.render_spaces_bar();
+                            s.render_filtered();
+                        }
+                    }
+                });
+                actions_row.append(&del_btn);
+            }
+        }
+        container.append(&actions_row);
+
+        let entry_slot = Rc::new(RefCell::new(Some(name_entry.clone())));
+        let commit_action = {
+            let weak = self.weak.clone();
+            let entry_slot = entry_slot.clone();
+            let sel_color = selected_color.clone();
+            let edit_id = edit_ws_id.clone();
+            Rc::new(move || {
+                let Some(entry) = entry_slot.borrow_mut().take() else {
+                    return;
+                };
+                let name = entry.text().trim().to_string();
+                let Some(s) = weak.upgrade() else {
+                    return;
+                };
+                if let Some(p) = s.space_popover.borrow_mut().take() {
+                    p.popdown();
+                    p.unparent();
+                }
+                if name.is_empty() {
+                    return;
+                }
+                let color_id = sel_color.borrow().clone();
+                if let Some(ref ws_id) = edit_id {
+                    let is_active = {
+                        let mut store = s.workspace_store.borrow_mut();
+                        let _ = store.rename(ws_id, &name);
+                        let _ = store.set_appearance(ws_id, &color_id, "");
+                        store.active_workspace_id.as_deref() == Some(ws_id.as_str())
+                    };
+                    s.render_spaces_bar();
+                    if is_active {
+                        if let Some(ref cb) = s.callbacks.borrow().on_workspace_changed {
+                            cb(ws_id.clone(), space_accent_hex(&color_id).to_string());
+                        }
+                    }
+                } else {
+                    let new_id = {
+                        let mut store = s.workspace_store.borrow_mut();
+                        store.create(&name, &color_id, "spaces").id.clone()
+                    };
+                    s.switch_workspace(&new_id);
+                }
+            })
+        };
+
+        {
+            let commit = commit_action.clone();
+            save_btn.connect_clicked(move || commit());
+        }
+        {
+            let commit = commit_action;
+            name_entry.connect_activate(move || commit());
+        }
+
+        pop.set_child(Some(&container));
+        pop.popup();
+        name_entry.grab_focus();
+        *self.space_popover.borrow_mut() = Some(pop);
     }
 
     /// Abre el editor inline de carpetas para crear una carpeta (raíz o subcarpeta),
@@ -651,11 +1363,13 @@ impl SidebarTabs {
         let btn_folder = Button::with_label("Nueva carpeta");
         btn_folder.add_css_class("flat");
         {
-            let s = self.clone();
+            let weak = self.weak.clone();
             let p = pop.clone();
             btn_folder.connect_clicked(move || {
                 p.popdown();
-                s.begin_create_folder(None, None);
+                if let Some(s) = weak.upgrade() {
+                    s.begin_create_folder(None, None);
+                }
             });
         }
         menu_box.append(&btn_folder);
@@ -708,12 +1422,14 @@ impl SidebarTabs {
         if depth + 1 < MAX_PIN_FOLDER_DEPTH {
             let sub_btn = Button::with_label("Nueva subcarpeta");
             sub_btn.add_css_class("flat");
-            let s = self.clone();
+            let weak = self.weak.clone();
             let fid = folder.id.clone();
             let p = pop.clone();
             sub_btn.connect_clicked(move || {
                 p.popdown();
-                s.begin_create_folder(Some(fid.clone()), None);
+                if let Some(s) = weak.upgrade() {
+                    s.begin_create_folder(Some(fid.clone()), None);
+                }
             });
             menu_box.append(&sub_btn);
         }
@@ -721,13 +1437,15 @@ impl SidebarTabs {
         let ren_btn = Button::with_label("Renombrar carpeta");
         ren_btn.add_css_class("flat");
         {
-            let s = self.clone();
+            let weak = self.weak.clone();
             let fid = folder.id.clone();
             let fname = folder.name.clone();
             let p = pop.clone();
             ren_btn.connect_clicked(move || {
                 p.popdown();
-                s.begin_rename_folder(fid.clone(), &fname);
+                if let Some(s) = weak.upgrade() {
+                    s.begin_rename_folder(fid.clone(), &fname);
+                }
             });
         }
         menu_box.append(&ren_btn);
@@ -762,9 +1480,30 @@ impl SidebarTabs {
         folders: &[PinFolder],
         opts: SidebarRenderOptions,
     ) {
+        {
+            let store = self.workspace_store.borrow();
+            let active_id = store.active_workspace_id.as_deref();
+            let mut tab_ws = self.tab_workspaces.borrow_mut();
+            let live_ids: std::collections::HashSet<u64> = items.iter().map(|i| i.id).collect();
+            tab_ws.retain(|id, _| live_ids.contains(id));
+            for item in items {
+                if !item.is_pinned() && !tab_ws.contains_key(&item.id) {
+                    let matched = store
+                        .workspaces
+                        .iter()
+                        .find(|w| w.tab_urls.iter().any(|u| u == &item.url))
+                        .map(|w| w.id.clone())
+                        .or_else(|| active_id.map(|id| id.to_string()));
+                    if let Some(ws_id) = matched {
+                        tab_ws.insert(item.id, ws_id);
+                    }
+                }
+            }
+        }
         *self.last_items.borrow_mut() = items.to_vec();
         *self.last_folders.borrow_mut() = folders.to_vec();
         self.last_opts.set(opts);
+        self.render_spaces_bar();
         self.render_filtered();
     }
 
@@ -772,6 +1511,8 @@ impl SidebarTabs {
         let all_items = self.last_items.borrow();
         let folders = self.last_folders.borrow();
         let opts = self.last_opts.get();
+        let active_ws = self.active_workspace_id();
+        let tab_ws = self.tab_workspaces.borrow();
 
         self.set_roomy(opts.roomy);
         self.set_motion_duration(opts.motion_ms);
@@ -795,13 +1536,14 @@ impl SidebarTabs {
             self.pinned_header.set_visible(false);
             self.pinned_tree_box.set_visible(false);
             self.pinned_sep.set_visible(false);
+            self.today_header.set_visible(false);
             self.list_box.remove_all();
             self.filter_empty_box.set_visible(true);
             return;
         }
         self.filter_empty_box.set_visible(false);
 
-        // Separar favoritos cuadrados, filas fijadas y pestañas regulares.
+        // Separar favoritos cuadrados, filas fijadas y pestañas regulares del espacio activo.
         let squares: Vec<&SidebarTabItem> = filtered_items
             .iter()
             .copied()
@@ -815,7 +1557,9 @@ impl SidebarTabs {
         let regular: Vec<&SidebarTabItem> = filtered_items
             .iter()
             .copied()
-            .filter(|i| !i.is_pinned())
+            .filter(|i| {
+                !i.is_pinned() && tab_belongs_to_workspace(i, active_ws.as_deref(), &tab_ws)
+            })
             .collect();
 
         // 1. Reconstruir cuadrícula superior de Favoritos (hasta 4 por fila).
@@ -850,7 +1594,16 @@ impl SidebarTabs {
         self.pinned_sep
             .set_visible((!squares.is_empty() || has_pinned_tree) && !regular.is_empty());
 
-        // 3. Reconstruir lista de pestañas regulares.
+        // 3. Cabecera de Hoy (Ordenar + Limpiar) y lista de pestañas regulares.
+        let visible_regular_count = regular.iter().filter(|i| !i.split_hidden).count();
+        let clearable_count = regular
+            .iter()
+            .filter(|i| !i.selected && !i.split_hidden)
+            .count();
+        self.today_header.set_visible(visible_regular_count > 0);
+        self.tidy_btn.set_sensitive(visible_regular_count >= 2);
+        self.clear_today_btn.set_sensitive(clearable_count > 0);
+
         self.list_box.remove_all();
         for item in regular {
             if item.split_hidden {
@@ -1159,11 +1912,13 @@ impl SidebarTabs {
             {
                 let right = GestureClick::new();
                 right.set_button(3);
-                let s = self.clone();
+                let weak = self.weak.clone();
                 let f_clone = folder.clone();
                 let anchor = header_holder.clone();
                 right.connect_pressed(move |_n, x, y| {
-                    s.open_folder_context_menu(&f_clone, depth, &anchor, x, y);
+                    if let Some(s) = weak.upgrade() {
+                        s.open_folder_context_menu(&f_clone, depth, &anchor, x, y);
+                    }
                 });
                 header_btn.add_controller(&right);
             }
@@ -1600,5 +2355,92 @@ mod tests {
         assert_eq!(Weak::strong_count(&weak), 0);
 
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    fn make_test_item(
+        id: u64,
+        url: &str,
+        selected: bool,
+        pin_style: Option<PinStyle>,
+    ) -> SidebarTabItem {
+        SidebarTabItem {
+            id,
+            url: url.to_string(),
+            title: format!("Tab {id}"),
+            tooltip: String::new(),
+            pin_label: None,
+            pin_style,
+            folder_id: None,
+            selected,
+            loading: false,
+            audible: false,
+            muted: false,
+            favicon: None,
+            split_partner_favicon: None,
+            split_partner_title: None,
+            split_partner_url: None,
+            split_hidden: false,
+        }
+    }
+
+    #[test]
+    fn extract_domain_normalizes_urls() {
+        assert_eq!(
+            extract_domain("https://www.github.com/rust-lang"),
+            "github.com"
+        );
+        assert_eq!(extract_domain("http://docs.rs:8080/crate"), "docs.rs");
+        assert_eq!(extract_domain("plasma://settings"), "plasma://settings");
+        assert_eq!(extract_domain(""), "local");
+    }
+
+    #[test]
+    fn tidy_items_by_domain_groups_active_workspace_unpinned_only() {
+        let mut map = HashMap::new();
+        map.insert(1, "ws-a".to_string());
+        map.insert(2, "ws-a".to_string());
+        map.insert(3, "ws-a".to_string());
+        map.insert(4, "ws-b".to_string());
+
+        let mut items = vec![
+            make_test_item(10, "https://zeta.org", false, Some(PinStyle::Row)),
+            make_test_item(1, "https://www.youtube.com/watch?v=1", false, None),
+            make_test_item(2, "https://docs.rs/gtk", false, None),
+            make_test_item(4, "https://alpha.example.com", false, None),
+            make_test_item(3, "https://youtube.com/feed", true, None),
+        ];
+
+        tidy_items_by_domain(&mut items, Some("ws-a"), &map);
+        let ids: Vec<u64> = items.iter().map(|i| i.id).collect();
+        // Pinned (10) stays at 0; ws-b (4) stays at 3; ws-a unpinned sorted: docs.rs (2), youtube (1), youtube (3)
+        assert_eq!(ids, vec![10, 2, 1, 4, 3]);
+    }
+
+    #[test]
+    fn collect_clearable_tab_ids_skips_pinned_selected_and_other_workspaces() {
+        let mut map = HashMap::new();
+        map.insert(1, "ws-a".to_string());
+        map.insert(2, "ws-a".to_string());
+        map.insert(3, "ws-b".to_string());
+
+        let items = vec![
+            make_test_item(10, "https://pinned.example", false, Some(PinStyle::Square)),
+            make_test_item(1, "https://a.example", true, None),
+            make_test_item(2, "https://b.example", false, None),
+            make_test_item(3, "https://c.example", false, None),
+        ];
+
+        let clearable = collect_clearable_tab_ids(&items, Some("ws-a"), &map);
+        assert_eq!(clearable, vec![2]);
+    }
+
+    #[test]
+    fn default_workspace_store_seeds_personal_trabajo_dev() {
+        let store = default_workspace_store();
+        let names: Vec<&str> = store.workspaces.iter().map(|w| w.name.as_str()).collect();
+        assert_eq!(names, vec!["Personal", "Trabajo", "Dev"]);
+        assert_eq!(store.active().map(|w| w.name.as_str()), Some("Personal"));
+        assert_eq!(space_accent_hex("purple"), "#9141ac");
+        assert_eq!(space_accent_hex("unknown"), "#3584e4");
     }
 }
