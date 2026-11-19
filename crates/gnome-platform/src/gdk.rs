@@ -313,3 +313,56 @@ pub mod keys {
     pub const KP_SUBTRACT: u32 = 0xffad;
     pub const KP_0: u32 = 0xffb0;
 }
+
+// --- Fase 5 (Vault): portapapeles con proveedor propio para poder limpiarlo con seguridad. ---
+
+impl ContentProvider {
+    /// Proveedor de texto para un secreto (contraseña): la copia temporal en C se pone a cero
+    /// en cuanto GLib ha hecho la suya.
+    pub fn for_secret_string(value: &str) -> Self {
+        use zeroize::Zeroize;
+        let mut bytes: Vec<u8> = value.bytes().filter(|&b| b != 0).collect();
+        bytes.push(0);
+        unsafe {
+            let mut gval = sys::GValue::default();
+            sys::g_value_init(&mut gval, sys::G_TYPE_STRING);
+            sys::g_value_set_string(&mut gval, bytes.as_ptr().cast());
+            bytes.zeroize();
+            let ptr = sys::gdk_content_provider_new_for_value(&gval);
+            sys::g_value_unset(&mut gval);
+            Self {
+                obj: ObjectRef::from_new_ptr(ptr.cast()),
+            }
+        }
+    }
+}
+
+impl Display {
+    /// Publica `provider` como contenido del portapapeles de esta pantalla.
+    pub fn set_clipboard_content(&self, provider: &ContentProvider) -> bool {
+        unsafe {
+            let clipboard = sys::gdk_display_get_clipboard(self.ptr);
+            !clipboard.is_null()
+                && sys::gdk_clipboard_set_content(clipboard, provider.as_ptr()) != 0
+        }
+    }
+
+    /// `true` si el portapapeles sigue conteniendo exactamente `provider` (es decir, nadie ha
+    /// copiado otra cosa desde entonces, ni en esta aplicación ni en otra).
+    pub fn clipboard_holds(&self, provider: &ContentProvider) -> bool {
+        unsafe {
+            let clipboard = sys::gdk_display_get_clipboard(self.ptr);
+            !clipboard.is_null() && sys::gdk_clipboard_get_content(clipboard) == provider.as_ptr()
+        }
+    }
+
+    /// Vacía el portapapeles. Llamar solo tras comprobar `clipboard_holds`.
+    pub fn clear_clipboard(&self) {
+        unsafe {
+            let clipboard = sys::gdk_display_get_clipboard(self.ptr);
+            if !clipboard.is_null() {
+                sys::gdk_clipboard_set_content(clipboard, std::ptr::null_mut());
+            }
+        }
+    }
+}

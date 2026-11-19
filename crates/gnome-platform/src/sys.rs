@@ -1280,3 +1280,60 @@ extern "C" {
         accelerator: *const c_char,
     ) -> *mut AdwShortcutsItem;
 }
+
+// --- Fase 5 (Vault): diálogos de alerta, entrada de contraseña y portapapeles propio. ---
+
+#[repr(C)]
+pub struct AdwAlertDialog {
+    _private: [u8; 0],
+}
+
+#[repr(C)]
+pub struct GtkPasswordEntry {
+    _private: [u8; 0],
+}
+
+#[link(name = "gtk-4")]
+extern "C" {
+    pub fn gdk_clipboard_set_content(
+        clipboard: *mut GdkClipboard,
+        provider: *mut GdkContentProvider,
+    ) -> gboolean;
+    pub fn gdk_clipboard_get_content(clipboard: *mut GdkClipboard) -> *mut GdkContentProvider;
+
+    pub fn gtk_widget_set_focus_on_click(widget: *mut GtkWidget, focus_on_click: gboolean);
+    pub fn gtk_label_set_selectable(self_: *mut GtkLabel, setting: gboolean);
+
+    pub fn gtk_password_entry_new() -> *mut GtkWidget;
+    pub fn gtk_password_entry_set_show_peek_icon(
+        entry: *mut GtkPasswordEntry,
+        show_peek_icon: gboolean,
+    );
+}
+
+#[link(name = "adwaita-1")]
+extern "C" {
+    pub fn adw_alert_dialog_new(heading: *const c_char, body: *const c_char) -> *mut AdwDialog;
+    pub fn adw_alert_dialog_set_extra_child(self_: *mut AdwAlertDialog, child: *mut GtkWidget);
+    pub fn adw_alert_dialog_add_response(
+        self_: *mut AdwAlertDialog,
+        id: *const c_char,
+        label: *const c_char,
+    );
+    pub fn adw_alert_dialog_set_response_appearance(
+        self_: *mut AdwAlertDialog,
+        response: *const c_char,
+        appearance: c_int,
+    );
+    pub fn adw_alert_dialog_set_response_enabled(
+        self_: *mut AdwAlertDialog,
+        response: *const c_char,
+        enabled: gboolean,
+    );
+    pub fn adw_alert_dialog_set_default_response(
+        self_: *mut AdwAlertDialog,
+        response: *const c_char,
+    );
+    pub fn adw_alert_dialog_set_close_response(self_: *mut AdwAlertDialog, response: *const c_char);
+    pub fn adw_preferences_row_set_use_markup(self_: *mut AdwPreferencesRow, use_markup: gboolean);
+}

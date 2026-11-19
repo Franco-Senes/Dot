@@ -26,6 +26,8 @@ use crate::sidebar_tabs::{
     PinFoldersManager, SidebarCallbacks, SidebarRenderOptions, SidebarTabItem, SidebarTabs,
 };
 use crate::tab_switcher::SwitcherTabItem;
+use crate::vault::VaultService;
+use crate::vault_ui::{self, VaultWindowUi};
 use anyhow::Result;
 use cef::RequestContext;
 use gnome_platform::adw::{
@@ -33,8 +35,8 @@ use gnome_platform::adw::{
     TabView, TabViewShortcuts, ToolbarStyle, ToolbarView,
 };
 use gnome_platform::gdk::{Rectangle, Texture};
-use gnome_platform::gio::{Icon, Menu, SimpleAction, SimpleActionGroup};
-use gnome_platform::glib::{self, Bytes, SourceId};
+use gnome_platform::gio::{Menu, SimpleAction, SimpleActionGroup};
+use gnome_platform::glib::{self, SourceId};
 use gnome_platform::gtk::{
     Align, AsWidget, BoxWidget, GestureDrag, Label, Orientation, Overflow, Overlay, PackType,
     Popover, PopoverMenu, PositionType, ProgressBar, Revealer, RevealerTransitionType,
@@ -66,6 +68,7 @@ pub struct SharedDataStores {
     pub pin_folders: PinFoldersManager,
     pub shield: ShieldManager,
     pub curtain: CurtainManager,
+    pub vault: VaultService,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -216,6 +219,7 @@ struct WindowState {
     toast_timeout: Cell<Option<SourceId>>,
     bookmark_popover: RefCell<Option<Popover>>,
     site_card_popover: RefCell<Option<Popover>>,
+    vault_ui: VaultWindowUi,
     tab_menu: Menu,
     tab_close_action: SimpleAction,
     active_popover: RefCell<Option<PopoverMenu>>,
@@ -354,6 +358,11 @@ impl BrowserWindow {
         stage_overlay.add_overlay(&toast_pill);
         stage_overlay.set_measure_overlay(&toast_pill, false);
 
+        // Barra discreta de Vault «¿Guardar la contraseña…?» flotando sobre la página.
+        let vault_ui = VaultWindowUi::new();
+        stage_overlay.add_overlay(vault_ui.offer_widget());
+        stage_overlay.set_measure_overlay(vault_ui.offer_widget(), false);
+
         // Marco de tarjeta redondeado (`layout_cards` estilo Arc / Search) con recorte de esquinas.
         let stage_card = BoxWidget::new(Orientation::Vertical, 0);
         stage_card.add_css_class("search-stage-card");
@@ -485,6 +494,7 @@ impl BrowserWindow {
                 toast_timeout: Cell::new(None),
                 bookmark_popover: RefCell::new(None),
                 site_card_popover: RefCell::new(None),
+                vault_ui,
                 tab_menu,
                 tab_close_action,
                 active_popover: RefCell::new(None),
@@ -1044,6 +1054,10 @@ impl BrowserWindow {
         for bv in views {
             bv.apply_curtain_css(&css);
         }
+    }
+
+    pub fn open_passwords_panel(&self) {
+        vault_ui::present_passwords(&self.inner.window, &self.inner.stores.vault);
     }
 
     pub fn close_side_panel(&self) {
@@ -1706,6 +1720,9 @@ impl BrowserWindow {
                 return;
             }
         }
+        if self.inner.vault_ui.dismiss() {
+            return;
+        }
         if self.inner.side_split.shows_sidebar() {
             self.close_side_panel();
             return;
@@ -2136,6 +2153,14 @@ impl BrowserWindow {
             }));
         }
 
+        crate::vault::attach(
+            &bv,
+            &mut cbs,
+            tab_id,
+            &self.inner.stores.vault,
+            &self.inner.vault_ui,
+            &self.inner.settings,
+        );
         bv.set_callbacks(cbs);
         Ok(bv)
     }
@@ -2292,6 +2317,7 @@ impl BrowserWindow {
 
         // Despertar de forma diferida si esta pestaña seguía dormida.
         let _ = self.ensure_tab_awake(active_id);
+        self.inner.vault_ui.on_tab_selected(active_id);
 
         let info = {
             let mut tabs = self.inner.tabs.borrow_mut();

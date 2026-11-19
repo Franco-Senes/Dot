@@ -237,6 +237,7 @@ version = "0.1.0"
 dependencies = [
  "bitflags",
  "libc",
+ "zeroize",
 ]
 
 [[package]]
@@ -519,6 +520,7 @@ dependencies = [
  "serde",
  "serde_json",
  "url",
+ "zeroize",
 ]
 
 [[package]]
@@ -542,6 +544,7 @@ dependencies = [
  "crc32fast",
  "flate2",
  "form_urlencoded",
+ "gnome-platform",
  "idna",
  "indexmap",
  "libc",
@@ -557,6 +560,7 @@ dependencies = [
  "thiserror",
  "time",
  "url",
+ "zeroize",
 ]
 
 [[package]]
@@ -905,6 +909,12 @@ dependencies = [
  "syn",
  "synstructure",
 ]
+
+[[package]]
+name = "zeroize"
+version = "1.9.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "85ccff8a4805aba1eaa4cd4afcd49f7557dd2cf5fd79ffc37f8959466effc5aa"
 
 [[package]]
 name = "zerotrie"

@@ -46,11 +46,19 @@ Sintaxis admitida en `SEARCH_CHROMIUM_FLAGS`:
 | `crates/search-bench` | Herramientas CLI de pruebas e inspección (`bench` y `test-find`). |
 | `crates/xtask` | Tareas de construcción e instalación (`compile-schemas` e `install`). |
 
+## Contraseñas (Vault)
+
+- Las contraseñas se guardan **solo** en el Secret Service del escritorio (GNOME Keyring, KWallet o el portal de secretos de Flatpak) mediante `libsecret`. Search nunca las escribe en disco ni en los logs; si no hay Secret Service, Vault se desactiva y lo explica (no hay alternativa en texto plano).
+- Se ofrecen únicamente en el **mismo origin exacto** (esquema + host + puerto), en el marco principal o en iframes del mismo origin, y nunca de HTTPS a HTTP. En páginas HTTP sin cifrar se avisa antes.
+- Panel de contraseñas con `Ctrl+Alt+L`: búsqueda, mostrar (con confirmación), copiar (el portapapeles se borra a los 30 s), editar, borrar, exportar a CSV (con advertencia) e importar desde Firefox, Chromium/Chrome/Brave/Edge/Vivaldi o un CSV, siempre a petición del usuario.
+- Modelo de amenazas y detalles criptográficos verificados: [`PORTING.md` §14](./PORTING.md#14-seguridad-de-vault-modelo-de-amenazas).
+
 ## Dependencias del sistema
 
 - Rust `1.80+` (`cargo`, `rustc`)
 - GTK 4 (`>= 4.14`) y `libadwaita-1` (`>= 1.5`)
 - GLib / GIO (`glib-compile-schemas`) y `desktop-file-utils` (`desktop-file-validate`)
+- `libsecret-1` (Vault), `libsqlite3` y `libcrypto` de OpenSSL 3 (importación de contraseñas); todas incluidas en `org.gnome.Platform//51`
 - Binario precompilado de CEF `156` (`CEF_PATH` apuntando al directorio con `libcef.so`, `icudtl.dat`, `resources.pak` y `locales/`)
 
 En este repositorio el entorno autónomo ya incluye el SDK de GNOME 51, Rust 1.98 y CEF 156 bajo `.toolchain/`, accesibles mediante `.toolchain/sdk` y `.toolchain/sdk-xvfb`.

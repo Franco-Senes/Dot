@@ -1560,3 +1560,125 @@ impl AsWidget for ShortcutsDialog {
         self.obj.as_ptr().cast()
     }
 }
+
+// --- Fase 5 (Vault): `AdwAlertDialog` para confirmaciones y advertencias. ---
+
+#[repr(i32)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ResponseAppearance {
+    Default = 0,
+    Suggested = 1,
+    Destructive = 2,
+}
+
+#[derive(Clone)]
+pub struct AlertDialog {
+    obj: ObjectRef,
+}
+
+impl AlertDialog {
+    pub fn new(heading: &str, body: &str) -> Self {
+        let h = to_cstring(heading);
+        let b = to_cstring(body);
+        let ptr = unsafe { sys::adw_alert_dialog_new(h.as_ptr(), b.as_ptr()) };
+        let obj = unsafe { ObjectRef::from_new_ptr(ptr.cast()) };
+        Self { obj }
+    }
+
+    fn ptr(&self) -> *mut sys::AdwAlertDialog {
+        self.obj.as_ptr().cast()
+    }
+
+    pub fn add_response(&self, id: &str, label: &str) {
+        let i = to_cstring(id);
+        let l = to_cstring(label);
+        unsafe {
+            sys::adw_alert_dialog_add_response(self.ptr(), i.as_ptr(), l.as_ptr());
+        }
+    }
+
+    pub fn set_response_appearance(&self, id: &str, appearance: ResponseAppearance) {
+        let i = to_cstring(id);
+        unsafe {
+            sys::adw_alert_dialog_set_response_appearance(
+                self.ptr(),
+                i.as_ptr(),
+                appearance as i32,
+            );
+        }
+    }
+
+    pub fn set_response_enabled(&self, id: &str, enabled: bool) {
+        let i = to_cstring(id);
+        unsafe {
+            sys::adw_alert_dialog_set_response_enabled(
+                self.ptr(),
+                i.as_ptr(),
+                if enabled { sys::GTRUE } else { sys::GFALSE },
+            );
+        }
+    }
+
+    pub fn set_default_response(&self, id: &str) {
+        let i = to_cstring(id);
+        unsafe {
+            sys::adw_alert_dialog_set_default_response(self.ptr(), i.as_ptr());
+        }
+    }
+
+    pub fn set_close_response(&self, id: &str) {
+        let i = to_cstring(id);
+        unsafe {
+            sys::adw_alert_dialog_set_close_response(self.ptr(), i.as_ptr());
+        }
+    }
+
+    pub fn set_extra_child(&self, child: Option<&impl AsWidget>) {
+        let ptr = child.map_or(ptr::null_mut(), AsWidget::as_widget_ptr);
+        unsafe {
+            sys::adw_alert_dialog_set_extra_child(self.ptr(), ptr);
+        }
+    }
+
+    pub fn present(&self, parent: Option<&impl AsWidget>) {
+        let ptr = parent.map_or(ptr::null_mut(), AsWidget::as_widget_ptr);
+        unsafe {
+            sys::adw_dialog_present(self.obj.as_ptr().cast(), ptr);
+        }
+    }
+
+    pub fn force_close(&self) {
+        unsafe {
+            sys::adw_dialog_force_close(self.obj.as_ptr().cast());
+        }
+    }
+
+    /// Señal `response`: recibe el identificador de la respuesta elegida.
+    pub fn connect_response<F: Fn(&str) + 'static>(&self, callback: F) -> SignalHandlerId {
+        connect_signal_ptr(self.obj.as_ptr(), "response", move |arg| {
+            if arg.is_null() {
+                return;
+            }
+            let id = unsafe { CStr::from_ptr(arg as *const c_char) };
+            callback(&id.to_string_lossy());
+        })
+    }
+}
+
+impl AsWidget for AlertDialog {
+    fn as_widget_ptr(&self) -> *mut sys::GtkWidget {
+        self.obj.as_ptr().cast()
+    }
+}
+
+impl ActionRow {
+    /// Desactiva el marcado Pango en título y subtítulo (texto de páginas web o del usuario).
+    pub fn set_use_markup(&self, use_markup: bool) {
+        unsafe {
+            sys::adw_preferences_row_set_use_markup(
+                self.obj.as_ptr().cast(),
+                if use_markup { sys::GTRUE } else { sys::GFALSE },
+            );
+        }
+    }
+}

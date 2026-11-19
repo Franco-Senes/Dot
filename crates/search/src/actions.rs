@@ -108,6 +108,9 @@ pub fn install_app_actions_and_accels(app: &Application, settings: &SettingsStor
     app.set_accels_for_action("win.toggle-reader", &["<Control><Alt>r", "F9"]);
     app.set_accels_for_action("win.curtain-pick", &["<Control><Shift>h"]);
     app.set_accels_for_action("win.toggle-curtain", &["<Control><Shift>e"]);
+
+    // Fase 5 — Contraseñas (Vault).
+    app.set_accels_for_action("win.open-passwords", &["<Control><Alt>l"]);
 }
 
 /// Registra todas las acciones de ventana (`win.*`) sobre `gtk_win`.
@@ -355,6 +358,12 @@ pub fn install_window_actions(gtk_win: &ApplicationWindow, win: &BrowserWindow) 
         let w = win.clone();
         move || w.toggle_curtain_panel()
     });
+
+    // Fase 5.
+    add_win_action(gtk_win, "open-passwords", {
+        let w = win.clone();
+        move || w.open_passwords_panel()
+    });
 }
 
 /// Muestra el diálogo nativo `AdwShortcutsDialog` (`Ctrl+?`) con todos los atajos activos.
@@ -412,6 +421,7 @@ pub fn present_shortcuts_dialog(parent: &ApplicationWindow) {
         ),
         ("Panel de marcadores", "<Control><Shift>o"),
         ("Panel de descargas", "<Control><Shift>y <Control><Shift>j"),
+        ("Gestor de contraseñas", "<Control><Alt>l"),
     ] {
         data_sec.add(&ShortcutsItem::new(title, accel));
     }

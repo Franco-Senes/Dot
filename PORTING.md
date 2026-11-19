@@ -10,7 +10,8 @@
 | Binario precompilado CEF / Chromium | `156.0.30+g6028375+chromium-156.0.8078.96` (`linux64_minimal`) | `cef_version.h` en `.toolchain/cef/include/` (SpotifyCDN) | 2026-11-18 |
 | `gtk4-rs` (`gtk4` / GTK4) | `0.11.5` (GTK `4.24.1` en GNOME SDK 51) | https://crates.io/crates/gtk4 | 2026-11-18 |
 | `libadwaita-rs` / `libadwaita` | `0.9.2` / `1.10.0` | https://crates.io/crates/libadwaita | 2026-11-18 |
-| `oo7` (Secret Service / Portal) | `0.7.0` | https://crates.io/crates/oo7 | 2026-11-18 |
+| `libsecret-1` (Secret Service / Portal, Vault) | `0.21.8.2` (SDK GNOME 51; FFI propio en `gnome-platform::secret`; sustituye a `oo7`, no cacheado offline) | `org.gnome.Sdk//51` (`lib/x86_64-linux-gnu/libsecret-1.so`) | 2026-11-18 |
+| `libsqlite3` / `libcrypto` (importadores de Vault) | SQLite `3.53.4` / OpenSSL `3.5.9` | `org.gnome.Sdk//51` | 2026-11-18 |
 | Runtime de GNOME (Flatpak) | `org.gnome.Platform//51` (GNOME 51.1) | https://flathub.org (`org.gnome.Sdk//51`) | 2026-11-18 |
 | Toolchain Rust (Flatpak SDK) | `rustc 1.98.0` / `cargo 1.98.0` | `org.freedesktop.Sdk.Extension.rust-stable//26.08` | 2026-11-18 |
 | Hardware de referencia local | AMD Ryzen 5 5600G with Radeon Graphics (12 hilos, `/dev/dri/renderD128`) | `lscpu` + `/dev/dri` | 2026-11-18 |
@@ -67,7 +68,7 @@ Todos los candidatos se comprobaron a nivel binario en `.toolchain/cef/libcef.so
 
 > Organización en el Cargo workspace (100 % Rust):
 > - `crates/search-core/src/…`: lógica pura sin GTK/CEF (`chromium_flags.rs`, `paths.rs`, `address.rs`, `settings.rs`, `session.rs`, `history.rs`, `bookmarks.rs`, `downloads.rs`, `shield.rs`, `curtain.rs`, `reader.rs`, `vault.rs`, `vault_import.rs`, `updater.rs`, `crx.rs`, `extensions.rs`, `bench_proto.rs`).
-> - `crates/search/src/…`: GUI `gtk4` + `libadwaita`, integración `cef` (`cef-rs`), Secret Service (`oo7`) y D-Bus (`zbus`).
+> - `crates/search/src/…`: GUI `gtk4` + `libadwaita`, integración `cef` (`cef-rs`), Secret Service (`libsecret-1` vía `gnome-platform::secret`) y D-Bus (`zbus`).
 > - `crates/search-bench/src/…`: binarios CLI `bench` y `test-find` + tests headless e integración en Rust.
 > - `crates/xtask/src/…`: instalación de `.desktop`, metainfo, iconos, esquemas GSettings y bundle CEF.
 
@@ -76,7 +77,7 @@ Estados: `pendiente` · `directo` · `adaptado` · `diferido` · `imposible` · 
 | Archivo Swift (upstream) | Qué hace | Módulo Rust | API Linux (GTK4 / Adw / CEF) | Estado | Fase |
 |---|---|---|---|---|---|
 | *(Nuevo requisito Linux)* | Flags, features y preferencias de Chromium 156 (`SEARCH_CHROMIUM_FLAGS`) | `crates/search-core/src/chromium_flags.rs` + `crates/search/src/cef_engine.rs` | `cef::CommandLine`, `cef::Settings`, `cef::RequestContext::set_preference` | hecho | 1 |
-| `Sources/Search/Accounts.swift` | Popover bajo campos de login para autocompletar cuentas del llavero | `crates/search/src/vault_ui.rs` | `gtk4::Popover`, `gtk4::ListBox`, `oo7` | adaptado | 5 |
+| `Sources/Search/Accounts.swift` | Popover bajo campos de login para autocompletar cuentas del llavero | `crates/search/src/vault_ui.rs` | `gtk4::Popover`, `gtk4::ListBox`, `search_core::vault::Vault::fill_offer` | hecho | 5 |
 | `Sources/Search/AddressCommands.swift` | Comandos rápidos opcionales en la barra de direcciones | `crates/search-core/src/address.rs` | Rust puro + `gio::ActionGroup` | diferido | — |
 | `Sources/Search/Address.swift` | Detecta URL vs archivo local vs consulta, añade esquema y limpia URLs | `crates/search-core/src/address.rs` | `url::Url`, `std::net::IpAddr` | hecho | 1 |
 | `Sources/Search/AgentBanner.swift` | Píldora de estado cuando un agente MCP controla pestañas | — | Fuera de alcance (`search-mcp`) | diferido | — |
@@ -90,7 +91,7 @@ Estados: `pendiente` · `directo` · `adaptado` · `diferido` · `imposible` · 
 | `Sources/Search/AI.swift` | Catálogo de modelos IA y bandera `AI.shipped = false` | — | Retenido en upstream | diferido | — |
 | `Sources/Search/ApplePasswordsOffer.swift` | Tarjeta para ofrecer integración con Apple Passwords | — | App Contraseñas de Apple exclusiva de macOS | imposible | — |
 | `Sources/Search/ApplePasswordsProtocol.swift` | Protocolo SRP-6a + AES-GCM del helper de Apple Passwords | — | Demonio propietario de macOS | imposible | — |
-| `Sources/Search/ApplePasswordsSettings.swift` | Ajustes de emparejamiento con Apple Passwords | — | Exclusivo de macOS (`oo7` cubre llaveros Linux) | imposible | — |
+| `Sources/Search/ApplePasswordsSettings.swift` | Ajustes de emparejamiento con Apple Passwords | — | Exclusivo de macOS (`libsecret-1` cubre llaveros Linux) | imposible | — |
 | `Sources/Search/ApplePasswords.swift` | Cliente Native Messaging hacia `PasswordManagerBrowserExtensionHelper` | — | Binario `/System/Library/...` inexistente en Linux | imposible | — |
 | `Sources/Search/App.swift` | Punto de entrada, subprocesos CEF, aplicación, menús y atajos | `crates/search/src/app.rs` | `cef::execute_process`, `adw::Application`, `adw::StyleManager` | hecho | 1 |
 | `Sources/Search/Archive.swift` | Archivo automático de pestañas antiguas (`archive.json`) | `crates/search-core/src/session.rs` | `serde_json` | diferido | — |
@@ -148,11 +149,11 @@ Estados: `pendiente` · `directo` · `adaptado` · `diferido` · `imposible` · 
 | `Sources/Search/Icons.swift` | Iconos de interfaz sin dependencias de tema + obtención y caché de favicons con monograma | `crates/search/src/icons.rs` + `crates/search/src/browser_view.rs` | Rasterizador SDF propio en `GdkMemoryTexture` (`GdkTexture` como `GIcon`) + `download_image` (`as_bitmap` BGRA8) + respaldo `/favicon.ico` | hecho | 3b |
 | `Sources/Search/ImageMenu.swift` | Acciones de menú contextual sobre imágenes | `crates/search/src/browser_view.rs` | `cef::ContextMenuHandler` | adaptado | 2 |
 | `Sources/Search/ImportArc.swift` | Importador de `StorableSidebar.json` de Arc | — | Arc no existe en Linux | imposible | — |
-| `Sources/Search/ImportFile.swift` | Importación desde archivos `.csv` y `.html` | `crates/search-core/src/vault_import.rs` | Rust puro (`csv`, parser HTML Netscape) | directo | 5 |
+| `Sources/Search/ImportFile.swift` | Importación desde archivos `.csv` y `.html` | `crates/search-core/src/vault_import.rs` | Rust puro (parser CSV RFC 4180 propio; HTML Netscape ya en `bookmarks.rs`) | hecho | 5 |
 | `Sources/Search/ImportPanel.swift` | Diálogo de importación mostrando perfiles detectados y resumen | `crates/search/src/vault_ui.rs` | `adw::Dialog`, `adw::PreferencesGroup`, `gtk4::FileDialog` | adaptado | 5 |
-| `Sources/Search/ImportRecord.swift` | Registro de importaciones previas | `crates/search-core/src/vault_import.rs` | `serde_json` | directo | 5 |
+| `Sources/Search/ImportRecord.swift` | Registro de importaciones previas | `crates/search-core/src/vault_import.rs` | — (sin registro persistente: el resumen se muestra al terminar) | diferido | 5 |
 | `Sources/Search/ImportSession.swift` | Importador binario `SNSS` de sesiones Chromium | — | Fuera de alcance de Fase 5 (solo contraseñas/marcadores) | diferido | — |
-| `Sources/Search/Import.swift` | Descubrimiento y descifrado de contraseñas Firefox (`key4.db`+`logins.json`) y Chromium (`Login Data` `v10`/`v11`) | `crates/search-core/src/vault_import.rs` | `rusqlite`, `aes`, `cbc`, `des`, `pbkdf2`, `sha1`, `sha2`, `oo7` | adaptado | 5 |
+| `Sources/Search/Import.swift` | Descubrimiento y descifrado de contraseñas Firefox (`key4.db`+`logins.json`) y Chromium (`Login Data` `v10`/`v11`) | `crates/search-core/src/vault_import.rs` | `gnome-platform::{sqlite,crypto,secret}` (libsqlite3 + OpenSSL EVP + libsecret) | hecho | 5 |
 | `Sources/Search/Inspector.swift` | Apertura de DevTools (`Ctrl+Shift+I` / `F12`) | `crates/search/src/browser_view.rs` | `cef::BrowserHost::show_dev_tools` / `close_dev_tools` | hecho | 1 |
 | `Sources/Search/InternalPages.swift` | Enrutamiento de vistas internas (`plasma://settings`, `plasma://history`, `plasma://bookmarks`, `plasma://downloads`) | `crates/search-core/src/address.rs` + `crates/search/src/settings_page.rs` + `window.rs` | Pestaña nativa `SettingsPage` en `AdwTabView` (0 procesos CEF) / paneles `AdwOverlaySplitView` | hecho | 3b |
 | `Sources/Search/KeptScroll.swift` | Restauración de scroll en navegación atrás/adelante | `crates/search/src/browser_view.rs` | Nativo en el historial de sesión de Blink/CEF | hecho | 2 |
@@ -240,7 +241,7 @@ Estados: `pendiente` · `directo` · `adaptado` · `diferido` · `imposible` · 
 | `Sources/Search/Trim.swift` | Medición de memoria RSS del árbol de procesos CEF | `crates/search-core/src/bench_proto.rs` | Suma RSS de proceso principal + subprocesos CEF en `/proc` | adaptado | 7 |
 | `Sources/Search/Twins.swift` | Espejado opcional de pestañas entre ventanas | — | Fuera de alcance (`PLAN.md`) | diferido | — |
 | `Sources/Search/Updater.swift` | Comprobador diario de actualizaciones firmadas (apagado en Flatpak) | `crates/search-core/src/updater.rs` + `crates/search/src/updater.rs` | Detecta `/.flatpak-info`; `ed25519-dalek` + `sha2` para tarball/AppImage | adaptado | 8 |
-| `Sources/Search/Vault.swift` | Almacén seguro de contraseñas sin texto plano en disco ni logs | `crates/search-core/src/vault.rs` + `crates/search/src/vault.rs` | `oo7` (Secret Service / Portal), `zeroize` | adaptado | 5 |
+| `Sources/Search/Vault.swift` | Almacén seguro de contraseñas sin texto plano en disco ni logs | `crates/search-core/src/vault.rs` + `crates/search/src/vault.rs` | `libsecret-1` (Secret Service / Portal) vía `gnome-platform::secret`, `zeroize` | hecho | 5 |
 | `Sources/Search/Webmail.swift` | Reescritura opcional de `mailto:` | — | En Linux lo gestiona el handler XDG del escritorio | diferido | — |
 | `Sources/Search/Welcome.swift` | Bienvenida opcional | — | Minimalismo (`AGENTS.md`: sin pantallas extra) | diferido | — |
 | `Sources/Search/WhatsNew.swift` | Notas de versión | — | Cubierto en metainfo AppStream (`io.github.searchlinux.Search.metainfo.xml`) | adaptado | 8 |
@@ -418,7 +419,7 @@ Mismo formato JSON declarativo de `WKContentRuleList` (las 57 reglas de `Shield.
 | Modo lectura | `⇧⌘R` | `Ctrl+Alt+R` / `F9` | ✅ |
 | Curtain: modo selección ("ocultar elemento") | `⇧⌘H` | `Ctrl+Shift+H` | ✅ |
 | Curtain: ver elementos ocultos en este sitio | `⇧⌘U` | `Ctrl+Shift+E` | ✅ |
-| Contraseñas (Vault) | `⌥⌘L` | `Ctrl+Alt+L` | ⬜ |
+| Contraseñas (Vault) | `⌥⌘L` | `Ctrl+Alt+L` | ✅ |
 | Split View: dividir / separar pestaña actual | `⌥⌘N` | `Ctrl+Alt+N` | ⬜ |
 | Split View: cambiar foco entre paneles (izq / der) | `⌃⌘←` / `⌃⌘→` | `Ctrl+Alt+Left` / `Ctrl+Alt+Right` | ⬜ |
 | Picture-in-Picture (vídeo flotante) | `⇧⌘P` | `Ctrl+Shift+P` | ⬜ |
@@ -486,8 +487,10 @@ Mismo formato JSON declarativo de `WKContentRuleList` (las 57 reglas de `Shield.
 | `--socket=fallback-x11` | Respaldo en sesiones exclusivamente X11. |
 | `--device=dri` | Aceleración GPU y decodificación de vídeo por hardware (VA-API en Radeon Vega / Mesa). |
 | `--socket=pulseaudio` | Audio web a través de PipeWire/PulseAudio. |
-| `--talk-name=org.freedesktop.secrets` | Acceso a Secret Service desde `oo7` para Vault. |
+| `--talk-name=org.freedesktop.secrets` | Acceso al Secret Service desde `libsecret-1` para Vault (fuera de Flatpak, o como respaldo si el portal de secretos no está disponible). Dentro de Flatpak libsecret ≥ 0.20 usa automáticamente el portal `org.freedesktop.portal.Secret`, que aísla los secretos por aplicación. |
 | `--filesystem=xdg-download` | Descargas en la carpeta estándar de Descargas sin exponer `home` ni `host`. |
+
+**Importar contraseñas de otros navegadores dentro de Flatpak (Fase 5):** no se concede acceso permanente a `~/.mozilla` ni a `~/.config/*`. La ruta recomendada es que el usuario elija la carpeta del perfil (o el CSV) con `GtkFileDialog`, que pasa por el portal de documentos (`org.freedesktop.portal.FileChooser`) y concede acceso solo a lo elegido. El descubrimiento automático de perfiles (`vault_import::discover_profiles`) solo encuentra algo fuera del sandbox o si el usuario añade a mano `--filesystem=~/.mozilla:ro` / `--filesystem=xdg-config/google-chrome:ro` (etc.) con `flatpak override`. La clave `v11` de Chromium («Chrome Safe Storage») vive en la colección por defecto del llavero y **no** es accesible a través del portal de secretos (que solo expone los secretos de la propia app): en Flatpak las contraseñas `v11` requieren `--talk-name=org.freedesktop.secrets` o importar un CSV.
 
 *(Nota sobre el sandbox interno de CEF dentro de Flatpak: como `flatpak run` ya aísla toda la aplicación con `bwrap` e impide crear `CLONE_NEWUSER` anidados sin `zypak`, al detectar `/.flatpak-info` se activa `no_sandbox = 1` en `CefSettings` delegando el aislamiento de sistema de archivos/red al propio sandbox de Flatpak, manteniendo el aislamiento de procesos **Site Isolation** intacto).*
 
@@ -518,6 +521,9 @@ Mismo formato JSON declarativo de `WKContentRuleList` (las 57 reglas de `Shield.
 | 2026-11-18 | **Sincronización automática `--ozone-platform=wayland\|x11\|headless` y `gtk_disable_setlocale()`** | Evita que Chromium intente conectar a un socket Wayland inexistente cuando GTK4 corre bajo X11/Xvfb y elimina conflictos de locale entre GTK4 y `libcef.so`. |
 | 2026-11-18 | **Iconos vectoriales rasterizados en Rust puro (`GdkMemoryTexture` + `GdkTexture` como `GIcon`) y favicons vía `as_bitmap` BGRA8** | En entornos KDE Plasma/Breeze o fuera de un sandbox Flatpak, los loaders `glycin`/`gdk-pixbuf` del SDK de GNOME 51 y los nombres simbólicos GNOME pueden fallar; usar `GdkMemoryTexture` directo garantiza nitidez HiDPI y cero dependencias externas en cualquier escritorio Linux. |
 | 2026-11-18 | **Página de ajustes nativa `plasma://settings` en pestaña real (`AdwTabView`) + carpetas de pines estilo Arc (`pin-folders.json`)** | Abre instantáneamente con 0 instancias `cef::Browser` activas, unifica las 8 categorías con búsqueda en vivo y persistencia inmediata en `settings.json`, y añade cuadrícula de favoritos + carpetas plegables hasta 3 niveles con animaciones controlables (`Smooth`/`Reduced`/`Instant`). |
+| 2026-11-18 | **Vault sobre `libsecret-1` + `libsqlite3` + `libcrypto` del SDK mediante FFI propio en `gnome-platform` (módulos `secret`, `sqlite`, `crypto`) en lugar de `oo7`/`rusqlite`/RustCrypto** | Esos crates no están en la caché offline (`offline = true`) y añadirlos está prohibido; las tres bibliotecas C ya vienen en `org.gnome.Platform//51`. libsecret usa el portal de secretos dentro de Flatpak, igual que `oo7`. |
+| 2026-11-18 | **Features de Cargo en `gnome-platform` (`gtk`, `secret`, `sqlite`, `crypto`; todas por defecto)** | `search-core` depende de `gnome-platform` con `default-features = false, features = ["secret","sqlite","crypto"]`, de modo que la lógica pura de Vault e importación sigue sin compilar ni enlazar GTK/CEF y sus tests corren sin pantalla. |
+| 2026-11-18 | **Coincidencia exacta de origin en Vault (no por dominio registrable como el original)** | Lo exige la Fase 5 («solo para el mismo origin exacto»): evita ofrecer credenciales a subdominios o en HTTP. Ver §14.2. |
 
 ## 12. Rendimiento y mediciones de flags de Chromium
 > Hardware de medición: **AMD Ryzen 5 5600G with Radeon Graphics** (12 hilos, Linux x86_64).
@@ -539,4 +545,53 @@ Mismo formato JSON declarativo de `WKContentRuleList` (las 57 reglas de `Shield.
 | *(Pendiente de red real; compilación offline en sandbox)* | Verificado con 6 tests unitarios (58 reglas embebidas, terceros vs first-party, pausas por sitio, caché SHA-256 y rutas/scripts de YouTube sin romper vídeo) | Verificado con 6 tests unitarios incluido fixture HTML real (ID estable, `data-testid`, clases hasheadas, ruta anclada y `curtain.json` atómico + `.bak`) | Verificado con 4 tests unitarios (saneamiento XSS/scripts/`on*`/`javascript:`/iframes, plantilla ~68ch claro/oscuro y tamaño de letra) | Entorno de desarrollo sin acceso a red; ejecutar pruebas en vivo sobre periódico, blog, sitio con anuncios y YouTube fuera del sandbox. |
 
 ## 14. Seguridad de Vault (modelo de amenazas)
-*(Se completará en detalle en la Fase 5: Secret Service `oo7` + `zeroize`, desactivación total del Password Manager y Autofill de Chromium en `chromium_flags.rs`, coincidencia exacta de `origin` sin degradación HTTPS→HTTP, borrado del portapapeles a los 30 s y tests con datos sintéticos).*
+
+### 14.1. Qué protege Vault y dónde viven los datos
+| Dato | Dónde vive | Nunca en |
+|---|---|---|
+| Contraseña guardada | Secret Service vía `libsecret-1` (GNOME Keyring, KWallet ≥ 5.97 o el portal de secretos de Flatpak), esquema `io.github.searchlinux.Search.Password`, atributos `app`, `origin` (esquema+host+puerto), `username`, `created`, `last_used` | Disco propio, `session.json`, `history.json`, logs, títulos de ventana, portapapeles más de 30 s |
+| Contraseña en memoria | `search_core::vault::Password` (`Zeroizing<String>`, `Debug` = `Password(<oculta>)`); buffers de descifrado en `Zeroizing<Vec<u8>>`; la copia de libsecret se libera con `secret_password_free` (la pone a cero) | `String`/`Vec` normales que sobrevivan a la operación |
+| Lista «Nunca en este sitio» | `$XDG_DATA_HOME/search/vault_never.json` (solo origins, escritura atómica) | — |
+| Copias temporales de `key4.db` / `Login Data` | Directorio `0700` bajo `$XDG_RUNTIME_DIR/search` (tmpfs), borrado al terminar (`Drop`) | Directorios compartidos o persistentes |
+
+- **Sin Secret Service no hay Vault:** `Vault::open_default` comprueba `secret_service_get_sync`; si falla, Vault queda desactivado con un motivo visible («no hay ningún Secret Service…») y **no existe alternativa en texto plano**.
+- **Gestor de contraseñas y autocompletado de Chromium apagados** en `chromium_flags.rs` (`--disable-features=PasswordManager,AutofillServerCommunication`, prefs `credentials_enable_service=false`, `autofill.*=false`): Chromium nunca escribe su propio `Login Data` en `$XDG_CACHE_HOME/search/cef`.
+- Las listas (panel, popover) solo leen **atributos**; cada secreto se lee por separado y únicamente al rellenar, mostrar, copiar o exportar (igual que `Vault.swift`).
+
+### 14.2. Reglas de origin (`vault.rs`)
+- Coincidencia **exacta** de origin: esquema + host (minúsculas, IDNA → Punycode por `url`) + puerto efectivo. Una credencial de `https://example.com` **no** se ofrece en `http://example.com` (sin degradación HTTPS→HTTP), ni en `https://www.example.com`, ni en `https://example.com:8443`, ni en `https://example.com.evil.test`. (El original ampliaba a todo el dominio registrable; aquí se aplica la regla más estricta que pide la Fase 5.)
+- Solo marco principal o iframes del **mismo** origin que la página (`frame_origin`): un iframe de terceros nunca recibe ni captura credenciales.
+- El origin sale siempre de la URL del marco que reporta CEF, **nunca** de lo que diga el JavaScript de la página. `fill_password` revalida el origin antes de entregar el secreto (defensa en profundidad).
+- Páginas HTTP sin cifrar (salvo loopback): `insecure = true` en `CaptureOffer`/`FillOffer`; la interfaz avisa antes de guardar o rellenar.
+- Esquemas no web (`file:`, `data:`, `javascript:`, `chrome:`, `android://…`) se rechazan: un `android://…@com.vendor.app/` de una exportación podría leerse como un dominio ajeno.
+
+### 14.3. Amenazas consideradas
+| Amenaza | Mitigación |
+|---|---|
+| Página maliciosa que intenta leer credenciales de otro sitio | Coincidencia exacta de origin + validación del marco en Rust; el JS de la página no puede elegir el origin. |
+| Script de la página que falsifica mensajes IPC de Vault | Puente IPC con token aleatorio por marco (128 bits) generado en Rust; mensajes sin token válido o de un marco cuyo origin cambió se descartan. |
+| Iframe publicitario/terceros en una página de login | Captura y relleno solo en marco principal o iframes del mismo origin. |
+| Red hostil (HTTP en claro, MITM) | Nunca se ofrece una credencial HTTPS en HTTP; aviso explícito en HTTP; los errores TLS ya bloquean la carga por defecto (Fase 1). |
+| Fuga a disco o logs | Sin escritura propia de secretos; `Debug` ocultado en todos los tipos con secretos; tests que comprueban que ninguna contraseña aparece en `Debug`/`Display`/errores; la línea IPC se suprime del log de consola de CEF. |
+| Portapapeles | Copia desde el panel con borrado a los 30 s (solo si el portapapeles sigue conteniendo el valor copiado). |
+| Mirar por encima del hombro | Las contraseñas se muestran solo tras confirmación explícita; el llavero puede pedir desbloqueo. |
+| Exportación CSV | Advertencia clara («el archivo contendrá tus contraseñas sin cifrar»), destino elegido por el usuario con `GtkFileDialog`, sin copias intermedias. |
+| Importación desde perfiles ajenos | Solo bajo petición del usuario y tras enseñar los perfiles encontrados; copias temporales `0700` en tmpfs borradas al terminar; nunca se acepta texto en claro en `Login Data` (lo podría haber puesto cualquier programa). |
+
+### 14.4. Fuera de alcance (riesgos residuales)
+- **Malware con la misma UID**: puede leer el llavero desbloqueado mediante D-Bus (limitación del Secret Service fuera de Flatpak) y la memoria del proceso. Dentro de Flatpak el portal de secretos aísla los secretos por aplicación.
+- `Zeroizing` borra los buffers propios, pero no puede borrar las copias que hagan CEF/V8 (el valor del `<input>` en el renderer) ni GTK (texto de un `GtkEntry`, portapapeles del compositor).
+- `v10` de Chromium usa una clave pública conocida (`peanuts`): cualquier `Login Data` `v10` equivale a texto en claro; Search solo lo lee bajo petición.
+
+### 14.5. Detalles criptográficos verificados (importación)
+| Fuente | Parámetros | Verificación |
+|---|---|---|
+| Chromium Linux `v10` | AES-128-CBC, IV = 16 × `0x20`, clave = PBKDF2-HMAC-SHA1(`"peanuts"`, `"saltysalt"`, **1** iteración, 16 bytes) | `components/os_crypt/sync/os_crypt_linux.cc` (`kSalt`, `kEncryptionIterations = 1`); vector `fd621fe5…2778` en test |
+| Chromium Linux `v11` | Igual con la contraseña «Safe Storage» del Secret Service (esquemas `chrome_libsecret_os_crypt_password_v2`/`_v1`, atributo `application` = `chrome`/`chromium`/`brave`); se reintenta con contraseña vacía como hace Chromium | `key_storage_libsecret.cc`. Edge y Vivaldi: valor de `application` **no verificado** (se prueba el indicado y, si falla, se sugiere CSV) |
+| Chromium (versiones recientes) | El texto descifrado puede llevar delante SHA-256 del dominio (32 bytes) | Heurística del original: si el texto no es UTF-8 se descartan los 32 primeros bytes |
+| Chromium `v20` u otras | No existen en Linux hoy (app-bound encryption es de Windows) | Error claro sugiriendo importar CSV |
+| Firefox `key4.db` moderno | PBES2: PBKDF2-HMAC-SHA256(`SHA-1(globalSalt ‖ contraseña principal)`, entrySalt, iteraciones del DER, 32) + AES-256-CBC con IV = `04 0e` + 14 bytes guardados; `password-check` en `metaData`, clave en `nssPrivate` con `a102 = f8 00…00 01` | NSS `lib/softoken/sftkpwd.c` (`sftkdb_passwordToKey` usa **SHA-1**). **Corrección al original:** `Import.swift` usa SHA-256 para el prehash; aquí se usa SHA-1 y se reintenta SHA-256 por compatibilidad |
+| Firefox `key4.db` antiguo | PBE-SHA1-3DES (cadena SHA-1/HMAC-SHA1 → clave 3DES de 24 bytes + IV de 8) | firepwd / NSS `lowpbe.c` |
+| Firefox `logins.json` | base64 → DER `SEQ{keyid, SEQ{oid, iv}, ct}`; `2.16.840.1.101.3.4.1.42` AES-256-CBC o `1.2.840.113549.3.7` DES-EDE3-CBC | NSS `pk11sdr.c` |
+
+Las primitivas (AES/3DES-CBC, PBKDF2, SHA, HMAC) vienen de `libcrypto` (OpenSSL 3 del SDK de GNOME) mediante `gnome-platform::crypto`, con vectores NIST/RFC 6070/RFC 2202 en tests. Todas las pruebas de importación generan **perfiles sintéticos** (`key4.db`, `logins.json`, `Login Data`, CSV) en directorios temporales; ningún test lee `~/.mozilla`, `~/.config` ni el llavero real.

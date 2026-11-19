@@ -39,6 +39,7 @@ strsim = "0.11"
 thiserror = "2"
 time = "0.3"
 url = "2"
+zeroize = "1"
 
 gnome-platform = { path = "crates/gnome-platform" }
 search-core = { path = "crates/search-core" }

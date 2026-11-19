@@ -2321,3 +2321,68 @@ impl FileLauncher {
         }
     }
 }
+
+// --- Fase 5 (Vault): entrada de contraseña, etiquetas seleccionables y foco al pulsar. ---
+
+/// `gtk_widget_set_focus_on_click`: evita que un clic robe el foco (p. ej. filas del popover de
+/// cuentas que no deben quitar el foco a la página web).
+pub fn set_focus_on_click(widget: &impl AsWidget, focus_on_click: bool) {
+    unsafe {
+        sys::gtk_widget_set_focus_on_click(
+            widget.as_widget_ptr(),
+            if focus_on_click {
+                sys::GTRUE
+            } else {
+                sys::GFALSE
+            },
+        );
+    }
+}
+
+impl Label {
+    pub fn set_selectable(&self, selectable: bool) {
+        unsafe {
+            sys::gtk_label_set_selectable(
+                self.obj.as_ptr().cast(),
+                if selectable { sys::GTRUE } else { sys::GFALSE },
+            );
+        }
+    }
+}
+
+/// `GtkPasswordEntry`: entrada enmascarada (con icono opcional para mirar).
+#[derive(Clone)]
+pub struct PasswordEntry {
+    obj: ObjectRef,
+}
+
+impl PasswordEntry {
+    pub fn new() -> Self {
+        let ptr = unsafe { sys::gtk_password_entry_new() };
+        let obj = unsafe { ObjectRef::from_new_ptr(ptr.cast()) };
+        Self { obj }
+    }
+
+    pub fn set_show_peek_icon(&self, show: bool) {
+        unsafe {
+            sys::gtk_password_entry_set_show_peek_icon(
+                self.obj.as_ptr().cast(),
+                if show { sys::GTRUE } else { sys::GFALSE },
+            );
+        }
+    }
+}
+
+impl Default for PasswordEntry {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl AsWidget for PasswordEntry {
+    fn as_widget_ptr(&self) -> *mut sys::GtkWidget {
+        self.obj.as_ptr().cast()
+    }
+}
+
+impl AsEditable for PasswordEntry {}

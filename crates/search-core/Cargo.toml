@@ -25,3 +25,6 @@ strsim.workspace = true
 thiserror.workspace = true
 time.workspace = true
 url.workspace = true
+zeroize.workspace = true
+# Solo libsecret, libsqlite3 y libcrypto: `search-core` sigue sin depender de GTK ni de CEF.
+gnome-platform = { path = "../gnome-platform", default-features = false, features = ["secret", "sqlite", "crypto"] }

@@ -15,6 +15,7 @@ use crate::shield::ShieldManager;
 use crate::sidebar_tabs::PinFoldersManager;
 use crate::style;
 use crate::tab_switcher::{self, SwitcherTabItem, TabSwitcherCallbacks};
+use crate::vault::VaultService;
 use crate::window::{BrowserWindow, SharedDataStores, WindowCallbacks};
 use anyhow::{anyhow, Result};
 use gnome_platform::adw::Application;
@@ -79,6 +80,7 @@ impl AppController {
             pin_folders: PinFoldersManager::load(paths.pin_folders_file()),
             shield: ShieldManager::new_async(paths.filters_cache_dir(), &settings),
             curtain: CurtainManager::load(paths.curtain_file()),
+            vault: VaultService::start(paths.clone()),
         };
         let stack_cap = settings.with(|s| s.closed_tab_stack_size);
         Self {

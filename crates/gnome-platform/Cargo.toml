@@ -4,6 +4,19 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 
+[features]
+# `gtk`: GTK4/libadwaita/GIO/GObject/GLib (solo la app GUI).
+# `secret`: libsecret-1 (Secret Service) para Vault.
+# `sqlite`: libsqlite3 en solo lectura para los importadores de contraseñas.
+# `crypto`: libcrypto (OpenSSL 3) EVP para descifrar Firefox/Chromium.
+# `search-core` usa solo `sqlite` + `crypto` (sin GTK) para seguir siendo lógica pura.
+default = ["gtk", "secret", "sqlite", "crypto"]
+gtk = []
+secret = []
+sqlite = []
+crypto = []
+
 [dependencies]
 bitflags.workspace = true
 libc.workspace = true
+zeroize.workspace = true
