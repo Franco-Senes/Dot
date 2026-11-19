@@ -22,6 +22,7 @@ mod extensions;
 mod find_bar;
 mod history_ui;
 mod icons;
+mod peek;
 mod pip;
 mod reader;
 mod settings;
