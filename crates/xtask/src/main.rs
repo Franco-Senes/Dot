@@ -106,9 +106,30 @@ fn install(root: &Path, destdir: &str, prefix: &Path) -> Result<()> {
     let bin_dir = dest_prefix.join("bin");
     let lib_dir = dest_prefix.join("lib").join("search");
     let apps_dir = dest_prefix.join("share").join("applications");
+    let metainfo_dir = dest_prefix.join("share").join("metainfo");
+    let icons_scalable_dir = dest_prefix
+        .join("share")
+        .join("icons")
+        .join("hicolor")
+        .join("scalable")
+        .join("apps");
+    let icons_symbolic_dir = dest_prefix
+        .join("share")
+        .join("icons")
+        .join("hicolor")
+        .join("symbolic")
+        .join("apps");
     let schemas_dir = dest_prefix.join("share").join("glib-2.0").join("schemas");
 
-    for dir in [&bin_dir, &lib_dir, &apps_dir, &schemas_dir] {
+    for dir in [
+        &bin_dir,
+        &lib_dir,
+        &apps_dir,
+        &metainfo_dir,
+        &icons_scalable_dir,
+        &icons_symbolic_dir,
+        &schemas_dir,
+    ] {
         fs::create_dir_all(dir).with_context(|| format!("No se pudo crear '{}'", dir.display()))?;
     }
 
@@ -116,6 +137,45 @@ fn install(root: &Path, destdir: &str, prefix: &Path) -> Result<()> {
     let desktop_src = root.join("data").join(&desktop_name);
     fs::copy(&desktop_src, apps_dir.join(&desktop_name))
         .with_context(|| format!("No se pudo instalar '{}'", desktop_src.display()))?;
+
+    let metainfo_name = format!("{APP_ID}.metainfo.xml");
+    let metainfo_src = root.join("data").join(&metainfo_name);
+    if metainfo_src.is_file() {
+        fs::copy(&metainfo_src, metainfo_dir.join(&metainfo_name))
+            .with_context(|| format!("No se pudo instalar '{}'", metainfo_src.display()))?;
+    }
+
+    let scalable_icon_name = format!("{APP_ID}.svg");
+    let scalable_icon_src = root
+        .join("data")
+        .join("icons")
+        .join("hicolor")
+        .join("scalable")
+        .join("apps")
+        .join(&scalable_icon_name);
+    if scalable_icon_src.is_file() {
+        fs::copy(
+            &scalable_icon_src,
+            icons_scalable_dir.join(&scalable_icon_name),
+        )
+        .with_context(|| format!("No se pudo instalar '{}'", scalable_icon_src.display()))?;
+    }
+
+    let symbolic_icon_name = format!("{APP_ID}-symbolic.svg");
+    let symbolic_icon_src = root
+        .join("data")
+        .join("icons")
+        .join("hicolor")
+        .join("symbolic")
+        .join("apps")
+        .join(&symbolic_icon_name);
+    if symbolic_icon_src.is_file() {
+        fs::copy(
+            &symbolic_icon_src,
+            icons_symbolic_dir.join(&symbolic_icon_name),
+        )
+        .with_context(|| format!("No se pudo instalar '{}'", symbolic_icon_src.display()))?;
+    }
 
     let schema_name = format!("{APP_ID}.gschema.xml");
     let schema_src = root.join("data").join(&schema_name);

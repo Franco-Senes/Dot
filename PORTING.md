@@ -491,6 +491,8 @@ Mismo formato JSON declarativo de `WKContentRuleList` (las 57 reglas de `Shield.
 
 *(Nota sobre el sandbox interno de CEF dentro de Flatpak: como `flatpak run` ya aísla toda la aplicación con `bwrap` e impide crear `CLONE_NEWUSER` anidados sin `zypak`, al detectar `/.flatpak-info` se activa `no_sandbox = 1` en `CefSettings` delegando el aislamiento de sistema de archivos/red al propio sandbox de Flatpak, manteniendo el aislamiento de procesos **Site Isolation** intacto).*
 
+*(Pendiente antes de activar `.github/workflows/flatpak.yml` en push/PR y publicar en Flathub: generar `build-aux/flatpak/cargo-sources.json` con `flatpak-cargo-generator` desde `Cargo.lock` y sustituir el marcador `REPLACE_WITH_PINNED_CEF_156_0_30_LINUX64_MINIMAL_SHA256` en `build-aux/flatpak/io.github.searchlinux.Search.yml` por el SHA-256 del tarball oficial de CEF `156.0.30`; mientras tanto `flatpak.yml` queda en `workflow_dispatch`).*
+
 ## 9. Riesgos (ordenados por impacto)
 1. **Integración de bucle de eventos e input OSR entre GTK4 y CEF — Impacto Alto:** Requiere despachar `cef::execute_process` antes de inicializar GTK4 en subprocesos `--type=*`, bombear `cef::do_message_loop_work()` sin bloqueo ni *busy-wait*, y traducir con fidelidad coordenadas lógicas/escala HiDPI, rueda y teclado.
 2. **Consumo de RAM de Chromium con muchas pestañas — Impacto Alto:** Se mitiga cargando de forma diferida (lazy) las pestañas restauradas y midiendo empíricamente `--renderer-process-limit` (4, 6, 8), `--process-per-site`, `high_efficiency_mode` y `--js-flags=--lite-mode` sin desactivar jamás Site Isolation.

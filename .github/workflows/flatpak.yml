@@ -1,0 +1,48 @@
+name: Flatpak
+
+# TODO: Switch back to push/pull_request triggers once build-aux/flatpak/cargo-sources.json
+# is generated (via flatpak-cargo-generator) and the pinned CEF 156.0.30 tarball sha256 is
+# filled in build-aux/flatpak/io.github.searchlinux.Search.yml (see PORTING.md §8).
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  flatpak:
+    name: Build & Lint Flatpak
+    runs-on: ubuntu-latest
+    container:
+      image: ghcr.io/flathub-infra/flatpak-github-actions:gnome-51
+      options: --privileged
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Validate AppStream metainfo
+        run: appstreamcli validate --no-net data/io.github.searchlinux.Search.metainfo.xml
+
+      - name: Preflight Flatpak offline sources
+        run: |
+          test -f build-aux/flatpak/cargo-sources.json
+          ! grep -q 'REPLACE_WITH_PINNED_CEF' build-aux/flatpak/io.github.searchlinux.Search.yml
+
+      - name: Build Flatpak bundle
+        uses: flatpak/flatpak-github-actions/flatpak-builder@v6
+        with:
+          bundle: io.github.searchlinux.Search.flatpak
+          manifest-path: build-aux/flatpak/io.github.searchlinux.Search.yml
+          cache-key: flatpak-builder-${{ github.sha }}
+
+      - name: Lint Flatpak manifest and repo
+        run: |
+          flatpak-builder-lint manifest build-aux/flatpak/io.github.searchlinux.Search.yml
+          flatpak-builder-lint repo repo
+
+      - name: Upload Flatpak bundle
+        uses: actions/upload-artifact@v4
+        with:
+          name: io.github.searchlinux.Search.flatpak
+          path: io.github.searchlinux.Search.flatpak
+          retention-days: 14
