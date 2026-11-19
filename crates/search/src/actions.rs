@@ -73,22 +73,29 @@ pub fn install_app_actions_and_accels(app: &Application, settings: &SettingsStor
             "<Control>Page_Up",
         ],
     );
-    app.set_accels_for_action("win.tab-1", &["<Control>1"]);
-    app.set_accels_for_action("win.tab-2", &["<Control>2"]);
-    app.set_accels_for_action("win.tab-3", &["<Control>3"]);
-    app.set_accels_for_action("win.tab-4", &["<Control>4"]);
-    app.set_accels_for_action("win.tab-5", &["<Control>5"]);
-    app.set_accels_for_action("win.tab-6", &["<Control>6"]);
-    app.set_accels_for_action("win.tab-7", &["<Control>7"]);
-    app.set_accels_for_action("win.tab-8", &["<Control>8"]);
-    app.set_accels_for_action("win.tab-last", &["<Control>9"]);
+    app.set_accels_for_action("win.tab-1", &["<Control>1", "<Alt>1"]);
+    app.set_accels_for_action("win.tab-2", &["<Control>2", "<Alt>2"]);
+    app.set_accels_for_action("win.tab-3", &["<Control>3", "<Alt>3"]);
+    app.set_accels_for_action("win.tab-4", &["<Control>4", "<Alt>4"]);
+    app.set_accels_for_action("win.tab-5", &["<Control>5", "<Alt>5"]);
+    app.set_accels_for_action("win.tab-6", &["<Control>6", "<Alt>6"]);
+    app.set_accels_for_action("win.tab-7", &["<Control>7", "<Alt>7"]);
+    app.set_accels_for_action("win.tab-8", &["<Control>8", "<Alt>8"]);
+    app.set_accels_for_action("win.tab-last", &["<Control>9", "<Alt>9"]);
     app.set_accels_for_action("win.tab-switcher", &["<Control>k"]);
     app.set_accels_for_action("win.new-window", &["<Control>n"]);
     app.set_accels_for_action("win.new-private-window", &["<Control><Shift>n"]);
     app.set_accels_for_action("win.toggle-tab-layout", &["<Control><Shift>s"]);
     app.set_accels_for_action("win.toggle-fold-tabs", &["<Control>s"]);
-    app.set_accels_for_action("win.duplicate-tab", &["<Control><Alt>d"]);
-    app.set_accels_for_action("win.toggle-mute", &["<Control><Shift>m"]);
+    app.set_accels_for_action(
+        "win.duplicate-tab",
+        &["<Control><Shift>d", "<Control><Alt>d"],
+    );
+    app.set_accels_for_action("win.toggle-mute", &["<Control>m", "<Control><Shift>m"]);
+    app.set_accels_for_action("win.view-source", &["<Control>u"]);
+    app.set_accels_for_action("win.print-pdf", &["<Control>p"]);
+    app.set_accels_for_action("win.screenshot", &["<Control><Shift>x"]);
+    app.set_accels_for_action("win.toggle-force-dark", &["<Alt><Shift>d"]);
     app.set_accels_for_action("win.open-settings", &["<Control>comma"]);
     app.set_accels_for_action(
         "win.open-shortcuts",
@@ -136,6 +143,7 @@ pub fn install_window_actions(gtk_win: &ApplicationWindow, win: &BrowserWindow) 
     add_win_action(gtk_win, "reload-ignore-cache", win, |w| {
         if let Some(bv) = w.ensure_active_browser_view() {
             bv.reload_ignore_cache();
+            w.show_toast("Recargando sin caché", Some(1600));
         }
     });
 
@@ -178,6 +186,7 @@ pub fn install_window_actions(gtk_win: &ApplicationWindow, win: &BrowserWindow) 
                 let cleaned = clean_link(&current);
                 if let Some(display) = Display::default_display() {
                     display.set_clipboard_text(&cleaned);
+                    w.show_toast("Enlace limpio copiado", Some(1800));
                 }
             }
         }
@@ -286,6 +295,18 @@ pub fn install_window_actions(gtk_win: &ApplicationWindow, win: &BrowserWindow) 
     add_win_action(gtk_win, "toggle-pip", win, |w| {
         w.toggle_pip_for_active_tab()
     });
+
+    add_win_action(gtk_win, "view-source", win, |w| w.view_active_tab_source());
+
+    add_win_action(gtk_win, "print-pdf", win, |w| w.export_active_tab_pdf());
+
+    add_win_action(gtk_win, "screenshot", win, |w| {
+        w.capture_active_tab_screenshot()
+    });
+
+    add_win_action(gtk_win, "toggle-force-dark", win, |w| {
+        w.toggle_force_dark_active_tab()
+    });
 }
 
 /// Muestra el diálogo nativo `AdwShortcutsDialog` (`Ctrl+?`) con todos los atajos activos.
@@ -300,14 +321,17 @@ pub fn present_shortcuts_dialog(parent: &ApplicationWindow) {
         ("Selector difuso de pestañas abiertas", "<Control>k"),
         ("Pestaña siguiente", "<Control>Tab <Control>Page_Down"),
         ("Pestaña anterior", "<Control><Shift>Tab <Control>Page_Up"),
-        ("Ir a pestaña 1…8", "<Control>1...<Control>8"),
-        ("Ir a la última pestaña", "<Control>9"),
-        ("Duplicar pestaña", "<Control><Alt>d"),
+        (
+            "Ir a pestaña 1…8",
+            "<Control>1...<Control>8 <Alt>1...<Alt>8",
+        ),
+        ("Ir a la última pestaña", "<Control>9 <Alt>9"),
+        ("Duplicar pestaña", "<Control><Shift>d <Control><Alt>d"),
         ("Dividir pestaña (Split View)", "<Control><Shift>backslash"),
         ("Cambiar foco entre paneles", "<Control><Alt>backslash"),
         ("Separar paneles divididos", "<Control><Alt>s"),
         ("Picture-in-Picture", "<Control><Shift>p"),
-        ("Silenciar o activar sonido", "<Control><Shift>m"),
+        ("Silenciar o activar sonido", "<Control>m <Control><Shift>m"),
         (
             "Alternar pestañas arriba / barra lateral",
             "<Control><Shift>s",
@@ -369,6 +393,10 @@ pub fn present_shortcuts_dialog(parent: &ApplicationWindow) {
         ("Curtain: ocultar elemento", "<Control><Shift>h"),
         ("Curtain: ver elementos ocultos", "<Control><Shift>e"),
         ("Inspector web (DevTools)", "<Control><Shift>i F12"),
+        ("Ver código fuente", "<Control>u"),
+        ("Exportar página a PDF", "<Control>p"),
+        ("Captura de pantalla PNG", "<Control><Shift>x"),
+        ("Forzar modo oscuro CSS", "<Alt><Shift>d"),
         ("Ajustes (plasma://settings)", "<Control>comma"),
         ("Atajos de teclado", "<Control>question"),
         ("Salir de Search", "<Control>q"),

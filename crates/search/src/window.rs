@@ -34,14 +34,15 @@ use anyhow::Result;
 use cef::RequestContext;
 use gnome_platform::adw::{
     Application, ApplicationWindow, CenteringPolicy, HeaderBar, OverlaySplitView, TabBar, TabPage,
-    TabView, TabViewShortcuts, ToolbarStyle, ToolbarView,
+    TabView, TabViewShortcuts, Toast, ToastOverlay, ToolbarStyle, ToolbarView,
 };
 use gnome_platform::gdk::{Rectangle, Texture};
 use gnome_platform::gio::{Menu, SimpleAction, SimpleActionGroup};
-use gnome_platform::glib::{self, SourceId};
+use gnome_platform::glib;
 use gnome_platform::gtk::{
-    Align, AsWidget, BoxWidget, Button, GestureDrag, Label, Orientation, Overflow, Overlay,
-    PackType, Popover, PopoverMenu, PositionType, ProgressBar, Revealer, RevealerTransitionType,
+    Align, AsWidget, BoxWidget, Button, FileDialog, GestureDrag, Label, Orientation, Overflow,
+    Overlay, PackType, Popover, PopoverMenu, PositionType, ProgressBar, Revealer,
+    RevealerTransitionType,
 };
 use search_core::address::{
     canonical_internal_url, display_at_rest, parse_internal_page, resolve_address,
@@ -56,7 +57,6 @@ use search_core::split::TabSplit;
 use std::cell::{Cell, RefCell};
 use std::rc::{Rc, Weak};
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::time::Duration;
 
 static NEXT_WINDOW_ID: AtomicU64 = AtomicU64::new(1);
 static NEXT_TAB_ID: AtomicU64 = AtomicU64::new(1);
@@ -218,8 +218,8 @@ struct WindowState {
     downloads_panel: RefCell<Option<DownloadsPanel>>,
     curtain_panel: RefCell<Option<CurtainPanel>>,
     reader_toolbar: RefCell<Option<ReaderToolbar>>,
-    toast_pill: Label,
-    toast_timeout: Cell<Option<SourceId>>,
+    toast_overlay: ToastOverlay,
+    active_toast: RefCell<Option<Toast>>,
     bookmark_popover: RefCell<Option<Popover>>,
     site_card_popover: RefCell<Option<Popover>>,
     vault_ui: VaultWindowUi,
@@ -374,16 +374,6 @@ impl BrowserWindow {
         stage_overlay.add_overlay(&progress_bar);
         stage_overlay.set_measure_overlay(&progress_bar, false);
 
-        let toast_pill = Label::new(None);
-        toast_pill.add_css_class("search-toast-pill");
-        toast_pill.set_halign(Align::Center);
-        toast_pill.set_valign(Align::End);
-        toast_pill.set_margins(0, 18, 12, 12);
-        toast_pill.set_can_target(false);
-        toast_pill.set_visible(false);
-        stage_overlay.add_overlay(&toast_pill);
-        stage_overlay.set_measure_overlay(&toast_pill, false);
-
         // Barra discreta de Vault «¿Guardar la contraseña…?» flotando sobre la página.
         let vault_ui = VaultWindowUi::new();
         stage_overlay.add_overlay(vault_ui.offer_widget());
@@ -490,7 +480,9 @@ impl BrowserWindow {
         side_split.set_content(Some(&main_hbox));
 
         toolbar_view.set_content(Some(&side_split));
-        window.set_content(Some(&toolbar_view));
+        let toast_overlay = ToastOverlay::new();
+        toast_overlay.set_child(Some(&toolbar_view));
+        window.set_content(Some(&toast_overlay));
 
         let tab_close_action = SimpleAction::new("close");
 
@@ -516,8 +508,8 @@ impl BrowserWindow {
                 downloads_panel: RefCell::new(None),
                 curtain_panel: RefCell::new(None),
                 reader_toolbar: RefCell::new(None),
-                toast_pill,
-                toast_timeout: Cell::new(None),
+                toast_overlay,
+                active_toast: RefCell::new(None),
                 bookmark_popover: RefCell::new(None),
                 site_card_popover: RefCell::new(None),
                 vault_ui,
@@ -1092,27 +1084,24 @@ impl BrowserWindow {
         }
     }
 
-    fn show_toast(&self, text: &str, duration_ms: Option<u64>) {
-        if let Some(prev) = self.inner.toast_timeout.take() {
-            prev.remove();
+    pub fn show_toast(&self, text: &str, duration_ms: Option<u64>) {
+        if let Some(prev) = self.inner.active_toast.borrow_mut().take() {
+            prev.dismiss();
         }
-        self.inner.toast_pill.set_text(text);
-        self.inner.toast_pill.set_visible(true);
-        if let Some(ms) = duration_ms {
-            let w = self.clone();
-            let src = glib::timeout_add_local_once(Duration::from_millis(ms), move || {
-                w.inner.toast_timeout.set(None);
-                w.inner.toast_pill.set_visible(false);
-            });
-            self.inner.toast_timeout.set(Some(src));
-        }
+        let toast = Toast::new(text);
+        let secs = match duration_ms {
+            Some(ms) => ((ms.saturating_add(999)) / 1000).max(1) as u32,
+            None => 0,
+        };
+        toast.set_timeout(secs);
+        self.inner.toast_overlay.add_toast(&toast);
+        *self.inner.active_toast.borrow_mut() = Some(toast);
     }
 
-    fn hide_toast(&self) {
-        if let Some(prev) = self.inner.toast_timeout.take() {
-            prev.remove();
+    pub fn hide_toast(&self) {
+        if let Some(prev) = self.inner.active_toast.borrow_mut().take() {
+            prev.dismiss();
         }
-        self.inner.toast_pill.set_visible(false);
     }
 
     fn refresh_curtain_css_for_host(&self, host: &str) {
@@ -1537,8 +1526,34 @@ impl BrowserWindow {
             .filter(|t| t.id != keep_tab_id && t.pin.is_none())
             .map(|t| t.page.clone())
             .collect();
+        let closed_count = to_close.len();
         for page in to_close {
             self.inner.tab_view.close_page(&page);
+        }
+        if closed_count > 0 {
+            self.show_toast("Otras pestañas cerradas", Some(1800));
+        }
+    }
+
+    pub fn close_tabs_to_right(&self, anchor_tab_id: u64) {
+        self.sync_order_with_tab_view();
+        let to_close: Vec<TabPage> = {
+            let tabs = self.inner.tabs.borrow();
+            let Some(pos) = tabs.iter().position(|t| t.id == anchor_tab_id) else {
+                return;
+            };
+            tabs.iter()
+                .skip(pos + 1)
+                .filter(|t| t.pin.is_none())
+                .map(|t| t.page.clone())
+                .collect()
+        };
+        let closed_count = to_close.len();
+        for page in to_close {
+            self.inner.tab_view.close_page(&page);
+        }
+        if closed_count > 0 {
+            self.show_toast("Pestañas a la derecha cerradas", Some(1800));
         }
     }
 
@@ -1562,6 +1577,7 @@ impl BrowserWindow {
         };
         if let Some((spec, pos)) = spec_and_pos {
             let _ = self.insert_tab_from_spec(spec, Some(pos), true, false);
+            self.show_toast("Pestaña duplicada", Some(1800));
         }
     }
 
@@ -1700,10 +1716,17 @@ impl BrowserWindow {
             Self::apply_page_audio_indicator(&t.page, t.audible, t.muted);
             muted
         };
-        let _ = next_muted;
         self.sync_split_presentation();
         self.sync_sidebar();
         self.notify_session_dirty();
+        self.show_toast(
+            if next_muted {
+                "Audio silenciado"
+            } else {
+                "Audio activado"
+            },
+            Some(1800),
+        );
     }
 
     pub fn toggle_mute_active_tab(&self) {
@@ -1741,6 +1764,7 @@ impl BrowserWindow {
         if self.tab_count() > 1 {
             let _ = self.close_tab_by_id(tab_id);
         }
+        self.show_toast("Pestaña movida a nueva ventana", Some(2000));
     }
 
     pub fn reopen_closed_tab(&self) {
@@ -1829,6 +1853,7 @@ impl BrowserWindow {
         self.inner.toolbar_view.set_reveal_top_bars(!fullscreen);
         if fullscreen {
             self.inner.sidebar_revealer.set_reveal_child(false);
+            self.show_toast("Modo Zen (F11 o Esc para salir)", Some(2200));
         } else {
             self.apply_layout_from_settings(&self.inner.settings.snapshot());
         }
@@ -1843,6 +1868,8 @@ impl BrowserWindow {
             bv.zoom_in();
             let z = bv.zoom_factor();
             self.inner.settings.update(|s| s.page_zoom = z);
+            let pct = (z * 100.0).round() as i64;
+            self.show_toast(&format!("Zoom: {pct}%"), Some(1600));
         }
     }
 
@@ -1851,6 +1878,8 @@ impl BrowserWindow {
             bv.zoom_out();
             let z = bv.zoom_factor();
             self.inner.settings.update(|s| s.page_zoom = z);
+            let pct = (z * 100.0).round() as i64;
+            self.show_toast(&format!("Zoom: {pct}%"), Some(1600));
         }
     }
 
@@ -1858,7 +1887,124 @@ impl BrowserWindow {
         if let Some(bv) = self.ensure_active_browser_view() {
             bv.zoom_reset();
             self.inner.settings.update(|s| s.page_zoom = 1.0);
+            self.show_toast("Zoom restablecido (100%)", Some(1600));
         }
+    }
+
+    pub fn view_active_tab_source(&self) {
+        let Some(bv) = self.active_browser_view() else {
+            return;
+        };
+        let url = bv.current_url();
+        if url.is_empty()
+            || url == "about:blank"
+            || url.starts_with("view-source:")
+            || url.starts_with("plasma://")
+        {
+            self.show_toast("Esta página no tiene código fuente visible", Some(2000));
+            return;
+        }
+        let target = format!("view-source:{url}");
+        let _ = self.open_tab(Some(&target), true, false, false);
+    }
+
+    pub fn toggle_force_dark_active_tab(&self) {
+        let Some(bv) = self.ensure_active_browser_view() else {
+            return;
+        };
+        let enabled = bv.toggle_force_dark();
+        self.show_toast(
+            if enabled {
+                "Modo oscuro forzado activado"
+            } else {
+                "Modo oscuro forzado desactivado"
+            },
+            Some(2000),
+        );
+    }
+
+    pub fn capture_active_tab_screenshot(&self) {
+        let Some(bv) = self.active_browser_view() else {
+            self.show_toast("No hay ninguna página activa para capturar", Some(2000));
+            return;
+        };
+        let dir = resolve_pictures_dir();
+        if let Err(err) = std::fs::create_dir_all(&dir) {
+            self.show_toast(&format!("No se pudo preparar carpeta: {err}"), Some(2600));
+            return;
+        }
+        let stamp = now_unix_secs() as u64;
+        let filename = format!("search-captura-{stamp}.png");
+        let path = dir.join(&filename);
+        match bv.snapshot_png(&path) {
+            Ok((w, h)) => {
+                self.show_toast(
+                    &format!("Captura guardada ({w}x{h}): {filename}"),
+                    Some(2600),
+                );
+            }
+            Err(_) => {
+                self.show_toast("Aún no hay fotograma listo para capturar", Some(2200));
+            }
+        }
+    }
+
+    pub fn export_active_tab_pdf(&self) {
+        let Some(bv) = self.active_browser_view() else {
+            self.show_toast("No hay ninguna página activa para exportar", Some(2000));
+            return;
+        };
+        let raw_title = bv.title();
+        let safe_base: String = raw_title
+            .chars()
+            .map(|c| {
+                if c.is_alphanumeric() || c == '-' || c == '_' || c == ' ' {
+                    c
+                } else {
+                    '_'
+                }
+            })
+            .collect();
+        let trimmed = safe_base.trim();
+        let initial_name = if trimmed.is_empty() {
+            "pagina.pdf".to_string()
+        } else {
+            format!("{trimmed}.pdf")
+        };
+
+        let dialog = FileDialog::new();
+        dialog.set_title("Exportar página a PDF");
+        dialog.set_initial_name(&initial_name);
+        let default_dir = resolve_documents_dir();
+        dialog.set_initial_folder(&default_dir);
+
+        let weak_win = self.downgrade();
+        dialog.save(Some(&self.inner.window), move |opt_path| {
+            let Some(path) = opt_path else {
+                return;
+            };
+            let Some(win) = weak_win.upgrade() else {
+                return;
+            };
+            let Some(bv_now) = win.active_browser_view() else {
+                return;
+            };
+            let filename = path
+                .file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or("documento.pdf")
+                .to_string();
+            let weak_cb = win.downgrade();
+            bv_now.print_to_pdf(&path, move |ok| {
+                if let Some(w) = weak_cb.upgrade() {
+                    if ok {
+                        w.show_toast(&format!("PDF guardado: {filename}"), Some(2600));
+                    } else {
+                        w.show_toast("No se pudo exportar la página a PDF", Some(2600));
+                    }
+                }
+            });
+        });
     }
 
     /// Cierra limpiamente todos los `cef::Browser` activos de esta ventana (p. ej. al salir).
@@ -2760,6 +2906,7 @@ impl BrowserWindow {
         let sec3 = Menu::new();
         sec3.append("Cerrar pestaña", Some("tab.close"));
         sec3.append("Cerrar las demás pestañas", Some("tab.close-others"));
+        sec3.append("Cerrar pestañas a la derecha", Some("tab.close-right"));
         self.inner.tab_menu.append_section(None, &sec3);
     }
 
@@ -2963,32 +3110,51 @@ impl BrowserWindow {
             );
         }
         {
-            let w = self.clone();
+            let weak = self.downgrade();
             add(
                 "move-to-new-window",
                 Box::new(move || {
-                    if let Some(id) = w.inner.menu_target_tab.get() {
-                        w.move_tab_to_new_window(id);
+                    if let Some(w) = weak.upgrade() {
+                        if let Some(id) = w.inner.menu_target_tab.get() {
+                            w.move_tab_to_new_window(id);
+                        }
                     }
                 }),
             );
         }
         {
-            let w = self.clone();
+            let weak = self.downgrade();
             self.inner.tab_close_action.connect_activate(move || {
-                if let Some(id) = w.inner.menu_target_tab.get() {
-                    let _ = w.close_tab_by_id(id);
+                if let Some(w) = weak.upgrade() {
+                    if let Some(id) = w.inner.menu_target_tab.get() {
+                        let _ = w.close_tab_by_id(id);
+                    }
                 }
             });
             group.add_action(&self.inner.tab_close_action);
         }
         {
-            let w = self.clone();
+            let weak = self.downgrade();
             add(
                 "close-others",
                 Box::new(move || {
-                    if let Some(id) = w.inner.menu_target_tab.get() {
-                        w.close_other_tabs(id);
+                    if let Some(w) = weak.upgrade() {
+                        if let Some(id) = w.inner.menu_target_tab.get() {
+                            w.close_other_tabs(id);
+                        }
+                    }
+                }),
+            );
+        }
+        {
+            let weak = self.downgrade();
+            add(
+                "close-right",
+                Box::new(move || {
+                    if let Some(w) = weak.upgrade() {
+                        if let Some(id) = w.inner.menu_target_tab.get() {
+                            w.close_tabs_to_right(id);
+                        }
                     }
                 }),
             );
@@ -3927,4 +4093,61 @@ impl BrowserWindow {
             cb();
         }
     }
+}
+
+fn resolve_user_dir(xdg_var: &str, fallback_subdir: &str) -> std::path::PathBuf {
+    if let Some(val) = std::env::var_os(xdg_var) {
+        let p = std::path::PathBuf::from(val);
+        if !p.as_os_str().is_empty() {
+            return p;
+        }
+    }
+    if let Some(home) = std::env::var_os("HOME") {
+        let candidate = std::path::PathBuf::from(&home).join(fallback_subdir);
+        if candidate.is_dir() {
+            return candidate;
+        }
+        return std::path::PathBuf::from(home);
+    }
+    std::path::PathBuf::from(".")
+}
+
+fn resolve_pictures_dir() -> std::path::PathBuf {
+    if let Some(val) = std::env::var_os("XDG_PICTURES_DIR") {
+        let p = std::path::PathBuf::from(val);
+        if !p.as_os_str().is_empty() {
+            return p;
+        }
+    }
+    if let Some(home) = std::env::var_os("HOME") {
+        let home_path = std::path::PathBuf::from(&home);
+        for sub in ["Pictures", "Imágenes", "Downloads", "Descargas"] {
+            let candidate = home_path.join(sub);
+            if candidate.is_dir() {
+                return candidate;
+            }
+        }
+        return home_path.join("Pictures");
+    }
+    resolve_user_dir("XDG_DOWNLOAD_DIR", "Downloads")
+}
+
+fn resolve_documents_dir() -> std::path::PathBuf {
+    if let Some(val) = std::env::var_os("XDG_DOCUMENTS_DIR") {
+        let p = std::path::PathBuf::from(val);
+        if !p.as_os_str().is_empty() {
+            return p;
+        }
+    }
+    if let Some(home) = std::env::var_os("HOME") {
+        let home_path = std::path::PathBuf::from(&home);
+        for sub in ["Documents", "Documentos", "Downloads", "Descargas"] {
+            let candidate = home_path.join(sub);
+            if candidate.is_dir() {
+                return candidate;
+            }
+        }
+        return home_path;
+    }
+    resolve_user_dir("XDG_DOWNLOAD_DIR", "Downloads")
 }

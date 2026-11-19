@@ -521,6 +521,16 @@ pub struct AdwShortcutsItem {
 }
 
 #[repr(C)]
+pub struct AdwToastOverlay {
+    _private: [u8; 0],
+}
+
+#[repr(C)]
+pub struct AdwToast {
+    _private: [u8; 0],
+}
+
+#[repr(C)]
 pub struct GDBusConnection {
     _private: [u8; 0],
 }
@@ -1451,6 +1461,15 @@ extern "C" {
         title: *const c_char,
         accelerator: *const c_char,
     ) -> *mut AdwShortcutsItem;
+
+    pub fn adw_toast_overlay_new() -> *mut GtkWidget;
+    pub fn adw_toast_overlay_set_child(self_: *mut AdwToastOverlay, child: *mut GtkWidget);
+    pub fn adw_toast_overlay_add_toast(self_: *mut AdwToastOverlay, toast: *mut AdwToast);
+    pub fn adw_toast_new(title: *const c_char) -> *mut AdwToast;
+    pub fn adw_toast_set_timeout(self_: *mut AdwToast, timeout: guint);
+    pub fn adw_toast_set_button_label(self_: *mut AdwToast, button_label: *const c_char);
+    pub fn adw_toast_set_action_name(self_: *mut AdwToast, action_name: *const c_char);
+    pub fn adw_toast_dismiss(self_: *mut AdwToast);
 }
 
 // --- Fase 5 (Vault): diálogos de alerta, entrada de contraseña y portapapeles propio. ---

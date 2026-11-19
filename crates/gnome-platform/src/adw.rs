@@ -1690,4 +1690,109 @@ impl ActionRow {
     }
 }
 
-crate::object::impl_object_subclass!(ApplicationWindow, Dialog, OverlaySplitView, TabView,);
+/// Envoltorio seguro de `AdwToast` para notificaciones breves no intrusivas.
+#[derive(Clone)]
+pub struct Toast {
+    obj: ObjectRef,
+}
+
+impl Toast {
+    pub fn new(title: &str) -> Self {
+        let c = to_cstring(title);
+        let ptr = unsafe { sys::adw_toast_new(c.as_ptr()) };
+        let obj = unsafe { ObjectRef::from_new_ptr(ptr.cast()) };
+        Self { obj }
+    }
+
+    fn ptr(&self) -> *mut sys::AdwToast {
+        self.obj.as_ptr().cast()
+    }
+
+    /// Duración en segundos (`0` = persistente hasta descartar manualmente).
+    pub fn set_timeout(&self, seconds: u32) {
+        unsafe {
+            sys::adw_toast_set_timeout(self.ptr(), seconds);
+        }
+    }
+
+    pub fn set_button_label(&self, label: Option<&str>) {
+        unsafe {
+            if let Some(l) = label {
+                let c = to_cstring(l);
+                sys::adw_toast_set_button_label(self.ptr(), c.as_ptr());
+            } else {
+                sys::adw_toast_set_button_label(self.ptr(), ptr::null());
+            }
+        }
+    }
+
+    pub fn set_action_name(&self, action: Option<&str>) {
+        unsafe {
+            if let Some(a) = action {
+                let c = to_cstring(a);
+                sys::adw_toast_set_action_name(self.ptr(), c.as_ptr());
+            } else {
+                sys::adw_toast_set_action_name(self.ptr(), ptr::null());
+            }
+        }
+    }
+
+    pub fn dismiss(&self) {
+        unsafe {
+            sys::adw_toast_dismiss(self.ptr());
+        }
+    }
+}
+
+/// Envoltorio seguro de `AdwToastOverlay` para mostrar avisos `Toast` sobre un hijo.
+#[derive(Clone)]
+pub struct ToastOverlay {
+    obj: ObjectRef,
+}
+
+impl ToastOverlay {
+    pub fn new() -> Self {
+        let ptr = unsafe { sys::adw_toast_overlay_new() };
+        let obj = unsafe { ObjectRef::from_new_ptr(ptr.cast()) };
+        Self { obj }
+    }
+
+    fn ptr(&self) -> *mut sys::AdwToastOverlay {
+        self.obj.as_ptr().cast()
+    }
+
+    pub fn set_child(&self, child: Option<&impl AsWidget>) {
+        let ptr = child.map_or(ptr::null_mut(), AsWidget::as_widget_ptr);
+        unsafe {
+            sys::adw_toast_overlay_set_child(self.ptr(), ptr);
+        }
+    }
+
+    pub fn add_toast(&self, toast: &Toast) {
+        unsafe {
+            // `adw_toast_overlay_add_toast` es `(transfer full)` en libadwaita.
+            sys::g_object_ref(toast.obj.as_ptr());
+            sys::adw_toast_overlay_add_toast(self.ptr(), toast.ptr());
+        }
+    }
+}
+
+impl Default for ToastOverlay {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl AsWidget for ToastOverlay {
+    fn as_widget_ptr(&self) -> *mut sys::GtkWidget {
+        self.obj.as_ptr().cast()
+    }
+}
+
+crate::object::impl_object_subclass!(
+    ApplicationWindow,
+    Dialog,
+    OverlaySplitView,
+    TabView,
+    ToastOverlay,
+);
