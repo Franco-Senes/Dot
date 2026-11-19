@@ -124,6 +124,40 @@ pub fn present_settings_dialog(parent: &ApplicationWindow, settings: &SettingsSt
     privacy_group.add(&engine_row);
     privacy_group.add(&custom_url_row);
 
+    let shield_row = SwitchRow::new();
+    shield_row.set_title("Shield: bloquear anuncios y rastreadores");
+    shield_row.set_subtitle(
+        "Bloquea redes publicitarias, rastreadores de terceros y anuncios de YouTube",
+    );
+    shield_row.set_active(snap.shield_enabled);
+    {
+        let st = settings.clone();
+        let row_ref = shield_row.clone();
+        shield_row.connect_active_notify(move || {
+            let enabled = row_ref.is_active();
+            st.update(|s| s.shield_enabled = enabled);
+        });
+    }
+    privacy_group.add(&shield_row);
+
+    if !snap.shield_paused.is_empty() {
+        let paused_row = ActionRow::new();
+        paused_row.set_title("Excepciones de Shield");
+        paused_row.set_subtitle(&snap.shield_paused.join(", "));
+        let clear_paused = Button::with_label("Reactivar todos");
+        clear_paused.set_valign(Align::Center);
+        {
+            let st = settings.clone();
+            let row_ref = paused_row.clone();
+            clear_paused.connect_clicked(move || {
+                st.update(|s| s.shield_paused.clear());
+                row_ref.set_visible(false);
+            });
+        }
+        paused_row.add_suffix(&clear_paused);
+        privacy_group.add(&paused_row);
+    }
+
     let cookies_row = SwitchRow::new();
     cookies_row.set_title("Bloquear cookies de terceros");
     cookies_row.set_subtitle("Evita el rastreo entre sitios distintos");

@@ -42,10 +42,7 @@ pub fn install_app_actions_and_accels(app: &Application, settings: &SettingsStor
     app.set_accels_for_action("app.quit", &["<Control>q"]);
     app.set_accels_for_action("win.focus-address", &["<Control>l", "F6", "<Alt>d"]);
     app.set_accels_for_action("win.reload", &["<Control>r", "F5"]);
-    app.set_accels_for_action(
-        "win.reload-ignore-cache",
-        &["<Control><Shift>r", "<Control><Alt>r"],
-    );
+    app.set_accels_for_action("win.reload-ignore-cache", &["<Control><Shift>r"]);
     app.set_accels_for_action("win.stop-or-escape", &["Escape"]);
     app.set_accels_for_action("win.go-back", &["<Alt>Left", "<Control>bracketleft"]);
     app.set_accels_for_action("win.go-forward", &["<Alt>Right", "<Control>bracketright"]);
@@ -106,6 +103,11 @@ pub fn install_app_actions_and_accels(app: &Application, settings: &SettingsStor
         "win.toggle-downloads",
         &["<Control><Shift>y", "<Control><Shift>j"],
     );
+
+    // Fase 4 — Shield, Curtain y modo lectura.
+    app.set_accels_for_action("win.toggle-reader", &["<Control><Alt>r", "F9"]);
+    app.set_accels_for_action("win.curtain-pick", &["<Control><Shift>h"]);
+    app.set_accels_for_action("win.toggle-curtain", &["<Control><Shift>e"]);
 }
 
 /// Registra todas las acciones de ventana (`win.*`) sobre `gtk_win`.
@@ -337,6 +339,22 @@ pub fn install_window_actions(gtk_win: &ApplicationWindow, win: &BrowserWindow) 
         let w = win.clone();
         move || w.toggle_downloads_panel()
     });
+
+    // Fase 4.
+    add_win_action(gtk_win, "toggle-reader", {
+        let w = win.clone();
+        move || w.toggle_reader_mode()
+    });
+
+    add_win_action(gtk_win, "curtain-pick", {
+        let w = win.clone();
+        move || w.toggle_curtain_picker()
+    });
+
+    add_win_action(gtk_win, "toggle-curtain", {
+        let w = win.clone();
+        move || w.toggle_curtain_panel()
+    });
 }
 
 /// Muestra el diálogo nativo `AdwShortcutsDialog` (`Ctrl+?`) con todos los atajos activos.
@@ -411,6 +429,9 @@ pub fn present_shortcuts_dialog(parent: &ApplicationWindow) {
             "<Control>plus <Control>minus <Control>0",
         ),
         ("Pantalla completa", "F11"),
+        ("Modo lectura", "<Control><Alt>r F9"),
+        ("Curtain: ocultar elemento", "<Control><Shift>h"),
+        ("Curtain: ver elementos ocultos", "<Control><Shift>e"),
         ("Inspector web (DevTools)", "<Control><Shift>i F12"),
         ("Ajustes (plasma://settings)", "<Control>comma"),
         ("Atajos de teclado", "<Control>question"),

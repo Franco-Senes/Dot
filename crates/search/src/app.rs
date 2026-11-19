@@ -7,9 +7,11 @@ use crate::actions;
 use crate::bookmarks_ui::BookmarksManager;
 use crate::browser_view;
 use crate::cef_engine::CefEngine;
+use crate::curtain::CurtainManager;
 use crate::downloads::DownloadManager;
 use crate::history_ui::HistoryManager;
 use crate::settings::SettingsStore;
+use crate::shield::ShieldManager;
 use crate::sidebar_tabs::PinFoldersManager;
 use crate::style;
 use crate::tab_switcher::{self, SwitcherTabItem, TabSwitcherCallbacks};
@@ -75,6 +77,8 @@ impl AppController {
             bookmarks: BookmarksManager::load(paths.bookmarks_file()),
             downloads: DownloadManager::load(paths.downloads_file(), settings.clone()),
             pin_folders: PinFoldersManager::load(paths.pin_folders_file()),
+            shield: ShieldManager::new_async(paths.filters_cache_dir(), &settings),
+            curtain: CurtainManager::load(paths.curtain_file()),
         };
         let stack_cap = settings.with(|s| s.closed_tab_stack_size);
         Self {
@@ -422,6 +426,7 @@ impl AppController {
         self.inner.stores.bookmarks.flush_now();
         self.inner.stores.downloads.flush_now();
         self.inner.stores.pin_folders.flush_now();
+        self.inner.stores.curtain.flush_now();
         let windows: Vec<BrowserWindow> = self.inner.windows.borrow_mut().drain(..).collect();
         for win in windows {
             win.close_all_browsers();

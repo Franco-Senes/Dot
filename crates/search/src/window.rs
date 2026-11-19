@@ -12,13 +12,16 @@ use crate::actions;
 use crate::address::AddressBar;
 use crate::bookmarks_ui::{self, BookmarksManager, BookmarksPanel};
 use crate::browser_view::{BrowserCallbacks, BrowserView};
+use crate::curtain::{CurtainManager, CurtainPanel, CurtainPanelCallbacks};
 use crate::downloads::DownloadManager;
 use crate::downloads_ui::DownloadsPanel;
 use crate::find_bar::FindBar;
 use crate::history_ui::{HistoryManager, HistoryPanel};
 use crate::icons::{self, IconId};
+use crate::reader::ReaderToolbar;
 use crate::settings::SettingsStore;
 use crate::settings_page::SettingsPage;
+use crate::shield::{self, ShieldManager};
 use crate::sidebar_tabs::{
     PinFoldersManager, SidebarCallbacks, SidebarRenderOptions, SidebarTabItem, SidebarTabs,
 };
@@ -30,8 +33,8 @@ use gnome_platform::adw::{
     TabView, TabViewShortcuts, ToolbarStyle, ToolbarView,
 };
 use gnome_platform::gdk::{Rectangle, Texture};
-use gnome_platform::gio::{Menu, SimpleAction, SimpleActionGroup};
-use gnome_platform::glib;
+use gnome_platform::gio::{Icon, Menu, SimpleAction, SimpleActionGroup};
+use gnome_platform::glib::{self, Bytes, SourceId};
 use gnome_platform::gtk::{
     Align, AsWidget, BoxWidget, GestureDrag, Label, Orientation, Overflow, Overlay, PackType,
     Popover, PopoverMenu, PositionType, ProgressBar, Revealer, RevealerTransitionType,
@@ -42,16 +45,18 @@ use search_core::address::{
 };
 use search_core::history::{suggest_omnibox, OpenTabInfo};
 use search_core::paths::SearchPaths;
+use search_core::reader::render_reader_document;
 use search_core::session::{now_unix_secs, ClosedTab, PinStyle, SessionTab, SessionWindow};
 use search_core::settings::{AppSettings, NewTabPosition, UiMotion};
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::time::Duration;
 
 static NEXT_WINDOW_ID: AtomicU64 = AtomicU64::new(1);
 static NEXT_TAB_ID: AtomicU64 = AtomicU64::new(1);
 
-/// Almacenes compartidos de datos de navegación inyectados desde `AppController`.
+/// Almacenes compartidos de datos de navegación (Fases 3, 3b y 4) inyectados desde `AppController`.
 #[derive(Clone)]
 pub struct SharedDataStores {
     pub paths: SearchPaths,
@@ -59,6 +64,8 @@ pub struct SharedDataStores {
     pub bookmarks: BookmarksManager,
     pub downloads: DownloadManager,
     pub pin_folders: PinFoldersManager,
+    pub shield: ShieldManager,
+    pub curtain: CurtainManager,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -67,6 +74,7 @@ enum SidePanelKind {
     History,
     Bookmarks,
     Downloads,
+    Curtain,
 }
 
 /// Eventos que una ventana comunica al controlador global de aplicación (`app.rs`).
@@ -202,7 +210,12 @@ struct WindowState {
     history_panel: RefCell<Option<HistoryPanel>>,
     bookmarks_panel: RefCell<Option<BookmarksPanel>>,
     downloads_panel: RefCell<Option<DownloadsPanel>>,
+    curtain_panel: RefCell<Option<CurtainPanel>>,
+    reader_toolbar: RefCell<Option<ReaderToolbar>>,
+    toast_pill: Label,
+    toast_timeout: Cell<Option<SourceId>>,
     bookmark_popover: RefCell<Option<Popover>>,
+    site_card_popover: RefCell<Option<Popover>>,
     tab_menu: Menu,
     tab_close_action: SimpleAction,
     active_popover: RefCell<Option<PopoverMenu>>,
@@ -331,6 +344,16 @@ impl BrowserWindow {
         stage_overlay.add_overlay(&progress_bar);
         stage_overlay.set_measure_overlay(&progress_bar, false);
 
+        let toast_pill = Label::new(None);
+        toast_pill.add_css_class("search-toast-pill");
+        toast_pill.set_halign(Align::Center);
+        toast_pill.set_valign(Align::End);
+        toast_pill.set_margins(0, 18, 12, 12);
+        toast_pill.set_can_target(false);
+        toast_pill.set_visible(false);
+        stage_overlay.add_overlay(&toast_pill);
+        stage_overlay.set_measure_overlay(&toast_pill, false);
+
         // Marco de tarjeta redondeado (`layout_cards` estilo Arc / Search) con recorte de esquinas.
         let stage_card = BoxWidget::new(Orientation::Vertical, 0);
         stage_card.add_css_class("search-stage-card");
@@ -456,7 +479,12 @@ impl BrowserWindow {
                 history_panel: RefCell::new(None),
                 bookmarks_panel: RefCell::new(None),
                 downloads_panel: RefCell::new(None),
+                curtain_panel: RefCell::new(None),
+                reader_toolbar: RefCell::new(None),
+                toast_pill,
+                toast_timeout: Cell::new(None),
                 bookmark_popover: RefCell::new(None),
+                site_card_popover: RefCell::new(None),
                 tab_menu,
                 tab_close_action,
                 active_popover: RefCell::new(None),
@@ -471,6 +499,30 @@ impl BrowserWindow {
                 callbacks,
             }),
         };
+
+        // Barra flotante discreta del modo lectura (solo visible cuando la pestaña está en lectura).
+        let reader_toolbar = ReaderToolbar::new(
+            settings.clone(),
+            {
+                let w = bw.clone();
+                move |opts| {
+                    if let Some(bv) = w.active_browser_view() {
+                        bv.apply_reader_options(opts);
+                    }
+                }
+            },
+            {
+                let w = bw.clone();
+                move || {
+                    if let Some(bv) = w.active_browser_view() {
+                        bv.exit_reader_mode();
+                    }
+                }
+            },
+        );
+        stage_overlay.add_overlay(reader_toolbar.widget());
+        stage_overlay.set_measure_overlay(reader_toolbar.widget(), false);
+        *bw.inner.reader_toolbar.borrow_mut() = Some(reader_toolbar);
 
         bw.init_side_panels();
         bw.install_tab_context_actions();
@@ -887,6 +939,113 @@ impl BrowserWindow {
         self.toggle_side_panel(SidePanelKind::Downloads);
     }
 
+    pub fn toggle_curtain_panel(&self) {
+        self.toggle_side_panel(SidePanelKind::Curtain);
+    }
+
+    pub fn toggle_curtain_picker(&self) {
+        let Some(bv) = self.ensure_active_browser_view() else {
+            return;
+        };
+        let url = bv.current_url();
+        if CurtainManager::host_for_url(&url).is_none() || bv.is_reader_active() {
+            self.show_toast("Curtain solo funciona en páginas web", Some(2600));
+            return;
+        }
+        let next = !bv.is_curtain_picking();
+        if next {
+            self.close_side_panel();
+            bv.grab_focus();
+        }
+        bv.set_curtain_picking(next);
+    }
+
+    pub fn toggle_reader_mode(&self) {
+        let Some(bv) = self.ensure_active_browser_view() else {
+            return;
+        };
+        if bv.is_reader_active() {
+            bv.exit_reader_mode();
+            return;
+        }
+        let url = bv.current_url();
+        if !url.starts_with("http://")
+            && !url.starts_with("https://")
+            && !url.starts_with("file://")
+        {
+            self.show_toast("Esta página no admite el modo lectura", Some(2600));
+            return;
+        }
+        bv.trigger_reader_extract();
+    }
+
+    pub fn open_site_card_popover(&self) {
+        if let Some(old) = self.inner.site_card_popover.borrow_mut().take() {
+            old.popdown();
+            old.unparent();
+        }
+        let Some(bv) = self.active_browser_view() else {
+            return;
+        };
+        let url = bv.current_url();
+        let blocked = bv.blocked_count();
+        let bv_reload = bv.clone();
+        if let Some(pop) = shield::open_site_card_popover(
+            self.inner.address_bar.entry(),
+            &url,
+            blocked,
+            self.inner.is_private,
+            &self.inner.stores.shield,
+            &self.inner.settings,
+            move || bv_reload.reload(),
+        ) {
+            *self.inner.site_card_popover.borrow_mut() = Some(pop);
+        } else {
+            self.show_toast("No hay información de sitio para esta página", Some(2400));
+        }
+    }
+
+    fn show_toast(&self, text: &str, duration_ms: Option<u64>) {
+        if let Some(prev) = self.inner.toast_timeout.take() {
+            prev.remove();
+        }
+        self.inner.toast_pill.set_text(text);
+        self.inner.toast_pill.set_visible(true);
+        if let Some(ms) = duration_ms {
+            let w = self.clone();
+            let src = glib::timeout_add_local_once(Duration::from_millis(ms), move || {
+                w.inner.toast_timeout.set(None);
+                w.inner.toast_pill.set_visible(false);
+            });
+            self.inner.toast_timeout.set(Some(src));
+        }
+    }
+
+    fn hide_toast(&self) {
+        if let Some(prev) = self.inner.toast_timeout.take() {
+            prev.remove();
+        }
+        self.inner.toast_pill.set_visible(false);
+    }
+
+    fn refresh_curtain_css_for_host(&self, host: &str) {
+        let css = self.inner.stores.curtain.css_for_host(host, None);
+        let views: Vec<BrowserView> = self
+            .inner
+            .tabs
+            .borrow()
+            .iter()
+            .filter_map(|t| {
+                let bv = t.browser.as_ref()?;
+                let tab_host = CurtainManager::host_for_url(&t.url)?;
+                (tab_host == host).then(|| bv.clone())
+            })
+            .collect();
+        for bv in views {
+            bv.apply_curtain_css(&css);
+        }
+    }
+
     pub fn close_side_panel(&self) {
         self.inner.side_split.set_show_sidebar(false);
         self.inner.active_panel.set(SidePanelKind::None);
@@ -894,6 +1053,9 @@ impl BrowserWindow {
             p.set_panel_visible(false);
         }
         if let Some(ref p) = *self.inner.bookmarks_panel.borrow() {
+            p.set_panel_visible(false);
+        }
+        if let Some(ref p) = *self.inner.curtain_panel.borrow() {
             p.set_panel_visible(false);
         }
     }
@@ -983,6 +1145,57 @@ impl BrowserWindow {
             },
         );
         *self.inner.downloads_panel.borrow_mut() = Some(dl_panel);
+
+        let curtain_panel = CurtainPanel::new(
+            self.inner.stores.curtain.clone(),
+            CurtainPanelCallbacks {
+                on_start_pick: Rc::new({
+                    let w = self.clone();
+                    move || {
+                        w.close_side_panel();
+                        w.toggle_curtain_picker();
+                    }
+                }),
+                on_peek: Rc::new({
+                    let w = self.clone();
+                    move |host, selector| {
+                        if let Some(bv) = w.active_browser_view() {
+                            if CurtainManager::host_for_url(&bv.current_url()).as_deref()
+                                == Some(host.as_str())
+                            {
+                                let css_without =
+                                    w.inner.stores.curtain.css_for_host(&host, Some(&selector));
+                                bv.peek_curtain_selector(&css_without, &selector);
+                            }
+                        }
+                    }
+                }),
+                on_unpeek: Rc::new({
+                    let w = self.clone();
+                    move |host| {
+                        if let Some(bv) = w.active_browser_view() {
+                            if CurtainManager::host_for_url(&bv.current_url()).as_deref()
+                                == Some(host.as_str())
+                            {
+                                let full_css = w.inner.stores.curtain.css_for_host(&host, None);
+                                bv.unpeek_curtain(&full_css);
+                            }
+                        }
+                    }
+                }),
+                on_rules_changed: Rc::new({
+                    let w = self.clone();
+                    move |host| {
+                        w.refresh_curtain_css_for_host(&host);
+                    }
+                }),
+                on_close: Rc::new({
+                    let w = self.clone();
+                    move || w.close_side_panel()
+                }),
+            },
+        );
+        *self.inner.curtain_panel.borrow_mut() = Some(curtain_panel);
     }
 
     fn toggle_side_panel(&self, kind: SidePanelKind) {
@@ -997,6 +1210,9 @@ impl BrowserWindow {
             p.set_panel_visible(false);
         }
         if let Some(ref p) = *self.inner.bookmarks_panel.borrow() {
+            p.set_panel_visible(false);
+        }
+        if let Some(ref p) = *self.inner.curtain_panel.borrow() {
             p.set_panel_visible(false);
         }
 
@@ -1021,6 +1237,17 @@ impl BrowserWindow {
                 if let Some(ref p) = *self.inner.downloads_panel.borrow() {
                     self.inner.side_split.set_sidebar(Some(p.widget()));
                     p.refresh();
+                }
+            }
+            SidePanelKind::Curtain => {
+                let current_url = self
+                    .active_browser_view()
+                    .map(|bv| bv.current_url())
+                    .unwrap_or_default();
+                if let Some(ref p) = *self.inner.curtain_panel.borrow() {
+                    p.set_current_url(&current_url);
+                    self.inner.side_split.set_sidebar(Some(p.widget()));
+                    p.set_panel_visible(true);
                 }
             }
         }
@@ -1463,10 +1690,21 @@ impl BrowserWindow {
             self.set_fullscreen(false);
             return;
         }
+        if let Some(pop) = self.inner.site_card_popover.borrow_mut().take() {
+            pop.popdown();
+            pop.unparent();
+            return;
+        }
         if let Some(pop) = self.inner.bookmark_popover.borrow_mut().take() {
             pop.popdown();
             pop.unparent();
             return;
+        }
+        if let Some(bv) = self.active_browser_view() {
+            if bv.is_curtain_picking() {
+                bv.set_curtain_picking(false);
+                return;
+            }
         }
         if self.inner.side_split.shows_sidebar() {
             self.close_side_panel();
@@ -1528,8 +1766,13 @@ impl BrowserWindow {
 
     /// Cierra limpiamente todos los `cef::Browser` activos de esta ventana (p. ej. al salir).
     pub fn close_all_browsers(&self) {
+        self.hide_toast();
         self.inner.address_bar.cleanup();
         self.inner.sidebar_tabs.cleanup();
+        if let Some(pop) = self.inner.site_card_popover.borrow_mut().take() {
+            pop.popdown();
+            pop.unparent();
+        }
         if let Some(pop) = self.inner.bookmark_popover.borrow_mut().take() {
             pop.popdown();
             pop.unparent();
@@ -1693,6 +1936,8 @@ impl BrowserWindow {
         let bv = BrowserView::new(
             self.inner.request_context.clone(),
             self.inner.settings.clone(),
+            self.inner.stores.shield.clone(),
+            self.inner.stores.curtain.clone(),
             url,
             is_dark,
         )?;
@@ -1802,6 +2047,94 @@ impl BrowserWindow {
                 );
             }));
         }
+        {
+            let w = self.clone();
+            let bv_ref = bv.clone();
+            cbs.on_curtain_pick = Some(Box::new(move |snapshot| {
+                let url = bv_ref.current_url();
+                let Some(host) = CurtainManager::host_for_url(&url) else {
+                    return;
+                };
+                if w.inner
+                    .stores
+                    .curtain
+                    .hide_from_snapshot(&host, &snapshot)
+                    .is_some()
+                {
+                    w.refresh_curtain_css_for_host(&host);
+                    w.show_toast("Elemento ocultado · Esc para salir", None);
+                }
+            }));
+        }
+        {
+            let w = self.clone();
+            cbs.on_curtain_picking_changed = Some(Box::new(move |active| {
+                if w.selected_tab_id() != Some(tab_id) {
+                    return;
+                }
+                if active {
+                    w.show_toast(
+                        "Haz clic en un elemento para ocultarlo · Esc para salir",
+                        None,
+                    );
+                } else {
+                    w.hide_toast();
+                }
+            }));
+        }
+        {
+            let w = self.clone();
+            let bv_ref = bv.clone();
+            cbs.on_reader_extracted = Some(Box::new(move |ok, reason, article_opt| {
+                if !ok {
+                    if reason.as_deref() != Some("already_reader") {
+                        w.show_toast(
+                            "Esta página no parece un artículo para el modo lectura",
+                            Some(3000),
+                        );
+                    }
+                    return;
+                }
+                let Some(article) = article_opt else {
+                    w.show_toast(
+                        "Esta página no parece un artículo para el modo lectura",
+                        Some(3000),
+                    );
+                    return;
+                };
+                if !article.is_readable() {
+                    w.show_toast(
+                        "Esta página no parece un artículo para el modo lectura",
+                        Some(3000),
+                    );
+                    return;
+                }
+                let orig_url = if article.url.is_empty() {
+                    bv_ref.current_url()
+                } else {
+                    article.url.clone()
+                };
+                let opts = w
+                    .inner
+                    .reader_toolbar
+                    .borrow()
+                    .as_ref()
+                    .map(ReaderToolbar::options)
+                    .unwrap_or_default();
+                let html = render_reader_document(&article, opts);
+                bv_ref.enter_reader_html(&orig_url, &html);
+            }));
+        }
+        {
+            let w = self.clone();
+            cbs.on_reader_state_changed = Some(Box::new(move |active| {
+                if w.selected_tab_id() == Some(tab_id) {
+                    if let Some(ref bar) = *w.inner.reader_toolbar.borrow() {
+                        bar.set_visible(active);
+                    }
+                }
+            }));
+        }
 
         bv.set_callbacks(cbs);
         Ok(bv)
@@ -1849,6 +2182,9 @@ impl BrowserWindow {
         }
         if is_selected {
             self.inner.address_bar.set_committed_url(&new_url);
+            if let Some(ref p) = *self.inner.curtain_panel.borrow() {
+                p.set_current_url(&new_url);
+            }
         }
         self.sync_sidebar();
         self.notify_session_dirty();
@@ -1974,6 +2310,23 @@ impl BrowserWindow {
         let (url, title, loading, progress) = info;
         self.inner.address_bar.set_committed_url(&url);
         self.update_window_title(&title);
+        if let Some(ref p) = *self.inner.curtain_panel.borrow() {
+            p.set_current_url(&url);
+        }
+        let reader_active = self
+            .active_browser_view()
+            .map(|bv| bv.is_reader_active())
+            .unwrap_or(false);
+        if let Some(ref bar) = *self.inner.reader_toolbar.borrow() {
+            bar.set_visible(reader_active);
+        }
+        let picking_active = self
+            .active_browser_view()
+            .map(|bv| bv.is_curtain_picking())
+            .unwrap_or(false);
+        if !picking_active {
+            self.hide_toast();
+        }
 
         if loading && progress < 1.0 {
             self.inner.progress_bar.set_fraction(progress.max(0.06));
@@ -2235,6 +2588,10 @@ impl BrowserWindow {
         self.inner.tab_menu.append_section(None, &sec_pin);
 
         let sec2 = Menu::new();
+        sec2.append("Modo lectura", Some("tab.toggle-reader"));
+        sec2.append("Ocultar elemento (Curtain)", Some("tab.curtain-pick"));
+        sec2.append("Elementos ocultos…", Some("tab.toggle-curtain"));
+        sec2.append("Información del sitio y Shield…", Some("tab.site-info"));
         sec2.append("Mover a ventana nueva", Some("tab.move-to-new-window"));
         self.inner.tab_menu.append_section(None, &sec2);
 
@@ -2365,6 +2722,54 @@ impl BrowserWindow {
         {
             let w = self.clone();
             add(
+                "toggle-reader",
+                Box::new(move || {
+                    if let Some(id) = w.inner.menu_target_tab.get() {
+                        w.select_tab_by_id(id);
+                        w.toggle_reader_mode();
+                    }
+                }),
+            );
+        }
+        {
+            let w = self.clone();
+            add(
+                "curtain-pick",
+                Box::new(move || {
+                    if let Some(id) = w.inner.menu_target_tab.get() {
+                        w.select_tab_by_id(id);
+                        w.toggle_curtain_picker();
+                    }
+                }),
+            );
+        }
+        {
+            let w = self.clone();
+            add(
+                "toggle-curtain",
+                Box::new(move || {
+                    if let Some(id) = w.inner.menu_target_tab.get() {
+                        w.select_tab_by_id(id);
+                        w.toggle_curtain_panel();
+                    }
+                }),
+            );
+        }
+        {
+            let w = self.clone();
+            add(
+                "site-info",
+                Box::new(move || {
+                    if let Some(id) = w.inner.menu_target_tab.get() {
+                        w.select_tab_by_id(id);
+                        w.open_site_card_popover();
+                    }
+                }),
+            );
+        }
+        {
+            let w = self.clone();
+            add(
                 "move-to-new-window",
                 Box::new(move || {
                     if let Some(id) = w.inner.menu_target_tab.get() {
@@ -2464,6 +2869,9 @@ impl BrowserWindow {
                         p.set_panel_visible(false);
                     }
                     if let Some(ref p) = *w.inner.bookmarks_panel.borrow() {
+                        p.set_panel_visible(false);
+                    }
+                    if let Some(ref p) = *w.inner.curtain_panel.borrow() {
                         p.set_panel_visible(false);
                     }
                 }
