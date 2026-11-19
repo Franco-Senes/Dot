@@ -24,7 +24,7 @@ use gnome_platform::gtk::{
 use percent_encoding::{percent_decode_str, utf8_percent_encode, NON_ALPHANUMERIC};
 use search_core::address::{is_same_site, sanitize_url_for_ui, strip_click_ids};
 use std::cell::{Cell, RefCell};
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::io::Read;
 use std::rc::Rc;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -50,6 +50,39 @@ const TLS_OVERRIDE_HOST: &str = "search-tls-override.invalid";
 
 pub type LoadingStateCallback = Box<dyn Fn(bool, bool, bool)>;
 pub type PaintFrameCallback = Box<dyn Fn(u64, i32, i32)>;
+
+/// Prefijo del puente IPC autenticado JS→Rust (PORTING.md §2.2).
+const IPC_PREFIX: &str = "__search_ipc_";
+/// Tamaño máximo aceptado de un mensaje IPC (protege frente a páginas que inunden la consola).
+const IPC_MAX_LEN: usize = 64 * 1024;
+/// Script mínimo de Vault inyectado en el marco principal e iframes del mismo origin.
+const VAULT_JS: &str = include_str!("../resources/vault.js");
+/// Marcas de token de Vault vivas por vista (se podan al superar este número).
+const VAULT_MAX_FRAMES: usize = 64;
+
+/// Marco autenticado al que se entregó `vault.js` con un token propio. El origin se fija al
+/// inyectar y se revalida contra la URL actual del marco de CEF en cada mensaje.
+#[derive(Clone)]
+struct VaultFrameToken {
+    frame_id: String,
+    origin: String,
+}
+
+/// Mensaje de `vault.js` ya autenticado: el origin lo dan las URLs de CEF, nunca el JavaScript.
+pub struct VaultFrameMessage {
+    pub frame_id: String,
+    pub frame_url: String,
+    pub page_url: String,
+    pub is_main: bool,
+    /// JSON tal cual lo envió la página (puede contener una contraseña: se pone a cero al soltarlo).
+    pub payload: zeroize::Zeroizing<String>,
+}
+
+/// Eventos de la vista que interesan a Vault.
+pub enum VaultEvent {
+    Message(VaultFrameMessage),
+    MainFrameLoaded,
+}
 
 /// Instantánea segura de `CefDownloadHandler::on_before_download`.
 pub struct DownloadBeforeEvent {
@@ -94,6 +127,7 @@ pub struct BrowserCallbacks {
     pub on_non_empty_paint: Option<PaintFrameCallback>,
     pub on_before_download: Option<Box<dyn Fn(DownloadBeforeEvent)>>,
     pub on_download_updated: Option<Box<dyn Fn(DownloadUpdateEvent)>>,
+    pub on_vault_event: Option<Box<dyn Fn(VaultEvent)>>,
 }
 
 struct SharedState {
@@ -125,6 +159,8 @@ struct SharedState {
     last_load_was_error: Cell<bool>,
     counted_active: Cell<bool>,
     callbacks: RefCell<BrowserCallbacks>,
+    vault_enabled: Cell<bool>,
+    vault_frames: RefCell<HashMap<String, VaultFrameToken>>,
 }
 
 impl Drop for SharedState {
@@ -213,6 +249,8 @@ impl BrowserView {
             last_load_was_error: Cell::new(false),
             counted_active: Cell::new(false),
             callbacks: RefCell::new(BrowserCallbacks::default()),
+            vault_enabled: Cell::new(false),
+            vault_frames: RefCell::new(HashMap::new()),
         });
 
         let window_info = WindowInfo {
@@ -496,6 +534,61 @@ impl BrowserView {
 
     fn browser(&self) -> Option<Browser> {
         self.shared.browser.borrow().clone()
+    }
+
+    /// Activa la inyección de `vault.js` (solo si Vault está disponible).
+    pub fn set_vault_enabled(&self, enabled: bool) {
+        self.shared.vault_enabled.set(enabled);
+        if !enabled {
+            self.shared.vault_frames.borrow_mut().clear();
+        }
+    }
+
+    /// URLs actuales `(página, marco)` según CEF para un marco autenticado por Vault.
+    pub fn vault_frame_urls(&self, frame_id: &str) -> Option<(String, String)> {
+        let browser = self.browser()?;
+        let frame = browser.frame_by_identifier(Some(&CefString::from(frame_id)))?;
+        let frame_url = CefString::from(&frame.url()).to_string();
+        let page_url = browser
+            .main_frame()
+            .map(|f| CefString::from(&f.url()).to_string())
+            .unwrap_or_default();
+        Some((page_url, frame_url))
+    }
+
+    /// Rellena usuario y contraseña en el marco `frame_id` solo si su origin actual (según CEF)
+    /// sigue siendo `expected_origin`. Devuelve `false` si el marco cambió o desapareció.
+    pub fn vault_fill(
+        &self,
+        frame_id: &str,
+        expected_origin: &str,
+        username: &str,
+        password: &str,
+    ) -> bool {
+        let Some(browser) = self.browser() else {
+            return false;
+        };
+        let Some(frame) = browser.frame_by_identifier(Some(&CefString::from(frame_id))) else {
+            return false;
+        };
+        let frame_url = CefString::from(&frame.url()).to_string();
+        if url_origin(&frame_url).as_deref() != Some(expected_origin) {
+            return false;
+        }
+        let (Ok(user_lit), Ok(pass_lit)) = (
+            serde_json::to_string(username),
+            serde_json::to_string(password).map(zeroize::Zeroizing::new),
+        ) else {
+            return false;
+        };
+        let js = zeroize::Zeroizing::new(format!(
+            "(function(){{try{{var v=window.__searchVault;if(v)v.fill({user_lit},{});}}catch(e){{}}}})();",
+            pass_lit.as_str()
+        ));
+        let cef_js = CefString::from(js.as_str());
+        let src = CefString::from("search://vault");
+        frame.execute_java_script(Some(&cef_js), Some(&src), 1);
+        true
     }
 
     fn host(&self) -> Option<BrowserHost> {
@@ -1013,7 +1106,7 @@ wrap_display_handler! {
 
         fn on_console_message(
             &self,
-            _browser: Option<&mut Browser>,
+            browser: Option<&mut Browser>,
             _level: LogSeverity,
             message: Option<&CefString>,
             _source: Option<&CefString>,
@@ -1022,6 +1115,13 @@ wrap_display_handler! {
             let Some(msg) = message.map(CefString::to_string) else {
                 return 0;
             };
+            // Puente IPC autenticado (Vault): se suprime siempre del log, válido o no, porque
+            // puede transportar una contraseña. El contenido se pone a cero al terminar.
+            if msg.starts_with(IPC_PREFIX) {
+                let msg = zeroize::Zeroizing::new(msg);
+                self.shared.route_vault_ipc(browser, &msg[IPC_PREFIX.len()..]);
+                return 1;
+            }
             let prefix = format!("__search_audio_{}:", self.shared.audio_nonce);
             if let Some(flag) = msg.strip_prefix(&prefix) {
                 let playing = flag.trim() == "1";
@@ -1141,6 +1241,7 @@ wrap_load_handler! {
             let Some(frame) = frame else {
                 return;
             };
+            self.shared.inject_vault(frame);
             if frame.is_main() == 0 {
                 return;
             }
@@ -1155,6 +1256,9 @@ wrap_load_handler! {
                 let cef_js = CefString::from(audio_js.as_str());
                 let src = CefString::from("search://audio");
                 frame.execute_java_script(Some(&cef_js), Some(&src), 1);
+            }
+            if let Some(ref cb) = self.shared.callbacks.borrow().on_vault_event {
+                cb(VaultEvent::MainFrameLoaded);
             }
             if let Some(ref cb) = self.shared.callbacks.borrow().on_load_finished {
                 cb(url, http_status_code);
@@ -1836,6 +1940,112 @@ fn build_tls_warning_html(
 </body>
 </html>"#
     )
+}
+
+/// Origin serializado (`esquema://host[:puerto]`) de una URL http(s) de CEF.
+fn url_origin(raw: &str) -> Option<String> {
+    search_core::vault::Origin::parse(raw)
+        .ok()
+        .map(|o| o.to_string())
+}
+
+impl SharedState {
+    /// Inyecta `vault.js` en el marco principal o en un iframe del mismo origin que la página,
+    /// con un token aleatorio de 128 bits ligado a ese marco y a su origin.
+    fn inject_vault(&self, frame: &Frame) {
+        if !self.vault_enabled.get() {
+            return;
+        }
+        let frame_url = CefString::from(&frame.url()).to_string();
+        let Some(origin) = url_origin(&frame_url) else {
+            return;
+        };
+        let browser = frame.browser();
+        if frame.is_main() == 0 {
+            let page_origin = browser
+                .as_ref()
+                .and_then(|b| b.main_frame())
+                .and_then(|f| url_origin(&CefString::from(&f.url()).to_string()));
+            if page_origin.as_deref() != Some(origin.as_str()) {
+                return;
+            }
+        }
+        let frame_id = CefString::from(&frame.identifier()).to_string();
+        if frame_id.is_empty() {
+            return;
+        }
+        let token = {
+            let mut frames = self.vault_frames.borrow_mut();
+            let reuse = frames
+                .iter()
+                .find(|(_, v)| v.frame_id == frame_id && v.origin == origin)
+                .map(|(k, _)| k.clone());
+            match reuse {
+                Some(t) => t,
+                None => {
+                    frames.retain(|_, v| v.frame_id != frame_id);
+                    if frames.len() >= VAULT_MAX_FRAMES {
+                        if let Some(b) = browser.as_ref() {
+                            frames.retain(|_, v| {
+                                b.frame_by_identifier(Some(&CefString::from(v.frame_id.as_str())))
+                                    .is_some()
+                            });
+                        }
+                        if frames.len() >= VAULT_MAX_FRAMES {
+                            frames.clear();
+                        }
+                    }
+                    let t = generate_hex_nonce_128();
+                    frames.insert(t.clone(), VaultFrameToken { frame_id, origin });
+                    t
+                }
+            }
+        };
+        let js = VAULT_JS.replace("__SEARCH_VAULT_TOKEN__", &token);
+        let cef_js = CefString::from(js.as_str());
+        let src = CefString::from("search://vault");
+        frame.execute_java_script(Some(&cef_js), Some(&src), 1);
+    }
+
+    /// Autentica un mensaje `__search_ipc_<token>:<json>` y lo entrega a Vault con las URLs que
+    /// dice CEF. Nada de su contenido se registra.
+    fn route_vault_ipc(&self, browser: Option<&mut Browser>, rest: &str) {
+        let Some((token, json)) = rest.split_once(':') else {
+            return;
+        };
+        if json.len() > IPC_MAX_LEN {
+            return;
+        }
+        let Some(entry) = self.vault_frames.borrow().get(token).cloned() else {
+            return;
+        };
+        let Some(browser) = browser else {
+            return;
+        };
+        let Some(frame) =
+            browser.frame_by_identifier(Some(&CefString::from(entry.frame_id.as_str())))
+        else {
+            return;
+        };
+        let frame_url = CefString::from(&frame.url()).to_string();
+        if url_origin(&frame_url).as_deref() != Some(entry.origin.as_str()) {
+            return;
+        }
+        let page_url = browser
+            .main_frame()
+            .map(|f| CefString::from(&f.url()).to_string())
+            .unwrap_or_default();
+        let message = VaultFrameMessage {
+            frame_id: entry.frame_id,
+            frame_url,
+            page_url,
+            is_main: frame.is_main() != 0,
+            payload: zeroize::Zeroizing::new(json.to_owned()),
+        };
+        if let Some(ref cb) = self.callbacks.borrow().on_vault_event {
+            cb(VaultEvent::Message(message));
+        }
+    }
 }
 
 fn generate_hex_nonce_128() -> String {

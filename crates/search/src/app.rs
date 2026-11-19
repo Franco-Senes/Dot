@@ -12,6 +12,7 @@ use crate::history_ui::HistoryManager;
 use crate::settings::SettingsStore;
 use crate::style;
 use crate::tab_switcher::{self, SwitcherTabItem, TabSwitcherCallbacks};
+use crate::vault::VaultService;
 use crate::window::{BrowserWindow, SharedDataStores, WindowCallbacks};
 use anyhow::{anyhow, Result};
 use gnome_platform::adw::Application;
@@ -72,6 +73,7 @@ impl AppController {
             history: HistoryManager::load(paths.history_file()),
             bookmarks: BookmarksManager::load(paths.bookmarks_file()),
             downloads: DownloadManager::load(paths.downloads_file(), settings.clone()),
+            vault: VaultService::start(paths.clone()),
         };
         Self {
             inner: Rc::new(AppControllerInner {

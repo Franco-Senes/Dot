@@ -19,6 +19,8 @@ use crate::history_ui::{HistoryManager, HistoryPanel};
 use crate::settings::SettingsStore;
 use crate::sidebar_tabs::{SidebarCallbacks, SidebarTabItem, SidebarTabs};
 use crate::tab_switcher::SwitcherTabItem;
+use crate::vault::VaultService;
+use crate::vault_ui::{self, VaultWindowUi};
 use anyhow::Result;
 use cef::RequestContext;
 use gnome_platform::adw::{
@@ -48,6 +50,7 @@ pub struct SharedDataStores {
     pub history: HistoryManager,
     pub bookmarks: BookmarksManager,
     pub downloads: DownloadManager,
+    pub vault: VaultService,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -158,6 +161,7 @@ struct WindowState {
     bookmarks_panel: RefCell<Option<BookmarksPanel>>,
     downloads_panel: RefCell<Option<DownloadsPanel>>,
     bookmark_popover: RefCell<Option<Popover>>,
+    vault_ui: VaultWindowUi,
     tab_menu: Menu,
     tab_close_action: SimpleAction,
     active_popover: RefCell<Option<PopoverMenu>>,
@@ -268,6 +272,11 @@ impl BrowserWindow {
         stage_overlay.add_overlay(&progress_bar);
         stage_overlay.set_measure_overlay(&progress_bar, false);
 
+        // Barra discreta de Vault «¿Guardar la contraseña…?» flotando sobre la página.
+        let vault_ui = VaultWindowUi::new();
+        stage_overlay.add_overlay(vault_ui.offer_widget());
+        stage_overlay.set_measure_overlay(vault_ui.offer_widget(), false);
+
         let content_box = BoxWidget::new(Orientation::Vertical, 0);
         content_box.set_hexpand(true);
         content_box.set_vexpand(true);
@@ -319,6 +328,7 @@ impl BrowserWindow {
                 bookmarks_panel: RefCell::new(None),
                 downloads_panel: RefCell::new(None),
                 bookmark_popover: RefCell::new(None),
+                vault_ui,
                 tab_menu,
                 tab_close_action,
                 active_popover: RefCell::new(None),
@@ -637,6 +647,10 @@ impl BrowserWindow {
 
     pub fn toggle_downloads_panel(&self) {
         self.toggle_side_panel(SidePanelKind::Downloads);
+    }
+
+    pub fn open_passwords_panel(&self) {
+        vault_ui::present_passwords(&self.inner.window, &self.inner.stores.vault);
     }
 
     pub fn close_side_panel(&self) {
@@ -1086,6 +1100,9 @@ impl BrowserWindow {
             pop.unparent();
             return;
         }
+        if self.inner.vault_ui.dismiss() {
+            return;
+        }
         if self.inner.side_split.shows_sidebar() {
             self.close_side_panel();
             return;
@@ -1341,6 +1358,14 @@ impl BrowserWindow {
             }));
         }
 
+        crate::vault::attach(
+            &bv,
+            &mut cbs,
+            tab_id,
+            &self.inner.stores.vault,
+            &self.inner.vault_ui,
+            &self.inner.settings,
+        );
         bv.set_callbacks(cbs);
         Ok(bv)
     }
@@ -1491,6 +1516,7 @@ impl BrowserWindow {
 
         // Despertar de forma diferida si esta pestaña seguía dormida.
         let _ = self.ensure_tab_awake(active_id);
+        self.inner.vault_ui.on_tab_selected(active_id);
 
         let info = {
             let mut tabs = self.inner.tabs.borrow_mut();
