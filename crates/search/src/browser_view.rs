@@ -230,6 +230,7 @@ struct SharedState {
     pending_evals: RefCell<HashMap<u64, PendingEvalCallback>>,
     pending_find: RefCell<Option<PendingFindCallback>>,
     last_frame: RefCell<Option<(MemoryTexture, i32, i32)>>,
+    force_dark: Cell<bool>,
 }
 
 impl Drop for SharedState {
@@ -334,6 +335,7 @@ impl BrowserView {
             pending_evals: RefCell::new(HashMap::new()),
             pending_find: RefCell::new(None),
             last_frame: RefCell::new(None),
+            force_dark: Cell::new(false),
         });
 
         let window_info = WindowInfo {
@@ -773,6 +775,43 @@ impl BrowserView {
         next
     }
 
+    pub fn is_force_dark(&self) -> bool {
+        self.shared.force_dark.get()
+    }
+
+    pub fn set_force_dark(&self, enabled: bool) {
+        self.shared.force_dark.set(enabled);
+        if let Some(frame) = self.main_frame() {
+            apply_force_dark_to_frame(&frame, enabled);
+        }
+    }
+
+    pub fn toggle_force_dark(&self) -> bool {
+        let next = !self.is_force_dark();
+        self.set_force_dark(next);
+        next
+    }
+
+    /// Exporta la página actual a PDF usando el motor de impresión de Chromium/CEF.
+    pub fn print_to_pdf(&self, path: &std::path::Path, on_done: impl FnOnce(bool) + 'static) {
+        let Some(path_str) = path.to_str() else {
+            on_done(false);
+            return;
+        };
+        let Some(host) = self.host() else {
+            on_done(false);
+            return;
+        };
+        let cef_path = CefString::from(path_str);
+        let settings = PdfPrintSettings {
+            print_background: 1,
+            prefer_css_page_size: 1,
+            ..Default::default()
+        };
+        let mut cb = ExportPdfCallback::new(Rc::new(RefCell::new(Some(Box::new(on_done)))));
+        host.print_to_pdf(Some(&cef_path), Some(&settings), Some(&mut cb));
+    }
+
     pub fn execute_javascript(&self, script: &str) {
         if let Some(frame) = self.main_frame() {
             let js = CefString::from(script);
@@ -790,6 +829,7 @@ impl BrowserView {
         *self.shared.callbacks.borrow_mut() = BrowserCallbacks::default();
         self.shared.pending_evals.borrow_mut().clear();
         self.shared.vault_frames.borrow_mut().clear();
+        self.shared.last_frame.borrow_mut().take();
         if self.shared.counted_active.replace(false) {
             ACTIVE_BROWSER_COUNT.fetch_sub(1, Ordering::SeqCst);
         }
@@ -1419,6 +1459,45 @@ wrap_download_image_callback! {
     }
 }
 
+type PdfDoneCb = Rc<RefCell<Option<Box<dyn FnOnce(bool)>>>>;
+
+wrap_pdf_print_callback! {
+    struct ExportPdfCallback {
+        on_done: PdfDoneCb,
+    }
+
+    impl PdfPrintCallback {
+        fn on_pdf_print_finished(
+            &self,
+            _path: Option<&CefString>,
+            ok: ::std::os::raw::c_int,
+        ) {
+            let success = ok != 0;
+            if let Some(cb) = self.on_done.borrow_mut().take() {
+                cb(success);
+            }
+        }
+    }
+}
+
+fn apply_force_dark_to_frame(frame: &Frame, enabled: bool) {
+    let js = if enabled {
+        r#"(()=>{
+            const id='__search_force_dark__';
+            if(document.getElementById(id))return;
+            const st=document.createElement('style');
+            st.id=id;
+            st.textContent=':root{color-scheme:dark !important;} html{filter:invert(0.92) hue-rotate(180deg) !important;background-color:#121212 !important;} img,video,picture,canvas,svg,[style*="background-image"]{filter:invert(1) hue-rotate(180deg) !important;}';
+            (document.head||document.documentElement).appendChild(st);
+        })();"#
+    } else {
+        r#"(()=>{const el=document.getElementById('__search_force_dark__');if(el)el.remove();})();"#
+    };
+    let cef_js = CefString::from(js);
+    let src = CefString::from("search://force-dark");
+    frame.execute_java_script(Some(&cef_js), Some(&src), 1);
+}
+
 wrap_display_handler! {
     struct SearchDisplayHandler {
         shared: Rc<SharedState>,
@@ -1742,6 +1821,10 @@ wrap_load_handler! {
                 let cef_js = CefString::from(audio_js.as_str());
                 let src = CefString::from("search://audio");
                 frame.execute_java_script(Some(&cef_js), Some(&src), 1);
+
+                if self.shared.force_dark.get() {
+                    apply_force_dark_to_frame(frame, true);
+                }
 
                 // Respaldo automático `/favicon.ico` para sitios que no declaran `<link rel="icon">`.
                 if self.shared.favicon_url.borrow().is_none() {

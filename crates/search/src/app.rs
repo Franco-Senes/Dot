@@ -144,6 +144,9 @@ impl AppController {
                     };
                     let _ =
                         target_win.insert_tab_from_spec(spec, Some(closed.position), true, false);
+                    target_win.show_toast("Pestaña reabierta", Some(1800));
+                } else {
+                    target_win.show_toast("No hay pestañas cerradas recientes", Some(1800));
                 }
             }));
         }
