@@ -9,6 +9,46 @@ use crate::session::{SessionSplit, SplitAxis};
 /// Número máximo de paneles simultáneos en un split (igual que `TabSplit.most` en `Split.swift`).
 pub const MAX_SPLIT_PANES: usize = 4;
 
+/// Presets de proporción para Split View de 2 paneles (`50/50`, `65/35`, `35/65`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SplitRatioPreset {
+    Even,
+    LeftWide,
+    RightWide,
+}
+
+impl SplitRatioPreset {
+    pub const ALL: [Self; 3] = [Self::Even, Self::LeftWide, Self::RightWide];
+
+    /// Fracción del panel izquierdo asociada al preset.
+    pub const fn fraction(self) -> f64 {
+        match self {
+            Self::Even => 0.50,
+            Self::LeftWide => 0.65,
+            Self::RightWide => 0.35,
+        }
+    }
+
+    /// Etiqueta compacta para la interfaz (`50/50`, `65/35`, `35/65`).
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::Even => "50/50",
+            Self::LeftWide => "65/35",
+            Self::RightWide => "35/65",
+        }
+    }
+
+    /// Devuelve el preset más cercano si `fraction` está dentro de `tolerance`.
+    pub fn from_fraction(fraction: f64, tolerance: f64) -> Option<Self> {
+        if !fraction.is_finite() {
+            return None;
+        }
+        Self::ALL
+            .into_iter()
+            .find(|preset| (preset.fraction() - fraction).abs() <= tolerance)
+    }
+}
+
 /// Representa un grupo de pestañas mostradas simultáneamente en Split View.
 #[derive(Debug, Clone, PartialEq)]
 pub struct TabSplit {
@@ -20,6 +60,8 @@ pub struct TabSplit {
     pub sizes: Vec<f64>,
     /// Última pestaña enfocada dentro de este split.
     pub focused: Option<u64>,
+    /// Estado de sincronización de desplazamiento entre paneles.
+    pub sync_scroll: bool,
 }
 
 impl TabSplit {
@@ -32,6 +74,7 @@ impl TabSplit {
             axis: SplitAxis::Horizontal,
             sizes,
             focused: Some(right),
+            sync_scroll: false,
         }
     }
 
@@ -59,6 +102,7 @@ impl TabSplit {
             axis,
             sizes: clean_sizes,
             focused,
+            sync_scroll: false,
         })
     }
 
@@ -141,9 +185,33 @@ impl TabSplit {
         }
     }
 
+    /// Aplica uno de los presets (`50/50`, `65/35`, `35/65`) en un split de 2 paneles.
+    pub fn apply_ratio_preset(&mut self, preset: SplitRatioPreset) {
+        self.set_primary_fraction(preset.fraction());
+    }
+
+    /// Devuelve el preset activo si la proporción actual coincide dentro de `0.025`.
+    pub fn active_ratio_preset(&self) -> Option<SplitRatioPreset> {
+        if self.tabs.len() != 2 {
+            return None;
+        }
+        SplitRatioPreset::from_fraction(self.primary_fraction(), 0.025)
+    }
+
     /// Restablece todos los paneles a tamaños iguales (50/50 para 2 paneles).
     pub fn reset_even(&mut self) {
         self.sizes = Self::even_sizes(self.tabs.len());
+    }
+
+    /// Activa o desactiva la sincronización de desplazamiento entre paneles.
+    pub fn set_sync_scroll(&mut self, enabled: bool) {
+        self.sync_scroll = enabled;
+    }
+
+    /// Alterna el estado de sincronización de desplazamiento y devuelve el nuevo valor.
+    pub fn toggle_sync_scroll(&mut self) -> bool {
+        self.sync_scroll = !self.sync_scroll;
+        self.sync_scroll
     }
 
     pub fn is_full(&self) -> bool {
@@ -180,6 +248,11 @@ impl TabSplit {
     pub fn swap(&mut self) {
         self.tabs.reverse();
         self.sizes.reverse();
+    }
+
+    /// Alias semántico de `swap` para intercambiar el panel izquierdo y derecho.
+    pub fn swap_panes(&mut self) {
+        self.swap();
     }
 
     /// Inserta una pestaña junto a `neighbour` (después por defecto, o antes si `before = true`).
@@ -347,5 +420,34 @@ mod tests {
         assert!(
             TabSplit::from_session_split(8, &invalid, |idx| (idx == 0).then_some(10)).is_none()
         );
+    }
+
+    #[test]
+    fn ratio_presets_and_sync_scroll_behave_consistently() {
+        let mut split = TabSplit::new_pair(9, 1, 2, 0.5);
+        assert_eq!(split.active_ratio_preset(), Some(SplitRatioPreset::Even));
+        assert!(!split.sync_scroll);
+
+        split.apply_ratio_preset(SplitRatioPreset::LeftWide);
+        assert!((split.primary_fraction() - 0.65).abs() < 1e-6);
+        assert_eq!(
+            split.active_ratio_preset(),
+            Some(SplitRatioPreset::LeftWide)
+        );
+        assert_eq!(SplitRatioPreset::LeftWide.label(), "65/35");
+
+        split.swap_panes();
+        assert_eq!(split.tabs, vec![2, 1]);
+        assert!((split.primary_fraction() - 0.35).abs() < 1e-6);
+        assert_eq!(
+            split.active_ratio_preset(),
+            Some(SplitRatioPreset::RightWide)
+        );
+        assert_eq!(SplitRatioPreset::RightWide.label(), "35/65");
+
+        assert!(split.toggle_sync_scroll());
+        assert!(split.sync_scroll);
+        split.set_sync_scroll(false);
+        assert!(!split.sync_scroll);
     }
 }
