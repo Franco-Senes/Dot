@@ -1,10 +1,11 @@
 //! Barra discreta de búsqueda dentro de la página (`Ctrl+F`, `Ctrl+G`, `Ctrl+Shift+G`, `Escape`)
 //! conectada a `BrowserHost::find` y `CefFindHandler` (`Find.swift` / `PageFind.swift`).
 
+use crate::icons::{self, IconId};
 use gnome_platform::gdk::{self, ModifierType};
 use gnome_platform::gtk::{
-    Align, AsController, AsEditable, AsWidget, BoxWidget, Button, EventControllerKey, Label,
-    Orientation, Revealer, RevealerTransitionType, SearchEntry,
+    Align, AsController, AsEditable, AsWidget, BoxWidget, EventControllerKey, Label, Orientation,
+    Revealer, RevealerTransitionType, SearchEntry,
 };
 use std::cell::RefCell;
 use std::rc::Rc;
@@ -46,16 +47,13 @@ impl FindBar {
         count_label.add_css_class("search-find-count");
         count_label.set_halign(Align::End);
 
-        let prev_btn = Button::from_icon_name("go-up-symbolic");
-        prev_btn.add_css_class("flat");
+        let prev_btn = icons::icon_button(IconId::ArrowUp, 15);
         prev_btn.set_tooltip_text(Some("Coincidencia anterior (Ctrl+Shift+G)"));
 
-        let next_btn = Button::from_icon_name("go-down-symbolic");
-        next_btn.add_css_class("flat");
+        let next_btn = icons::icon_button(IconId::ArrowDown, 15);
         next_btn.set_tooltip_text(Some("Coincidencia siguiente (Ctrl+G)"));
 
-        let close_btn = Button::from_icon_name("window-close-symbolic");
-        close_btn.add_css_class("flat");
+        let close_btn = icons::icon_button(IconId::Close, 15);
         close_btn.set_tooltip_text(Some("Cerrar búsqueda (Escape)"));
 
         row.append(&entry);
@@ -158,6 +156,10 @@ impl FindBar {
 
     pub fn widget(&self) -> &Revealer {
         &self.revealer
+    }
+
+    pub fn set_motion_duration(&self, ms: u32) {
+        self.revealer.set_transition_duration(ms);
     }
 
     pub fn is_open(&self) -> bool {

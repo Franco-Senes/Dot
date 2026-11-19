@@ -37,6 +37,45 @@ impl ColorLook {
     }
 }
 
+/// Preferencia de animaciones de la interfaz (`smooth`, `reduced`, `instant`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum UiMotion {
+    #[default]
+    Smooth,
+    Reduced,
+    Instant,
+}
+
+impl UiMotion {
+    /// Escala una duración base en milisegundos según la preferencia de movimiento.
+    pub fn duration_ms(self, smooth_ms: u32) -> u32 {
+        match self {
+            Self::Smooth => smooth_ms,
+            Self::Reduced => ((smooth_ms as u64) * 40 / 100).clamp(40, 110) as u32,
+            Self::Instant => 0,
+        }
+    }
+}
+
+/// Estilo de icono en pestañas sin favicon o preferido (`favicons`, `monograms`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum TabGlyph {
+    #[default]
+    Favicon,
+    Monogram,
+}
+
+/// Posición donde se abren las nuevas pestañas (`next` o `end`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum NewTabPosition {
+    #[default]
+    NextToCurrent,
+    AtEnd,
+}
+
 /// Ajustes persistentes del navegador en `$XDG_CONFIG_HOME/search/settings.json`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
@@ -47,6 +86,12 @@ pub struct AppSettings {
     #[serde(rename = "search.custom")]
     pub custom_search_url: String,
 
+    #[serde(rename = "startup.restoreSession")]
+    pub restore_session: bool,
+
+    #[serde(rename = "app.confirmQuit")]
+    pub confirm_quit: bool,
+
     #[serde(rename = "look")]
     pub look: ColorLook,
 
@@ -55,6 +100,45 @@ pub struct AppSettings {
 
     #[serde(rename = "sidebar.width")]
     pub sidebar_width: f64,
+
+    #[serde(rename = "layout.cards")]
+    pub layout_cards: bool,
+
+    #[serde(rename = "tabs.compact")]
+    pub compact_tabs: bool,
+
+    #[serde(rename = "sidebar.roomy")]
+    pub roomy_sidebar: bool,
+
+    #[serde(rename = "tabs.showDomain")]
+    pub tab_show_domain: bool,
+
+    #[serde(rename = "tabs.glyph")]
+    pub tab_glyph: TabGlyph,
+
+    #[serde(rename = "ui.motion")]
+    pub ui_motion: UiMotion,
+
+    #[serde(rename = "tabs.newPosition")]
+    pub new_tab_position: NewTabPosition,
+
+    #[serde(rename = "tabs.pinsGoHome")]
+    pub pins_go_home: bool,
+
+    #[serde(rename = "tabs.protectPinned")]
+    pub protect_pinned: bool,
+
+    #[serde(rename = "tabs.lazyRestore")]
+    pub lazy_restore: bool,
+
+    #[serde(rename = "tabs.closedStackSize")]
+    pub closed_tab_stack_size: usize,
+
+    #[serde(rename = "tabs.showAudioIndicators")]
+    pub show_audio_indicators: bool,
+
+    #[serde(rename = "tabs.openLinksInBackground")]
+    pub open_links_in_background: bool,
 
     #[serde(rename = "downloads.dir")]
     pub downloads_dir: String,
@@ -99,6 +183,15 @@ pub struct AppSettings {
     #[serde(rename = "rendererProcessLimit")]
     pub renderer_process_limit: u32,
 
+    #[serde(rename = "chromium.processPerSite")]
+    pub process_per_site: bool,
+
+    #[serde(rename = "chromium.memorySaver")]
+    pub memory_saver: bool,
+
+    #[serde(rename = "chromium.v8LiteMode")]
+    pub v8_lite_mode: bool,
+
     #[serde(rename = "update.check")]
     pub update_check: bool,
 
@@ -114,9 +207,24 @@ impl Default for AppSettings {
         Self {
             search_engine: SearchEngine::DuckDuckGo,
             custom_search_url: String::new(),
+            restore_session: true,
+            confirm_quit: false,
             look: ColorLook::System,
             vertical_tabs: false,
-            sidebar_width: 220.0,
+            sidebar_width: 240.0,
+            layout_cards: true,
+            compact_tabs: false,
+            roomy_sidebar: false,
+            tab_show_domain: false,
+            tab_glyph: TabGlyph::Favicon,
+            ui_motion: UiMotion::Smooth,
+            new_tab_position: NewTabPosition::NextToCurrent,
+            pins_go_home: true,
+            protect_pinned: true,
+            lazy_restore: true,
+            closed_tab_stack_size: 32,
+            show_audio_indicators: true,
+            open_links_in_background: true,
             downloads_dir: String::new(),
             downloads_ask: false,
             shield_enabled: true,
@@ -131,6 +239,9 @@ impl Default for AppSettings {
             reader_font_size: 18,
             hardware_video_decode: true,
             renderer_process_limit: 6,
+            process_per_site: false,
+            memory_saver: false,
+            v8_lite_mode: false,
             update_check: true,
             bench_enabled: false,
             experimental_extensions: false,
@@ -157,7 +268,10 @@ impl AppSettings {
         ChromiumConfig {
             renderer_process_limit: (self.renderer_process_limit > 0)
                 .then_some(self.renderer_process_limit),
+            process_per_site: self.process_per_site,
+            lite_mode: self.v8_lite_mode,
             hardware_video_decode: self.hardware_video_decode,
+            high_efficiency_mode_state: self.memory_saver.then_some(2),
             headless_software_gl,
             no_sandbox,
             ozone_platform,
@@ -215,12 +329,13 @@ impl AppSettings {
             self.page_zoom = 1.0;
         }
         if !self.sidebar_width.is_finite()
-            || self.sidebar_width < 140.0
-            || self.sidebar_width > 600.0
+            || self.sidebar_width < 180.0
+            || self.sidebar_width > 360.0
         {
-            self.sidebar_width = 220.0;
+            self.sidebar_width = 240.0;
         }
         self.reader_font_size = self.reader_font_size.clamp(12, 36);
+        self.closed_tab_stack_size = self.closed_tab_stack_size.clamp(20, 100);
     }
 }
 

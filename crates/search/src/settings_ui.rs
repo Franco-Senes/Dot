@@ -1,9 +1,9 @@
-//! Ventana minimalista de preferencias (`AdwPreferencesDialog`, `Ctrl+,`) — `Settings.swift`.
-//!
-//! Todos los cambios se persisten atómicamente mediante `SettingsStore` y se propagan
-//! en vivo sin reiniciar (incluida la disposición de pestañas arriba vs barra lateral).
+//! Diálogo compacto heredado de preferencias (`AdwPreferencesDialog`).
+//! Sustituido en Fase 3b como interfaz principal por la pestaña nativa `plasma://settings` (`settings_page.rs`).
+#![allow(dead_code)]
 
 use crate::downloads::default_system_downloads_dir;
+use crate::icons::{self, IconId};
 use crate::settings::SettingsStore;
 use gnome_platform::adw::{
     ActionRow, ApplicationWindow, ComboRow, EntryRow, PreferencesDialog, PreferencesGroup,
@@ -217,8 +217,7 @@ pub fn present_settings_dialog(parent: &ApplicationWindow, settings: &SettingsSt
     }
     dir_actions.append(&choose_btn);
 
-    let reset_dir_btn = Button::from_icon_name("edit-undo-symbolic");
-    reset_dir_btn.add_css_class("flat");
+    let reset_dir_btn = icons::icon_button(IconId::Undo, 15);
     reset_dir_btn.set_tooltip_text(Some("Restablecer a la carpeta XDG de Descargas"));
     {
         let st = settings.clone();

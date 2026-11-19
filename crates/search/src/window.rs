@@ -16,8 +16,12 @@ use crate::downloads::DownloadManager;
 use crate::downloads_ui::DownloadsPanel;
 use crate::find_bar::FindBar;
 use crate::history_ui::{HistoryManager, HistoryPanel};
+use crate::icons::{self, IconId};
 use crate::settings::SettingsStore;
-use crate::sidebar_tabs::{SidebarCallbacks, SidebarTabItem, SidebarTabs};
+use crate::settings_page::SettingsPage;
+use crate::sidebar_tabs::{
+    PinFoldersManager, SidebarCallbacks, SidebarRenderOptions, SidebarTabItem, SidebarTabs,
+};
 use crate::tab_switcher::SwitcherTabItem;
 use anyhow::Result;
 use cef::RequestContext;
@@ -26,15 +30,20 @@ use gnome_platform::adw::{
     TabView, TabViewShortcuts, ToolbarStyle, ToolbarView,
 };
 use gnome_platform::gdk::{Rectangle, Texture};
-use gnome_platform::gio::{Icon, Menu, SimpleAction, SimpleActionGroup};
-use gnome_platform::glib::{self, Bytes};
+use gnome_platform::gio::{Menu, SimpleAction, SimpleActionGroup};
+use gnome_platform::glib;
 use gnome_platform::gtk::{
-    Align, AsWidget, BoxWidget, Label, Orientation, Overlay, PackType, Popover, PopoverMenu,
-    PositionType, ProgressBar, Revealer, RevealerTransitionType,
+    Align, AsWidget, BoxWidget, Label, Orientation, Overflow, Overlay, PackType, Popover,
+    PopoverMenu, PositionType, ProgressBar, Revealer, RevealerTransitionType,
 };
-use search_core::address::{display_at_rest, resolve_address, sanitize_url_for_ui};
+use search_core::address::{
+    canonical_internal_url, display_at_rest, parse_internal_page, resolve_address,
+    sanitize_url_for_ui, InternalPage,
+};
 use search_core::history::{suggest_omnibox, OpenTabInfo};
-use search_core::session::{now_unix_secs, ClosedTab, SessionTab, SessionWindow};
+use search_core::paths::SearchPaths;
+use search_core::session::{now_unix_secs, ClosedTab, PinStyle, SessionTab, SessionWindow};
+use search_core::settings::{NewTabPosition, UiMotion};
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -42,12 +51,14 @@ use std::sync::atomic::{AtomicU64, Ordering};
 static NEXT_WINDOW_ID: AtomicU64 = AtomicU64::new(1);
 static NEXT_TAB_ID: AtomicU64 = AtomicU64::new(1);
 
-/// Almacenes compartidos de datos de navegación (Fase 3) inyectados desde `AppController`.
+/// Almacenes compartidos de datos de navegación inyectados desde `AppController`.
 #[derive(Clone)]
 pub struct SharedDataStores {
+    pub paths: SearchPaths,
     pub history: HistoryManager,
     pub bookmarks: BookmarksManager,
     pub downloads: DownloadManager,
+    pub pin_folders: PinFoldersManager,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -81,6 +92,8 @@ struct TabRecord {
     url: String,
     title: String,
     pin: Option<String>,
+    pin_style: Option<PinStyle>,
+    folder_id: Option<String>,
     home: Option<String>,
     touched: f64,
     loading: bool,
@@ -89,10 +102,39 @@ struct TabRecord {
     muted: bool,
     favicon_texture: Option<Texture>,
     browser: Option<BrowserView>,
+    settings_page: Option<SettingsPage>,
 }
 
 impl TabRecord {
+    fn is_settings_tab(&self) -> bool {
+        matches!(
+            parse_internal_page(&self.url),
+            Some(InternalPage::Settings { .. })
+        )
+    }
+
+    fn effective_pin_style(&self) -> Option<PinStyle> {
+        self.pin.as_ref()?;
+        if self.folder_id.is_some() {
+            return Some(PinStyle::Row);
+        }
+        Some(self.pin_style.unwrap_or(PinStyle::Square))
+    }
+
     fn display_title(&self) -> String {
+        self.display_title_for(false)
+    }
+
+    fn display_title_for(&self, show_domain: bool) -> String {
+        if self.is_settings_tab() {
+            return "Ajustes".to_string();
+        }
+        if show_domain {
+            let rest = display_at_rest(&self.url);
+            if !rest.is_empty() {
+                return rest;
+            }
+        }
         let trimmed = self.title.trim();
         if !trimmed.is_empty() {
             return trimmed.to_string();
@@ -118,6 +160,8 @@ impl TabRecord {
             url: self.url.clone(),
             title: self.title.clone(),
             pin: self.pin.clone(),
+            pin_style: self.effective_pin_style(),
+            folder_id: self.folder_id.clone(),
             name: None,
             home: self.home.clone(),
             group_id: None,
@@ -145,6 +189,7 @@ struct WindowState {
     app: Application,
     window: ApplicationWindow,
     toolbar_view: ToolbarView,
+    main_hbox: BoxWidget,
     address_bar: AddressBar,
     find_bar: FindBar,
     progress_bar: ProgressBar,
@@ -221,10 +266,11 @@ impl BrowserWindow {
         toolbar_view.add_top_bar(&header_bar);
 
         // Modelo único de pestañas (`AdwTabView`) y barra superior (`AdwTabBar`).
+        let dark_now = app.style_manager().is_dark();
         let tab_view = TabView::new();
         tab_view.set_hexpand(true);
         tab_view.set_vexpand(true);
-        tab_view.set_default_icon(&Icon::themed("web-browser-symbolic"));
+        tab_view.set_default_icon(&icons::gicon(IconId::Globe, dark_now));
         // Desactivamos los atajos internos de AdwTabView para usar nuestras acciones `win.*`
         // con comportamiento uniforme (Ctrl+Tab cíclico, Ctrl+1..9, etc.).
         tab_view.set_shortcuts(TabViewShortcuts::NONE);
@@ -237,21 +283,24 @@ impl BrowserWindow {
         tab_bar.set_autohide(false);
         tab_bar.set_expand_tabs(true);
 
+        let initial_motion = settings.with(|s| s.ui_motion);
+
         let top_bar_revealer = Revealer::new();
         top_bar_revealer.set_transition_type(RevealerTransitionType::SlideDown);
-        top_bar_revealer.set_transition_duration(140);
+        top_bar_revealer.set_transition_duration(initial_motion.duration_ms(180));
         top_bar_revealer.set_child(Some(&tab_bar));
         toolbar_view.add_top_bar(&top_bar_revealer);
 
-        // Barra lateral vertical de pestañas enlazada al mismo `AdwTabView`.
+        // Barra lateral vertical de pestañas estilo Arc enlazada al mismo `AdwTabView`.
         let initial_sidebar_width = settings.with(|s| s.sidebar_width.round() as i32);
         let sidebar_tabs = SidebarTabs::new(initial_sidebar_width);
         let sidebar_revealer = Revealer::new();
         sidebar_revealer.set_transition_type(RevealerTransitionType::SlideRight);
-        sidebar_revealer.set_transition_duration(140);
+        sidebar_revealer.set_transition_duration(initial_motion.duration_ms(220));
         sidebar_revealer.set_child(Some(sidebar_tabs.widget()));
 
         let find_bar = FindBar::new();
+        find_bar.set_motion_duration(initial_motion.duration_ms(150));
 
         let progress_bar = ProgressBar::new();
         progress_bar.add_css_class("osd");
@@ -268,17 +317,27 @@ impl BrowserWindow {
         stage_overlay.add_overlay(&progress_bar);
         stage_overlay.set_measure_overlay(&progress_bar, false);
 
-        let content_box = BoxWidget::new(Orientation::Vertical, 0);
-        content_box.set_hexpand(true);
-        content_box.set_vexpand(true);
-        content_box.append(find_bar.widget());
-        content_box.append(&stage_overlay);
+        // Marco de tarjeta redondeado (`layout_cards` estilo Arc / Search) con recorte de esquinas.
+        let stage_card = BoxWidget::new(Orientation::Vertical, 0);
+        stage_card.add_css_class("search-stage-card");
+        stage_card.set_hexpand(true);
+        stage_card.set_vexpand(true);
+        stage_card.set_overflow(Overflow::Hidden);
+        stage_card.append(find_bar.widget());
+        stage_card.append(&stage_overlay);
+
+        let stage_shell = BoxWidget::new(Orientation::Vertical, 0);
+        stage_shell.add_css_class("search-stage-shell");
+        stage_shell.set_hexpand(true);
+        stage_shell.set_vexpand(true);
+        stage_shell.append(&stage_card);
 
         let main_hbox = BoxWidget::new(Orientation::Horizontal, 0);
+        main_hbox.add_css_class("search-main-hbox");
         main_hbox.set_hexpand(true);
         main_hbox.set_vexpand(true);
         main_hbox.append(&sidebar_revealer);
-        main_hbox.append(&content_box);
+        main_hbox.append(&stage_shell);
 
         // Panel lateral discreto derecho (`AdwOverlaySplitView`) para Historial, Marcadores y Descargas.
         // Cero botones permanentes en la cabecera: solo se muestra bajo demanda con atajos y cierra con Esc.
@@ -306,6 +365,7 @@ impl BrowserWindow {
                 app: app.clone(),
                 window,
                 toolbar_view,
+                main_hbox,
                 address_bar,
                 find_bar,
                 progress_bar,
@@ -340,11 +400,23 @@ impl BrowserWindow {
         actions::install_window_actions(&bw.inner.window, &bw);
         bw.apply_layout_from_settings(&settings.snapshot());
 
-        // Suscripción en vivo para cambiar entre pestañas arriba / barra lateral sin reiniciar.
+        // Suscripción en vivo para aplicar cambios de disposición, tema, tarjetas y movimiento sin reiniciar.
         {
             let w_sub = bw.clone();
             settings.subscribe(move |updated| {
                 w_sub.apply_layout_from_settings(updated);
+            });
+        }
+        {
+            let w_pf = bw.clone();
+            bw.inner.stores.pin_folders.subscribe(move || {
+                w_pf.sync_sidebar();
+            });
+        }
+        {
+            let w_dark = bw.clone();
+            bw.inner.app.style_manager().connect_dark_notify(move || {
+                w_dark.refresh_theme_icons();
             });
         }
 
@@ -367,6 +439,7 @@ impl BrowserWindow {
         &self.inner.window
     }
 
+    #[allow(dead_code)]
     pub fn settings(&self) -> &SettingsStore {
         &self.inner.settings
     }
@@ -410,7 +483,62 @@ impl BrowserWindow {
     }
 
     pub fn open_find_bar(&self) {
+        // Si la pestaña activa es `plasma://settings`, `Ctrl+F` enfoca el buscador de ajustes.
+        if let Some(sp) = self.active_settings_page() {
+            sp.focus_search();
+            return;
+        }
         self.inner.find_bar.open_and_focus();
+    }
+
+    pub fn active_settings_page(&self) -> Option<SettingsPage> {
+        let sel = self.inner.tab_view.selected_page()?;
+        self.inner
+            .tabs
+            .borrow()
+            .iter()
+            .find(|t| t.page == sel)
+            .and_then(|t| t.settings_page.clone())
+    }
+
+    pub fn is_active_tab_settings(&self) -> bool {
+        self.active_settings_page().is_some()
+    }
+
+    pub fn active_tab_url(&self) -> String {
+        let Some(sel) = self.inner.tab_view.selected_page() else {
+            return String::new();
+        };
+        self.inner
+            .tabs
+            .borrow()
+            .iter()
+            .find(|t| t.page == sel)
+            .map(|t| t.url.clone())
+            .unwrap_or_default()
+    }
+
+    /// Abre o enfoca la pestaña interna `plasma://settings` (`Ctrl+,` o botón lateral).
+    pub fn open_settings_tab(&self, section: Option<&str>) {
+        let existing = {
+            let tabs = self.inner.tabs.borrow();
+            tabs.iter()
+                .find(|t| t.is_settings_tab())
+                .map(|t| (t.id, t.settings_page.clone()))
+        };
+        if let Some((tab_id, sp_opt)) = existing {
+            self.select_tab_by_id(tab_id);
+            if let Some(sec) = section {
+                if let Some(sp) = sp_opt.or_else(|| self.active_settings_page()) {
+                    sp.select_section(sec);
+                }
+            }
+            return;
+        }
+        let target_url = canonical_internal_url(&InternalPage::Settings {
+            section: section.map(str::to_string),
+        });
+        let _ = self.open_tab(Some(&target_url), true, false, false);
     }
 
     /// Abre una pestaña nueva (inmediata si `select == true`, o diferida si `lazy == true`).
@@ -437,19 +565,36 @@ impl BrowserWindow {
         } else {
             None
         };
+        let pin_style = if pinned { Some(PinStyle::Square) } else { None };
         let home = if pinned { Some(url.clone()) } else { None };
 
         let tab_spec = SessionTab {
             url,
             title: String::new(),
             pin,
+            pin_style,
+            folder_id: None,
             name: None,
             home,
             group_id: None,
             touched: Some(now_unix_secs()),
             muted: false,
         };
-        self.insert_tab_from_spec(tab_spec, None, select, lazy)
+
+        let pos = if !pinned
+            && self.inner.settings.with(|s| s.new_tab_position) == NewTabPosition::NextToCurrent
+        {
+            self.inner
+                .tab_view
+                .selected_page()
+                .map(|p| self.inner.tab_view.page_position(&p))
+                .filter(|&p| p >= 0)
+                .map(|p| (p as usize) + 1)
+        } else {
+            None
+        };
+
+        self.insert_tab_from_spec(tab_spec, pos, select, lazy)
     }
 
     /// Inserta una pestaña a partir de un `SessionTab` en `position` (o al final).
@@ -479,17 +624,27 @@ impl BrowserWindow {
         };
         self.inner.suppress_auto_wake.set(prev_suppress);
 
+        let eff_pin_style = spec.effective_pin_style();
+        let folder_id = if is_pinned { spec.folder_id } else { None };
+        let url_clean = if spec.url.trim().is_empty() {
+            "about:blank".to_string()
+        } else {
+            spec.url
+        };
+        let internal_settings = match parse_internal_page(&url_clean) {
+            Some(InternalPage::Settings { section }) => Some(section),
+            _ => None,
+        };
+
         let mut rec = TabRecord {
             id: tab_id,
             page: page.clone(),
             slot,
-            url: if spec.url.trim().is_empty() {
-                "about:blank".to_string()
-            } else {
-                spec.url
-            },
+            url: url_clean,
             title: spec.title,
             pin: spec.pin,
+            pin_style: eff_pin_style,
+            folder_id,
             home: spec.home,
             touched: spec.touched.unwrap_or_else(now_unix_secs),
             loading: false,
@@ -498,17 +653,32 @@ impl BrowserWindow {
             muted: spec.muted,
             favicon_texture: None,
             browser: None,
+            settings_page: None,
         };
 
-        let display_title = rec.display_title();
+        let show_domain = self.inner.settings.with(|s| s.tab_show_domain);
+        let display_title = rec.display_title_for(show_domain);
         let tooltip = rec.tooltip_text();
         page.set_title(&display_title);
         page.set_tooltip(Some(&tooltip));
-        Self::apply_page_audio_indicator(&page, rec.audible, rec.muted);
+        let show_audio = self.inner.settings.with(|s| s.show_audio_indicators);
+        Self::apply_page_audio_indicator(&page, rec.audible && show_audio, rec.muted && show_audio);
 
         let is_blank = rec.url == "about:blank";
-        let should_wake_now = !lazy;
-        if should_wake_now {
+        if let Some(sec_opt) = internal_settings {
+            let dark = self.inner.app.style_manager().is_dark();
+            page.set_icon(Some(&icons::gicon(IconId::Settings, dark)));
+            let sp = SettingsPage::new(
+                &self.inner.window,
+                &self.inner.settings,
+                &self.inner.stores.history,
+                &self.inner.stores.downloads,
+                &self.inner.stores.paths,
+                sec_opt.as_deref(),
+            );
+            rec.slot.append(sp.widget());
+            rec.settings_page = Some(sp);
+        } else if !lazy {
             let bv = self.create_browser_view_for_tab(tab_id, &rec.url, rec.muted)?;
             rec.slot.append(bv.widget());
             rec.browser = Some(bv);
@@ -534,7 +704,7 @@ impl BrowserWindow {
     }
 
     /// Restaura una ventana completa desde `SessionWindow` con carga diferida (lazy)
-    /// para todas las pestañas no activas.
+    /// para todas las pestañas no activas cuando `lazy_restore` está activo.
     pub fn restore_from_session(&self, saved: &SessionWindow) -> Result<()> {
         if saved.tabs.is_empty() {
             self.open_tab(None, true, false, false)?;
@@ -542,12 +712,12 @@ impl BrowserWindow {
         }
 
         let active_idx = saved.clamped_active();
+        let lazy_restore = self.inner.settings.with(|s| s.lazy_restore);
         let prev_suppress = self.inner.suppress_auto_wake.replace(true);
 
-        // Primero restaurar fijadas y luego regulares respetando el orden guardado.
         let mut created_ids = Vec::with_capacity(saved.tabs.len());
         for tab in &saved.tabs {
-            let id = self.insert_tab_from_spec(tab.clone(), None, false, true)?;
+            let id = self.insert_tab_from_spec(tab.clone(), None, false, lazy_restore)?;
             created_ids.push(id);
         }
 
@@ -787,15 +957,45 @@ impl BrowserWindow {
             .settings
             .with(|s| (s.search_engine, s.custom_search_url.clone()));
         let resolved = resolve_address(raw_typed, engine, &custom);
+
+        // Enrutamiento de páginas internas `plasma://...` (y alias `search://...`).
+        if let Some(internal) = parse_internal_page(&resolved.url) {
+            match internal {
+                InternalPage::History => {
+                    self.toggle_history_panel();
+                    return;
+                }
+                InternalPage::Bookmarks => {
+                    self.toggle_bookmarks_panel();
+                    return;
+                }
+                InternalPage::Downloads => {
+                    self.toggle_downloads_panel();
+                    return;
+                }
+                InternalPage::Settings { section } => {
+                    self.inner.address_bar.set_committed_url(&resolved.url);
+                    if let Some(tab_id) = self.selected_tab_id() {
+                        self.mount_settings_page_in_tab(tab_id, &resolved.url, section.as_deref());
+                    } else {
+                        self.open_settings_tab(section.as_deref());
+                    }
+                    return;
+                }
+            }
+        }
+
         self.inner.address_bar.set_committed_url(&resolved.url);
 
         if let Some(tab_id) = self.selected_tab_id() {
+            self.unmount_settings_page_in_tab(tab_id);
+            let show_domain = self.inner.settings.with(|s| s.tab_show_domain);
             {
                 let mut tabs = self.inner.tabs.borrow_mut();
                 if let Some(t) = tabs.iter_mut().find(|t| t.id == tab_id) {
                     t.url = resolved.url.clone();
                     t.touched = now_unix_secs();
-                    let title = t.display_title();
+                    let title = t.display_title_for(show_domain);
                     let tip = t.tooltip_text();
                     t.page.set_title(&title);
                     t.page.set_tooltip(Some(&tip));
@@ -869,35 +1069,49 @@ impl BrowserWindow {
         }
     }
 
-    /// `Ctrl+W`: cierra la pestaña activa, **PERO NUNCA cierra una pestaña fijada**
-    /// (igual que `Browser.close` en upstream: duerme la pestaña fijada y cambia a otra).
+    /// `Ctrl+W`: cierra la pestaña activa; en pestañas fijadas respeta `pins_go_home`
+    /// y `protect_pinned` estilo Arc (devuelve a su URL inicial o la duerme sin cerrarla).
     pub fn close_active_tab(&self) {
         let Some(active_id) = self.selected_tab_id() else {
             return;
         };
-        let is_pinned = self
-            .inner
-            .tabs
-            .borrow()
-            .iter()
-            .find(|t| t.id == active_id)
-            .map(|t| t.pin.is_some())
-            .unwrap_or(false);
+        let (is_pinned, current_url, home_url) = {
+            let tabs = self.inner.tabs.borrow();
+            match tabs.iter().find(|t| t.id == active_id) {
+                Some(t) => (t.pin.is_some(), t.url.clone(), t.home.clone()),
+                None => return,
+            }
+        };
 
         if is_pinned {
-            self.put_tab_to_sleep(active_id);
-            // Cambiar a la primera pestaña no fijada, o a la siguiente si todas están fijadas.
-            let next_target = {
-                let tabs = self.inner.tabs.borrow();
-                tabs.iter()
-                    .find(|t| t.id != active_id && t.pin.is_none())
-                    .or_else(|| tabs.iter().find(|t| t.id != active_id))
-                    .map(|t| t.id)
-            };
-            if let Some(other_id) = next_target {
-                self.select_tab_by_id(other_id);
+            let (pins_go_home, protect_pinned) = self
+                .inner
+                .settings
+                .with(|s| (s.pins_go_home, s.protect_pinned));
+
+            if pins_go_home {
+                if let Some(home) = home_url.filter(|h| !h.is_empty() && *h != current_url) {
+                    self.navigate_typed_input(&home);
+                    return;
+                }
             }
-            return;
+
+            if protect_pinned {
+                self.put_tab_to_sleep(active_id);
+                let next_target = {
+                    let tabs = self.inner.tabs.borrow();
+                    tabs.iter()
+                        .find(|t| t.id != active_id && t.pin.is_none())
+                        .or_else(|| tabs.iter().find(|t| t.id != active_id))
+                        .map(|t| t.id)
+                };
+                if let Some(other_id) = next_target {
+                    self.select_tab_by_id(other_id);
+                }
+                return;
+            }
+
+            self.unpin_tab(active_id);
         }
 
         let _ = self.close_tab_by_id(active_id);
@@ -943,6 +1157,8 @@ impl BrowserWindow {
                     let mut spec = t.to_session_tab();
                     // Una pestaña duplicada entra como pestaña normal justo después de la original.
                     spec.pin = None;
+                    spec.pin_style = None;
+                    spec.folder_id = None;
                     spec.home = None;
                     spec.touched = Some(now_unix_secs());
                     (spec, idx + 1)
@@ -960,27 +1176,115 @@ impl BrowserWindow {
     }
 
     pub fn toggle_pin_tab(&self, tab_id: u64) {
-        let target = {
+        let already_pinned = self
+            .inner
+            .tabs
+            .borrow()
+            .iter()
+            .find(|t| t.id == tab_id)
+            .map(|t| t.pin.is_some())
+            .unwrap_or(false);
+        if already_pinned {
+            self.unpin_tab(tab_id);
+        } else {
+            self.pin_tab_as(tab_id, PinStyle::Square, None);
+        }
+    }
+
+    /// Fija (o convierte el estilo de fijación de) una pestaña como Favorito cuadrado,
+    /// fila fijada raíz o fila dentro de una carpeta de pines estilo Arc.
+    pub fn pin_tab_as(&self, tab_id: u64, style: PinStyle, folder_id: Option<String>) {
+        let effective_style = if folder_id.is_some() {
+            PinStyle::Row
+        } else {
+            style
+        };
+        let page_opt = {
             let mut tabs = self.inner.tabs.borrow_mut();
             let Some(t) = tabs.iter_mut().find(|t| t.id == tab_id) else {
                 return;
             };
-            let new_pinned = t.pin.is_none();
-            if new_pinned {
+            if t.pin.is_none() {
                 t.pin = Some(SessionTab::default_pin_label(&t.title, &t.url));
-                if t.home.is_none() {
-                    t.home = Some(t.url.clone());
-                }
-            } else {
-                t.pin = None;
-                t.home = None;
             }
-            (t.page.clone(), new_pinned)
+            if t.home.is_none() {
+                t.home = Some(t.url.clone());
+            }
+            t.pin_style = Some(effective_style);
+            t.folder_id = if effective_style == PinStyle::Row {
+                folder_id
+            } else {
+                None
+            };
+            Some(t.page.clone())
         };
-        self.inner.tab_view.set_page_pinned(&target.0, target.1);
+        if let Some(page) = page_opt {
+            self.inner.tab_view.set_page_pinned(&page, true);
+        }
         self.sync_order_with_tab_view();
         self.sync_sidebar();
         self.notify_session_dirty();
+    }
+
+    /// Desfija una pestaña y la devuelve a la sección de pestañas regulares.
+    pub fn unpin_tab(&self, tab_id: u64) {
+        let page_opt = {
+            let mut tabs = self.inner.tabs.borrow_mut();
+            let Some(t) = tabs.iter_mut().find(|t| t.id == tab_id) else {
+                return;
+            };
+            t.pin = None;
+            t.pin_style = None;
+            t.folder_id = None;
+            t.home = None;
+            Some(t.page.clone())
+        };
+        if let Some(page) = page_opt {
+            self.inner.tab_view.set_page_pinned(&page, false);
+        }
+        self.sync_order_with_tab_view();
+        self.sync_sidebar();
+        self.notify_session_dirty();
+    }
+
+    /// Mueve una pestaña a una carpeta de pines (fijándola como fila automáticamente)
+    /// o la saca a la raíz fijada si `folder_id` es `None`.
+    pub fn move_tab_to_folder(&self, tab_id: u64, folder_id: Option<String>) {
+        let valid_folder = folder_id.filter(|fid| self.inner.stores.pin_folders.contains(fid));
+        self.pin_tab_as(tab_id, PinStyle::Row, valid_folder);
+    }
+
+    pub fn create_pin_folder(&self, name: &str, parent_id: Option<&str>, move_tab_id: Option<u64>) {
+        if let Some(created) = self.inner.stores.pin_folders.create_folder(name, parent_id) {
+            if let Some(tid) = move_tab_id {
+                self.move_tab_to_folder(tid, Some(created.id));
+            } else {
+                self.sync_sidebar();
+            }
+        }
+    }
+
+    pub fn rename_pin_folder(&self, folder_id: &str, new_name: &str) {
+        let _ = self
+            .inner
+            .stores
+            .pin_folders
+            .rename_folder(folder_id, new_name);
+    }
+
+    pub fn delete_pin_folder(&self, folder_id: &str) {
+        if let Some(promoted_parent) = self.inner.stores.pin_folders.remove_folder(folder_id) {
+            {
+                let mut tabs = self.inner.tabs.borrow_mut();
+                for t in tabs.iter_mut() {
+                    if t.folder_id.as_deref() == Some(folder_id) {
+                        t.folder_id = promoted_parent.clone();
+                    }
+                }
+            }
+            self.sync_sidebar();
+            self.notify_session_dirty();
+        }
     }
 
     pub fn toggle_mute_tab(&self, tab_id: u64) {
@@ -1147,6 +1451,7 @@ impl BrowserWindow {
     /// Cierra limpiamente todos los `cef::Browser` activos de esta ventana (p. ej. al salir).
     pub fn close_all_browsers(&self) {
         self.inner.address_bar.cleanup();
+        self.inner.sidebar_tabs.cleanup();
         if let Some(pop) = self.inner.bookmark_popover.borrow_mut().take() {
             pop.popdown();
             pop.unparent();
@@ -1196,10 +1501,85 @@ impl BrowserWindow {
         Self::apply_page_audio_indicator(&tab.page, false, tab.muted);
     }
 
+    fn mount_settings_page_in_tab(&self, tab_id: u64, canonical_url: &str, section: Option<&str>) {
+        let dark = self.inner.app.style_manager().is_dark();
+        let existing_sp = {
+            let mut tabs = self.inner.tabs.borrow_mut();
+            let Some(tab) = tabs.iter_mut().find(|t| t.id == tab_id) else {
+                return;
+            };
+            if let Some(bv) = tab.browser.take() {
+                tab.slot.remove(bv.widget());
+                bv.close_browser();
+            }
+            tab.url = canonical_url.to_string();
+            tab.title = "Ajustes".to_string();
+            tab.loading = false;
+            tab.progress = 1.0;
+            tab.audible = false;
+            tab.favicon_texture = None;
+            tab.touched = now_unix_secs();
+            tab.page.set_title("Ajustes");
+            tab.page.set_tooltip(Some(&tab.tooltip_text()));
+            tab.page.set_loading(false);
+            tab.page
+                .set_icon(Some(&icons::gicon(IconId::Settings, dark)));
+            Self::apply_page_audio_indicator(&tab.page, false, false);
+            (tab.settings_page.clone(), tab.slot.clone())
+        };
+
+        if let Some(sp) = existing_sp.0 {
+            if let Some(sec) = section {
+                sp.select_section(sec);
+            }
+        } else {
+            let sp = SettingsPage::new(
+                &self.inner.window,
+                &self.inner.settings,
+                &self.inner.stores.history,
+                &self.inner.stores.downloads,
+                &self.inner.stores.paths,
+                section,
+            );
+            existing_sp.1.append(sp.widget());
+            let mut tabs = self.inner.tabs.borrow_mut();
+            if let Some(tab) = tabs.iter_mut().find(|t| t.id == tab_id) {
+                tab.settings_page = Some(sp);
+            }
+        }
+
+        if self.selected_tab_id() == Some(tab_id) {
+            self.inner.progress_bar.set_visible(false);
+            self.update_window_title("Ajustes");
+        }
+        self.sync_sidebar();
+        self.notify_session_dirty();
+    }
+
+    fn unmount_settings_page_in_tab(&self, tab_id: u64) {
+        let dark = self.inner.app.style_manager().is_dark();
+        let mut tabs = self.inner.tabs.borrow_mut();
+        if let Some(tab) = tabs.iter_mut().find(|t| t.id == tab_id) {
+            if let Some(sp) = tab.settings_page.take() {
+                tab.slot.remove(sp.widget());
+                tab.page.set_icon(Some(&icons::gicon(IconId::Globe, dark)));
+            }
+        }
+    }
+
     fn ensure_tab_awake(&self, tab_id: u64) -> Option<BrowserView> {
         let existing_or_spec = {
             let tabs = self.inner.tabs.borrow();
             let tab = tabs.iter().find(|t| t.id == tab_id)?;
+            if let Some(InternalPage::Settings { section }) = parse_internal_page(&tab.url) {
+                let url = tab.url.clone();
+                let has_sp = tab.settings_page.is_some();
+                drop(tabs);
+                if !has_sp {
+                    self.mount_settings_page_in_tab(tab_id, &url, section.as_deref());
+                }
+                return None;
+            }
             if let Some(ref bv) = tab.browser {
                 return Some(bv.clone());
             }
@@ -1269,8 +1649,8 @@ impl BrowserWindow {
         }
         {
             let w = self.clone();
-            cbs.on_favicon_png = Some(Box::new(move |png_bytes| {
-                w.handle_tab_favicon_png(tab_id, png_bytes);
+            cbs.on_favicon_texture = Some(Box::new(move |tex| {
+                w.handle_tab_favicon_texture(tab_id, tex);
             }));
         }
         {
@@ -1282,7 +1662,11 @@ impl BrowserWindow {
         {
             let w = self.clone();
             cbs.on_open_new_tab = Some(Box::new(move |target_url, background| {
-                let _ = w.open_tab(Some(&target_url), !background, false, false);
+                let open_bg = background
+                    || w.inner
+                        .settings
+                        .with(|s| s.open_links_in_background && background);
+                let _ = w.open_tab(Some(&target_url), !open_bg, false, false);
             }));
         }
         {
@@ -1347,17 +1731,18 @@ impl BrowserWindow {
 
     fn handle_tab_title_changed(&self, tab_id: u64, title: String) {
         let is_selected = self.selected_tab_id() == Some(tab_id);
+        let show_domain = self.inner.settings.with(|s| s.tab_show_domain);
         let (updated_title, current_url) = {
             let mut tabs = self.inner.tabs.borrow_mut();
             let Some(tab) = tabs.iter_mut().find(|t| t.id == tab_id) else {
                 return;
             };
             tab.title = title.clone();
-            let disp = tab.display_title();
+            let disp = tab.display_title_for(show_domain);
             let tip = tab.tooltip_text();
             tab.page.set_title(&disp);
             tab.page.set_tooltip(Some(&tip));
-            (disp, tab.url.clone())
+            (tab.display_title(), tab.url.clone())
         };
         if !self.inner.is_private && !title.trim().is_empty() {
             self.inner.stores.history.retitle(&current_url, &title);
@@ -1371,6 +1756,7 @@ impl BrowserWindow {
 
     fn handle_tab_address_changed(&self, tab_id: u64, new_url: String) {
         let is_selected = self.selected_tab_id() == Some(tab_id);
+        let show_domain = self.inner.settings.with(|s| s.tab_show_domain);
         {
             let mut tabs = self.inner.tabs.borrow_mut();
             let Some(tab) = tabs.iter_mut().find(|t| t.id == tab_id) else {
@@ -1378,7 +1764,7 @@ impl BrowserWindow {
             };
             tab.url = new_url.clone();
             tab.touched = now_unix_secs();
-            let disp = tab.display_title();
+            let disp = tab.display_title_for(show_domain);
             let tip = tab.tooltip_text();
             tab.page.set_title(&disp);
             tab.page.set_tooltip(Some(&tip));
@@ -1433,17 +1819,16 @@ impl BrowserWindow {
         }
     }
 
-    fn handle_tab_favicon_png(&self, tab_id: u64, png_bytes: Vec<u8>) {
-        let gbytes = Bytes::from_slice(&png_bytes);
-        let Some(tex) = Texture::from_bytes(&gbytes) else {
-            return;
-        };
-        let gicon = Icon::from_bytes(&gbytes);
+    fn handle_tab_favicon_texture(&self, tab_id: u64, tex: Texture) {
+        let gicon = tex.to_gicon();
         {
             let mut tabs = self.inner.tabs.borrow_mut();
             let Some(tab) = tabs.iter_mut().find(|t| t.id == tab_id) else {
                 return;
             };
+            if tab.is_settings_tab() {
+                return;
+            }
             tab.favicon_texture = Some(tex);
             tab.page.set_icon(Some(&gicon));
         }
@@ -1451,6 +1836,7 @@ impl BrowserWindow {
     }
 
     fn handle_tab_audio_changed(&self, tab_id: u64, audible: bool, muted: bool) {
+        let show_audio = self.inner.settings.with(|s| s.show_audio_indicators);
         {
             let mut tabs = self.inner.tabs.borrow_mut();
             let Some(tab) = tabs.iter_mut().find(|t| t.id == tab_id) else {
@@ -1458,19 +1844,20 @@ impl BrowserWindow {
             };
             tab.audible = audible;
             tab.muted = muted;
-            Self::apply_page_audio_indicator(&tab.page, audible, muted);
+            Self::apply_page_audio_indicator(&tab.page, audible && show_audio, muted && show_audio);
         }
         self.sync_sidebar();
     }
 
     fn apply_page_audio_indicator(page: &TabPage, audible: bool, muted: bool) {
+        let dark = icons::is_dark_theme();
         if muted {
-            let icon = Icon::themed("audio-volume-muted-symbolic");
+            let icon = icons::gicon(IconId::VolumeMuted, dark);
             page.set_indicator_icon(Some(&icon));
             page.set_indicator_tooltip(Some("Activar sonido de la pestaña"));
             page.set_indicator_activatable(true);
         } else if audible {
-            let icon = Icon::themed("audio-volume-high-symbolic");
+            let icon = icons::gicon(IconId::VolumeHigh, dark);
             page.set_indicator_icon(Some(&icon));
             page.set_indicator_tooltip(Some("Silenciar pestaña"));
             page.set_indicator_activatable(true);
@@ -1544,9 +1931,64 @@ impl BrowserWindow {
     fn apply_layout_from_settings(&self, s: &search_core::settings::AppSettings) {
         let folded = self.inner.folded.get();
         let fullscreen = self.inner.window.is_fullscreen();
+        let sidebar_ms = s.ui_motion.duration_ms(220);
+        let top_ms = s.ui_motion.duration_ms(180);
+        let folder_ms = s.ui_motion.duration_ms(180);
+        let find_ms = s.ui_motion.duration_ms(150);
+        let settings_ms = s.ui_motion.duration_ms(160);
+
+        self.inner
+            .sidebar_revealer
+            .set_transition_duration(sidebar_ms);
+        self.inner.top_bar_revealer.set_transition_duration(top_ms);
+        self.inner.find_bar.set_motion_duration(find_ms);
+        self.inner.sidebar_tabs.set_motion_duration(folder_ms);
         self.inner
             .sidebar_tabs
             .set_width(s.sidebar_width.round() as i32);
+        self.inner.sidebar_tabs.set_roomy(s.roomy_sidebar);
+
+        // Clases CSS globales de densidad y movimiento instantáneo.
+        if s.compact_tabs {
+            self.inner.window.add_css_class("search-compact-tabs");
+        } else {
+            self.inner.window.remove_css_class("search-compact-tabs");
+        }
+        if s.ui_motion == UiMotion::Instant {
+            self.inner.window.add_css_class("search-motion-instant");
+        } else {
+            self.inner.window.remove_css_class("search-motion-instant");
+        }
+
+        // Marco de tarjeta redondeado en modo lateral estilo Arc (`layout_cards`).
+        let show_cards = s.vertical_tabs && s.layout_cards && !fullscreen;
+        if show_cards {
+            self.inner.main_hbox.add_css_class("cards-enabled");
+        } else {
+            self.inner.main_hbox.remove_css_class("cards-enabled");
+        }
+
+        // Actualizar títulos, audio, zoom y duración de animaciones en pestañas existentes.
+        {
+            let tabs = self.inner.tabs.borrow();
+            for tab in tabs.iter() {
+                let disp = tab.display_title_for(s.tab_show_domain);
+                tab.page.set_title(&disp);
+                Self::apply_page_audio_indicator(
+                    &tab.page,
+                    tab.audible && s.show_audio_indicators,
+                    tab.muted && s.show_audio_indicators,
+                );
+                if let Some(ref sp) = tab.settings_page {
+                    sp.set_motion_duration(settings_ms);
+                }
+                if let Some(ref bv) = tab.browser {
+                    if (bv.zoom_factor() - s.page_zoom).abs() > 0.005 {
+                        bv.set_zoom_factor(s.page_zoom);
+                    }
+                }
+            }
+        }
 
         if s.vertical_tabs {
             self.inner.top_bar_revealer.set_reveal_child(false);
@@ -1566,6 +2008,33 @@ impl BrowserWindow {
         }
     }
 
+    fn refresh_theme_icons(&self) {
+        let dark = self.inner.app.style_manager().is_dark();
+        let show_audio = self.inner.settings.with(|s| s.show_audio_indicators);
+        self.inner
+            .tab_view
+            .set_default_icon(&icons::gicon(IconId::Globe, dark));
+        {
+            let tabs = self.inner.tabs.borrow();
+            for tab in tabs.iter() {
+                if tab.is_settings_tab() {
+                    tab.page
+                        .set_icon(Some(&icons::gicon(IconId::Settings, dark)));
+                }
+                if let Some(ref sp) = tab.settings_page {
+                    sp.refresh_theme_icons(dark);
+                }
+                Self::apply_page_audio_indicator(
+                    &tab.page,
+                    tab.audible && show_audio,
+                    tab.muted && show_audio,
+                );
+            }
+        }
+        self.inner.sidebar_tabs.refresh_theme_icons(dark);
+        self.sync_sidebar();
+    }
+
     fn sync_order_with_tab_view(&self) {
         let tv = &self.inner.tab_view;
         let mut tabs = self.inner.tabs.borrow_mut();
@@ -1580,7 +2049,8 @@ impl BrowserWindow {
     }
 
     fn sync_sidebar(&self) {
-        if !self.inner.settings.with(|s| s.vertical_tabs) {
+        let snap = self.inner.settings.snapshot();
+        if !snap.vertical_tabs {
             return;
         }
         self.sync_order_with_tab_view();
@@ -1592,10 +2062,12 @@ impl BrowserWindow {
             .iter()
             .map(|t| SidebarTabItem {
                 id: t.id,
-                title: t.display_title(),
+                url: t.url.clone(),
+                title: t.display_title_for(snap.tab_show_domain),
                 tooltip: t.tooltip_text(),
                 pin_label: t.pin.clone(),
-                pinned: t.pin.is_some(),
+                pin_style: t.effective_pin_style(),
+                folder_id: t.folder_id.clone(),
                 selected: selected_page.as_ref() == Some(&t.page),
                 loading: t.loading,
                 audible: t.audible,
@@ -1603,18 +2075,26 @@ impl BrowserWindow {
                 favicon: t.favicon_texture.clone(),
             })
             .collect();
-        self.inner.sidebar_tabs.sync(&items);
+        let folders = self.inner.stores.pin_folders.snapshot();
+        let opts = SidebarRenderOptions {
+            glyph: snap.tab_glyph,
+            roomy: snap.roomy_sidebar,
+            show_audio_indicators: snap.show_audio_indicators,
+            motion_ms: snap.ui_motion.duration_ms(180),
+        };
+        self.inner.sidebar_tabs.sync(&items, &folders, opts);
     }
 
     fn populate_tab_context_menu(&self, tab_id: u64) {
         self.inner.menu_target_tab.set(Some(tab_id));
-        let (is_pinned, is_muted) = {
+        let (pin_style, folder_id, is_muted) = {
             let tabs = self.inner.tabs.borrow();
             match tabs.iter().find(|t| t.id == tab_id) {
-                Some(t) => (t.pin.is_some(), t.muted),
-                None => (false, false),
+                Some(t) => (t.effective_pin_style(), t.folder_id.clone(), t.muted),
+                None => (None, None, false),
             }
         };
+        let is_pinned = pin_style.is_some();
 
         self.inner.tab_close_action.set_enabled(!is_pinned);
         self.inner.tab_menu.remove_all();
@@ -1622,14 +2102,6 @@ impl BrowserWindow {
         let sec1 = Menu::new();
         sec1.append("Recargar", Some("tab.reload"));
         sec1.append("Duplicar", Some("tab.duplicate"));
-        sec1.append(
-            if is_pinned {
-                "Desfijar pestaña"
-            } else {
-                "Fijar pestaña"
-            },
-            Some("tab.toggle-pin"),
-        );
         sec1.append(
             if is_muted {
                 "Activar sonido"
@@ -1639,6 +2111,50 @@ impl BrowserWindow {
             Some("tab.toggle-mute"),
         );
         self.inner.tab_menu.append_section(None, &sec1);
+
+        // Sección de fijación estilo Arc + submenú de carpetas de pines.
+        let sec_pin = Menu::new();
+        match pin_style {
+            None => {
+                sec_pin.append("Fijar como favorito (cuadrado)", Some("tab.pin-square"));
+                sec_pin.append("Fijar en barra lateral", Some("tab.pin-row"));
+            }
+            Some(PinStyle::Square) => {
+                sec_pin.append("Mover a filas fijadas", Some("tab.pin-row"));
+                sec_pin.append("Desfijar pestaña", Some("tab.unpin"));
+            }
+            Some(PinStyle::Row) => {
+                sec_pin.append("Mover a favoritos (cuadrado)", Some("tab.pin-square"));
+                sec_pin.append("Desfijar pestaña", Some("tab.unpin"));
+            }
+        }
+
+        let folder_submenu = Menu::new();
+        if folder_id.is_some() {
+            folder_submenu.append("Sacar de la carpeta (raíz)", Some("tab.move-to-folder('')"));
+        }
+        let all_folders = self.inner.stores.pin_folders.flattened();
+        if !all_folders.is_empty() {
+            let list_sec = Menu::new();
+            for (folder, depth) in all_folders {
+                let prefix = "  ".repeat(depth);
+                let mark = if folder_id.as_deref() == Some(folder.id.as_str()) {
+                    "✓ "
+                } else {
+                    ""
+                };
+                let label = format!("{prefix}{mark}{}", folder.name);
+                let detailed = format!("tab.move-to-folder('{}')", folder.id);
+                list_sec.append(&label, Some(&detailed));
+            }
+            folder_submenu.append_section(None, &list_sec);
+        }
+        let create_sec = Menu::new();
+        create_sec.append("Crear carpeta nueva…", Some("tab.create-folder-and-move"));
+        folder_submenu.append_section(None, &create_sec);
+
+        sec_pin.append_submenu("Mover a carpeta", &folder_submenu);
+        self.inner.tab_menu.append_section(None, &sec_pin);
 
         let sec2 = Menu::new();
         sec2.append("Mover a ventana nueva", Some("tab.move-to-new-window"));
@@ -1688,6 +2204,71 @@ impl BrowserWindow {
                 Box::new(move || {
                     if let Some(id) = w.inner.menu_target_tab.get() {
                         w.toggle_pin_tab(id);
+                    }
+                }),
+            );
+        }
+        {
+            let w = self.clone();
+            add(
+                "pin-square",
+                Box::new(move || {
+                    if let Some(id) = w.inner.menu_target_tab.get() {
+                        w.pin_tab_as(id, PinStyle::Square, None);
+                    }
+                }),
+            );
+        }
+        {
+            let w = self.clone();
+            add(
+                "pin-row",
+                Box::new(move || {
+                    if let Some(id) = w.inner.menu_target_tab.get() {
+                        w.pin_tab_as(id, PinStyle::Row, None);
+                    }
+                }),
+            );
+        }
+        {
+            let w = self.clone();
+            add(
+                "unpin",
+                Box::new(move || {
+                    if let Some(id) = w.inner.menu_target_tab.get() {
+                        w.unpin_tab(id);
+                    }
+                }),
+            );
+        }
+        {
+            let w = self.clone();
+            let move_act = SimpleAction::new_string_param("move-to-folder");
+            move_act.connect_activate_string(move |folder_id| {
+                if let Some(id) = w.inner.menu_target_tab.get() {
+                    let target = if folder_id.trim().is_empty() {
+                        None
+                    } else {
+                        Some(folder_id)
+                    };
+                    w.move_tab_to_folder(id, target);
+                }
+            });
+            group.add_action(&move_act);
+        }
+        {
+            let w = self.clone();
+            add(
+                "create-folder-and-move",
+                Box::new(move || {
+                    if let Some(id) = w.inner.menu_target_tab.get() {
+                        if !w.inner.settings.with(|s| s.vertical_tabs) {
+                            w.inner.settings.update(|s| s.vertical_tabs = true);
+                        }
+                        if w.inner.folded.get() {
+                            w.toggle_fold_tabs();
+                        }
+                        w.inner.sidebar_tabs.begin_create_folder(None, Some(id));
                     }
                 }),
             );
@@ -1983,8 +2564,47 @@ impl BrowserWindow {
         }
         {
             let w = self.clone();
+            scbs.on_drop_tab_into_folder = Some(Box::new(move |tab_id, folder_id| {
+                w.move_tab_to_folder(tab_id, Some(folder_id));
+            }));
+        }
+        {
+            let w = self.clone();
             scbs.on_new_tab = Some(Box::new(move || {
                 let _ = w.open_tab(None, true, false, false);
+            }));
+        }
+        {
+            let w = self.clone();
+            scbs.on_open_settings = Some(Box::new(move || {
+                w.open_settings_tab(None);
+            }));
+        }
+        {
+            let w = self.clone();
+            scbs.on_create_folder = Some(Box::new(move |name, parent_id, move_tab_id| {
+                w.create_pin_folder(&name, parent_id.as_deref(), move_tab_id);
+            }));
+        }
+        {
+            let w = self.clone();
+            scbs.on_rename_folder = Some(Box::new(move |folder_id, new_name| {
+                w.rename_pin_folder(&folder_id, &new_name);
+            }));
+        }
+        {
+            let w = self.clone();
+            scbs.on_delete_folder = Some(Box::new(move |folder_id| {
+                w.delete_pin_folder(&folder_id);
+            }));
+        }
+        {
+            let w = self.clone();
+            scbs.on_toggle_folder_collapsed = Some(Box::new(move |folder_id, collapsed| {
+                w.inner
+                    .stores
+                    .pin_folders
+                    .set_collapsed_silent(&folder_id, collapsed);
             }));
         }
         self.inner.sidebar_tabs.set_callbacks(scbs);

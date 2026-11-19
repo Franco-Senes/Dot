@@ -12,6 +12,7 @@ pub mod extensions;
 pub mod fuzzy;
 pub mod history;
 pub mod paths;
+pub mod pin_folders;
 pub mod reader;
 pub mod session;
 pub mod settings;

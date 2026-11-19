@@ -1,5 +1,8 @@
 use crate::glib::Bytes;
-use crate::object::{connect_signal_action_activate, to_cstring, ObjectRef, SignalHandlerId};
+use crate::object::{
+    connect_signal_action_activate, connect_signal_action_activate_string, to_cstring, ObjectRef,
+    SignalHandlerId,
+};
 use crate::sys;
 use bitflags::bitflags;
 use std::ffi::CStr;
@@ -29,6 +32,18 @@ impl SimpleAction {
         Self { obj }
     }
 
+    pub fn new_string_param(name: &str) -> Self {
+        let cname = to_cstring(name);
+        let ctype = to_cstring("s");
+        unsafe {
+            let vtype = sys::g_variant_type_new(ctype.as_ptr());
+            let ptr = sys::g_simple_action_new(cname.as_ptr(), vtype);
+            sys::g_variant_type_free(vtype);
+            let obj = ObjectRef::from_new_ptr(ptr.cast());
+            Self { obj }
+        }
+    }
+
     pub fn set_enabled(&self, enabled: bool) {
         unsafe {
             sys::g_simple_action_set_enabled(
@@ -40,6 +55,10 @@ impl SimpleAction {
 
     pub fn connect_activate<F: Fn() + 'static>(&self, callback: F) -> SignalHandlerId {
         connect_signal_action_activate(self.obj.as_ptr(), callback)
+    }
+
+    pub fn connect_activate_string<F: Fn(String) + 'static>(&self, callback: F) -> SignalHandlerId {
+        connect_signal_action_activate_string(self.obj.as_ptr(), callback)
     }
 
     pub fn as_action_ptr(&self) -> *mut sys::GAction {
@@ -92,6 +111,10 @@ impl Icon {
     pub fn from_bytes(bytes: &Bytes) -> Self {
         let ptr = unsafe { sys::g_bytes_icon_new(bytes.as_ptr()) };
         let obj = unsafe { ObjectRef::from_new_ptr(ptr.cast()) };
+        Self { obj }
+    }
+
+    pub(crate) fn from_object_ref(obj: ObjectRef) -> Self {
         Self { obj }
     }
 
@@ -165,6 +188,17 @@ impl Menu {
                 self.obj.as_ptr().cast(),
                 c_label.as_ref().map_or(ptr::null(), |s| s.as_ptr()),
                 section.as_menu_model_ptr(),
+            );
+        }
+    }
+
+    pub fn append_submenu(&self, label: &str, submenu: &Menu) {
+        let c_label = to_cstring(label);
+        unsafe {
+            sys::g_menu_append_submenu(
+                self.obj.as_ptr().cast(),
+                c_label.as_ptr(),
+                submenu.as_menu_model_ptr(),
             );
         }
     }

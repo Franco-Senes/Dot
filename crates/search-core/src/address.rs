@@ -43,7 +43,53 @@ const RFC3986_UNRESERVED_SET: &AsciiSet = &CONTROLS
     .add(b'|')
     .add(b'}');
 
-const ALLOWED_SCHEMES: &[&str] = &["http", "https", "file", "about", "data", "search"];
+const ALLOWED_SCHEMES: &[&str] = &["http", "https", "file", "about", "data", "search", "plasma"];
+
+/// Página interna del navegador reconocida bajo los esquemas `plasma://` y `search://`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum InternalPage {
+    Settings { section: Option<String> },
+    History,
+    Bookmarks,
+    Downloads,
+}
+
+/// Reconoce una URL interna (`plasma://settings`, `plasma://settings/privacy`,
+/// `plasma://history`, `plasma://bookmarks`, `plasma://downloads` y sus alias `search://`).
+pub fn parse_internal_page(raw_url: &str) -> Option<InternalPage> {
+    let trimmed = raw_url.trim();
+    let (scheme_raw, rest_raw) = trimmed.split_once("://")?;
+    let scheme = scheme_raw.to_ascii_lowercase();
+    if scheme != "plasma" && scheme != "search" {
+        return None;
+    }
+    let rest = rest_raw.trim_matches('/');
+    let mut parts = rest.split('/').filter(|s| !s.is_empty());
+    let host = parts.next()?.to_ascii_lowercase();
+    match host.as_str() {
+        "settings" | "preferences" | "config" => {
+            let section = parts.next().map(|s| s.to_ascii_lowercase());
+            Some(InternalPage::Settings { section })
+        }
+        "history" => Some(InternalPage::History),
+        "bookmarks" => Some(InternalPage::Bookmarks),
+        "downloads" => Some(InternalPage::Downloads),
+        _ => None,
+    }
+}
+
+/// Devuelve la URL canónica `plasma://...` para una página interna.
+pub fn canonical_internal_url(page: &InternalPage) -> String {
+    match page {
+        InternalPage::Settings { section: Some(sec) } if !sec.is_empty() => {
+            format!("plasma://settings/{sec}")
+        }
+        InternalPage::Settings { .. } => "plasma://settings".to_string(),
+        InternalPage::History => "plasma://history".to_string(),
+        InternalPage::Bookmarks => "plasma://bookmarks".to_string(),
+        InternalPage::Downloads => "plasma://downloads".to_string(),
+    }
+}
 
 /// Identificadores puros de seguimiento de clic eliminados automáticamente al navegar
 /// cuando `strip_click_ids` está activo.
@@ -281,6 +327,11 @@ fn try_resolve_explicit_scheme(text: &str) -> Option<(AddressKind, String)> {
         let scheme = scheme_raw.to_ascii_lowercase();
         if !ALLOWED_SCHEMES.contains(&scheme.as_str()) {
             return None;
+        }
+        if scheme == "plasma" || scheme == "search" {
+            if let Some(internal) = parse_internal_page(text) {
+                return Some((AddressKind::Url, canonical_internal_url(&internal)));
+            }
         }
         let parsed = Url::parse(text).ok()?;
         let normalized = rewrite_zero_bind_host(parsed);
@@ -944,5 +995,49 @@ mod tests {
             "https://news.bbc.co.uk/",
             "https://static.bbc.co.uk/"
         ));
+    }
+
+    #[test]
+    fn resolves_plasma_internal_urls_without_searching() {
+        let r =
+            resolve_address_with_options("plasma://settings", SearchEngine::DuckDuckGo, "", false);
+        assert_eq!(r.kind, AddressKind::Url);
+        assert_eq!(r.url, "plasma://settings");
+        assert_eq!(
+            parse_internal_page(&r.url),
+            Some(InternalPage::Settings { section: None })
+        );
+
+        let r2 = resolve_address_with_options(
+            "plasma://settings/privacy/",
+            SearchEngine::DuckDuckGo,
+            "",
+            false,
+        );
+        assert_eq!(r2.kind, AddressKind::Url);
+        assert_eq!(r2.url, "plasma://settings/privacy");
+        assert_eq!(
+            parse_internal_page(&r2.url),
+            Some(InternalPage::Settings {
+                section: Some("privacy".to_string())
+            })
+        );
+
+        assert_eq!(
+            resolve_address_with_options("plasma://history", SearchEngine::DuckDuckGo, "", false)
+                .url,
+            "plasma://history"
+        );
+        assert_eq!(
+            resolve_address_with_options("plasma://bookmarks", SearchEngine::DuckDuckGo, "", false)
+                .url,
+            "plasma://bookmarks"
+        );
+        assert_eq!(
+            resolve_address_with_options("plasma://downloads", SearchEngine::DuckDuckGo, "", false)
+                .url,
+            "plasma://downloads"
+        );
+        assert_eq!(display_at_rest("plasma://settings"), "plasma://settings");
     }
 }

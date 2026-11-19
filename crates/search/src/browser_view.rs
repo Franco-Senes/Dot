@@ -14,7 +14,7 @@
 use crate::settings::SettingsStore;
 use anyhow::{Context, Result};
 use cef::{rc::Rc as _, *};
-use gnome_platform::gdk::{self, MemoryFormat, MemoryTexture, ModifierType};
+use gnome_platform::gdk::{self, MemoryFormat, MemoryTexture, ModifierType, Texture};
 use gnome_platform::glib::Bytes;
 use gnome_platform::gtk::{
     Align, AsController, AsWidget, ContentFit, DrawingArea, EllipsizeMode, EventControllerFocus,
@@ -85,7 +85,7 @@ pub struct BrowserCallbacks {
     pub on_loading_state_changed: Option<LoadingStateCallback>,
     pub on_progress_changed: Option<Box<dyn Fn(f64)>>,
     pub on_favicon_changed: Option<Box<dyn Fn(Option<String>)>>,
-    pub on_favicon_png: Option<Box<dyn Fn(Vec<u8>)>>,
+    pub on_favicon_texture: Option<Box<dyn Fn(Texture)>>,
     pub on_audio_state_changed: Option<Box<dyn Fn(bool, bool)>>,
     pub on_open_new_tab: Option<Box<dyn Fn(String, bool)>>,
     pub on_fullscreen_changed: Option<Box<dyn Fn(bool)>>,
@@ -434,7 +434,6 @@ impl BrowserView {
         } else {
             let win_info = WindowInfo {
                 window_name: CefString::from("Search — Inspector web"),
-                runtime_style: RuntimeStyle::ALLOY,
                 bounds: Rect {
                     x: 0,
                     y: 0,
@@ -926,23 +925,72 @@ wrap_download_image_callback! {
             if img.is_empty() != 0 {
                 return;
             }
-            let mut pw = 0;
-            let mut ph = 0;
-            let Some(bin) = img.as_png(1.0, 1, Some(&mut pw), Some(&mut ph)) else {
-                return;
-            };
-            let size = bin.size();
-            if size == 0 || size > 512 * 1024 {
-                return;
+
+            // 1. Ruta directa sin decodificador PNG/pixbuf/glycin: `as_bitmap` BGRA premultiplicado -> `GdkMemoryTexture`.
+            let mut texture: Option<Texture> = None;
+            for scale in [2.0_f32, 1.0_f32] {
+                let mut pw = 0;
+                let mut ph = 0;
+                if let Some(bin) = img.as_bitmap(
+                    scale,
+                    ColorType::BGRA_8888,
+                    AlphaType::PREMULTIPLIED,
+                    Some(&mut pw),
+                    Some(&mut ph),
+                ) {
+                    if pw > 0 && ph > 0 && pw <= 512 && ph <= 512 {
+                        let expected = (pw as usize)
+                            .saturating_mul(ph as usize)
+                            .saturating_mul(4);
+                        let size = bin.size();
+                        if expected > 0 && size >= expected && size <= 2 * 1024 * 1024 {
+                            let mut buf = vec![0u8; size];
+                            let copied = bin.data(Some(&mut buf), 0);
+                            if copied >= expected {
+                                buf.truncate(expected);
+                                let gbytes = Bytes::from_slice(&buf);
+                                let mem = MemoryTexture::new(
+                                    pw,
+                                    ph,
+                                    MemoryFormat::B8g8r8a8Premultiplied,
+                                    &gbytes,
+                                    (pw as usize) * 4,
+                                );
+                                texture = Some(mem.to_texture());
+                                break;
+                            }
+                        }
+                    }
+                }
             }
-            let mut buf = vec![0u8; size];
-            let copied = bin.data(Some(&mut buf), 0);
-            buf.truncate(copied);
-            if buf.is_empty() {
-                return;
+
+            // 2. Respaldo PNG vía `gdk_texture_new_from_bytes` si `as_bitmap` no devolvió píxeles.
+            if texture.is_none() {
+                for scale in [2.0_f32, 1.0_f32] {
+                    let mut pw = 0;
+                    let mut ph = 0;
+                    if let Some(bin) = img.as_png(scale, 1, Some(&mut pw), Some(&mut ph)) {
+                        let size = bin.size();
+                        if size > 0 && size <= 512 * 1024 {
+                            let mut buf = vec![0u8; size];
+                            let copied = bin.data(Some(&mut buf), 0);
+                            buf.truncate(copied);
+                            if !buf.is_empty() {
+                                let gbytes = Bytes::from_slice(&buf);
+                                if let Some(tex) = Texture::from_bytes(&gbytes) {
+                                    texture = Some(tex);
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                }
             }
-            if let Some(ref cb) = self.shared.callbacks.borrow().on_favicon_png {
-                cb(buf);
+
+            if let Some(tex) = texture {
+                if let Some(ref cb) = self.shared.callbacks.borrow().on_favicon_texture {
+                    cb(tex);
+                }
             }
         }
     }
@@ -991,15 +1039,22 @@ wrap_display_handler! {
             browser: Option<&mut Browser>,
             icon_urls: Option<&mut CefStringList>,
         ) {
-            let first = icon_urls
-                .and_then(|list| list.clone().into_iter().next())
-                .filter(|s| !s.is_empty());
+            let candidates: Vec<String> = icon_urls
+                .map(|list| list.clone().into_iter().filter(|s| !s.is_empty()).collect())
+                .unwrap_or_default();
+            // Preferir PNG/ICO/WebP/HTTP sobre SVG cuando haya varias etiquetas <link rel="icon">.
+            let first = candidates
+                .iter()
+                .find(|u| !u.to_ascii_lowercase().ends_with(".svg"))
+                .or_else(|| candidates.first())
+                .cloned();
             *self.shared.favicon_url.borrow_mut() = first.clone();
             if let Some(ref cb) = self.shared.callbacks.borrow().on_favicon_changed {
                 cb(first.clone());
             }
             if let Some(ref url) = first {
-                let already = self.shared.last_favicon_requested.borrow().as_deref() == Some(url.as_str());
+                let already =
+                    self.shared.last_favicon_requested.borrow().as_deref() == Some(url.as_str());
                 if !already {
                     *self.shared.last_favicon_requested.borrow_mut() = Some(url.clone());
                     if let Some(host) = browser.and_then(|b| b.host()) {
@@ -1117,6 +1172,7 @@ wrap_load_handler! {
                     let url = CefString::from(&frame.url()).to_string();
                     if !url.starts_with("data:text/html;charset=utf-8,<!--search-internal-->") {
                         self.shared.last_load_was_error.set(false);
+                        *self.shared.favicon_url.borrow_mut() = None;
                     }
                 }
             }
@@ -1134,7 +1190,7 @@ wrap_load_handler! {
 
         fn on_load_end(
             &self,
-            _browser: Option<&mut Browser>,
+            browser: Option<&mut Browser>,
             frame: Option<&mut Frame>,
             http_status_code: ::std::os::raw::c_int,
         ) {
@@ -1155,6 +1211,40 @@ wrap_load_handler! {
                 let cef_js = CefString::from(audio_js.as_str());
                 let src = CefString::from("search://audio");
                 frame.execute_java_script(Some(&cef_js), Some(&src), 1);
+
+                // Respaldo automático `/favicon.ico` para sitios que no declaran `<link rel="icon">`.
+                if self.shared.favicon_url.borrow().is_none() {
+                    if let Ok(parsed) = url::Url::parse(&url) {
+                        if matches!(parsed.scheme(), "http" | "https") {
+                            if let Some(host_str) = parsed.host_str() {
+                                let port_part = parsed
+                                    .port()
+                                    .map(|p| format!(":{p}"))
+                                    .unwrap_or_default();
+                                let fallback_ico =
+                                    format!("{}://{}{}/favicon.ico", parsed.scheme(), host_str, port_part);
+                                let already = self.shared.last_favicon_requested.borrow().as_deref()
+                                    == Some(fallback_ico.as_str());
+                                if !already {
+                                    *self.shared.last_favicon_requested.borrow_mut() =
+                                        Some(fallback_ico.clone());
+                                    if let Some(host) = browser.and_then(|b| b.host()) {
+                                        let cef_url = CefString::from(fallback_ico.as_str());
+                                        let mut dl_cb =
+                                            FaviconDownloadCallback::new(self.shared.clone());
+                                        host.download_image(
+                                            Some(&cef_url),
+                                            1,
+                                            64,
+                                            0,
+                                            Some(&mut dl_cb),
+                                        );
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
             }
             if let Some(ref cb) = self.shared.callbacks.borrow().on_load_finished {
                 cb(url, http_status_code);
@@ -1919,10 +2009,11 @@ fn should_propagate_shortcut_to_window(keyval: u32, mods: ModifierType, is_loadi
 
     if ctrl && !alt {
         match lower {
-            // Ctrl+L, Ctrl+F, Ctrl+G, Ctrl+R, Ctrl+Q, Ctrl+T, Ctrl+W, Ctrl+K, Ctrl+N, Ctrl+S
-            0x6c | 0x66 | 0x67 | 0x72 | 0x71 | 0x74 | 0x77 | 0x6b | 0x6e | 0x73 => return true,
-            // Ctrl+Shift+I, Ctrl+Shift+C, Ctrl+Shift+V, Ctrl+Shift+M
-            0x69 | 0x63 | 0x76 | 0x6d if shift => return true,
+            // Ctrl+L, Ctrl+F, Ctrl+G, Ctrl+R, Ctrl+Q, Ctrl+T, Ctrl+W, Ctrl+K, Ctrl+N, Ctrl+S, Ctrl+H, Ctrl+Y, Ctrl+D
+            0x6c | 0x66 | 0x67 | 0x72 | 0x71 | 0x74 | 0x77 | 0x6b | 0x6e | 0x73 | 0x68 | 0x79
+            | 0x64 => return true,
+            // Ctrl+Shift+I, Ctrl+Shift+C, Ctrl+Shift+V, Ctrl+Shift+M, Ctrl+Shift+B, Ctrl+Shift+O, Ctrl+Shift+J
+            0x69 | 0x63 | 0x76 | 0x6d | 0x62 | 0x6f | 0x6a if shift => return true,
             // Ctrl+1..9
             gdk::keys::KEY_1..=gdk::keys::KEY_9 => return true,
             // Cambio de pestañas, preferencias y atajos

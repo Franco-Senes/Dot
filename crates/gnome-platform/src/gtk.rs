@@ -17,6 +17,36 @@ use std::ptr;
 
 pub const STYLE_PROVIDER_PRIORITY_APPLICATION: u32 = 600;
 
+pub fn version() -> (u32, u32, u32) {
+    unsafe {
+        (
+            sys::gtk_get_major_version(),
+            sys::gtk_get_minor_version(),
+            sys::gtk_get_micro_version(),
+        )
+    }
+}
+
+#[repr(i32)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Overflow {
+    Visible = 0,
+    Hidden = 1,
+}
+
+#[repr(i32)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StackTransitionType {
+    None = 0,
+    Crossfade = 1,
+    SlideRight = 2,
+    SlideLeft = 3,
+    SlideUp = 4,
+    SlideDown = 5,
+    SlideLeftRight = 6,
+    SlideUpDown = 7,
+}
+
 #[repr(i32)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PackType {
@@ -328,6 +358,12 @@ pub trait AsWidget {
             } else {
                 sys::gtk_widget_set_tooltip_text(self.as_widget_ptr(), ptr::null());
             }
+        }
+    }
+
+    fn set_overflow(&self, overflow: Overflow) {
+        unsafe {
+            sys::gtk_widget_set_overflow(self.as_widget_ptr(), overflow as i32);
         }
     }
 
@@ -766,6 +802,12 @@ pub struct Button {
 }
 
 impl Button {
+    pub fn new() -> Self {
+        let ptr = unsafe { sys::gtk_button_new() };
+        let obj = unsafe { ObjectRef::from_new_ptr(ptr.cast()) };
+        Self { obj }
+    }
+
     pub fn with_label(label: &str) -> Self {
         let c_label = to_cstring(label);
         let ptr = unsafe { sys::gtk_button_new_with_label(c_label.as_ptr()) };
@@ -803,6 +845,12 @@ impl Button {
 
     pub fn connect_clicked<F: Fn() + 'static>(&self, callback: F) -> SignalHandlerId {
         connect_signal_void(self.obj.as_ptr(), "clicked", false, callback)
+    }
+}
+
+impl Default for Button {
+    fn default() -> Self {
+        Self::new()
     }
 }
 
@@ -901,6 +949,120 @@ impl Default for Revealer {
 }
 
 impl AsWidget for Revealer {
+    fn as_widget_ptr(&self) -> *mut sys::GtkWidget {
+        self.obj.as_ptr().cast()
+    }
+}
+
+#[derive(Clone)]
+pub struct Stack {
+    obj: ObjectRef,
+}
+
+impl Stack {
+    pub fn new() -> Self {
+        let ptr = unsafe { sys::gtk_stack_new() };
+        let obj = unsafe { ObjectRef::from_new_ptr(ptr.cast()) };
+        Self { obj }
+    }
+
+    pub fn add_named(&self, child: &impl AsWidget, name: &str) {
+        let c = to_cstring(name);
+        unsafe {
+            let _ = sys::gtk_stack_add_named(
+                self.obj.as_ptr().cast(),
+                child.as_widget_ptr(),
+                c.as_ptr(),
+            );
+        }
+    }
+
+    pub fn set_visible_child_name(&self, name: &str) {
+        let c = to_cstring(name);
+        unsafe {
+            sys::gtk_stack_set_visible_child_name(self.obj.as_ptr().cast(), c.as_ptr());
+        }
+    }
+
+    pub fn visible_child_name(&self) -> Option<String> {
+        unsafe {
+            let ptr = sys::gtk_stack_get_visible_child_name(self.obj.as_ptr().cast());
+            if ptr.is_null() {
+                None
+            } else {
+                Some(CStr::from_ptr(ptr).to_string_lossy().into_owned())
+            }
+        }
+    }
+
+    pub fn set_transition_type(&self, transition: StackTransitionType) {
+        unsafe {
+            sys::gtk_stack_set_transition_type(self.obj.as_ptr().cast(), transition as i32);
+        }
+    }
+
+    pub fn set_transition_duration(&self, ms: u32) {
+        unsafe {
+            sys::gtk_stack_set_transition_duration(self.obj.as_ptr().cast(), ms);
+        }
+    }
+}
+
+impl Default for Stack {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl AsWidget for Stack {
+    fn as_widget_ptr(&self) -> *mut sys::GtkWidget {
+        self.obj.as_ptr().cast()
+    }
+}
+
+#[derive(Clone)]
+pub struct Scale {
+    obj: ObjectRef,
+}
+
+impl Scale {
+    pub fn with_range(orientation: Orientation, min: f64, max: f64, step: f64) -> Self {
+        let ptr = unsafe { sys::gtk_scale_new_with_range(orientation as i32, min, max, step) };
+        let obj = unsafe { ObjectRef::from_new_ptr(ptr.cast()) };
+        Self { obj }
+    }
+
+    pub fn set_digits(&self, digits: i32) {
+        unsafe {
+            sys::gtk_scale_set_digits(self.obj.as_ptr().cast(), digits);
+        }
+    }
+
+    pub fn set_draw_value(&self, draw: bool) {
+        unsafe {
+            sys::gtk_scale_set_draw_value(
+                self.obj.as_ptr().cast(),
+                if draw { sys::GTRUE } else { sys::GFALSE },
+            );
+        }
+    }
+
+    pub fn value(&self) -> f64 {
+        unsafe { sys::gtk_range_get_value(self.obj.as_ptr().cast()) }
+    }
+
+    pub fn set_value(&self, value: f64) {
+        unsafe {
+            sys::gtk_range_set_value(self.obj.as_ptr().cast(), value);
+        }
+    }
+
+    pub fn connect_value_changed<F: Fn() + 'static>(&self, callback: F) -> SignalHandlerId {
+        connect_signal_void(self.obj.as_ptr(), "value-changed", false, callback)
+    }
+}
+
+impl AsWidget for Scale {
     fn as_widget_ptr(&self) -> *mut sys::GtkWidget {
         self.obj.as_ptr().cast()
     }
@@ -1820,6 +1982,13 @@ impl MenuButton {
         let ptr = popover.map_or(ptr::null_mut(), AsWidget::as_widget_ptr);
         unsafe {
             sys::gtk_menu_button_set_popover(self.obj.as_ptr().cast(), ptr);
+        }
+    }
+
+    pub fn set_child(&self, child: Option<&impl AsWidget>) {
+        let ptr = child.map_or(ptr::null_mut(), AsWidget::as_widget_ptr);
+        unsafe {
+            sys::gtk_menu_button_set_child(self.obj.as_ptr().cast(), ptr);
         }
     }
 }

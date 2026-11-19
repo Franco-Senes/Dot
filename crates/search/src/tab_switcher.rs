@@ -4,6 +4,7 @@
 //! Teclas: `↑`/`↓` moverse, `Enter` activar (y presentar su ventana),
 //! `Ctrl+W`/`Supr` cerrar la pestaña marcada (si no está fijada), `Esc` cerrar el selector.
 
+use crate::icons::{self, IconId};
 use gnome_platform::adw::{ApplicationWindow, Dialog};
 use gnome_platform::gdk::{self, ModifierType, Texture};
 use gnome_platform::gtk::{
@@ -276,14 +277,13 @@ fn build_switcher_row(item: &SwitcherTabItem) -> ListBoxRow {
         img.set_pixel_size(18);
         img.set_from_texture(Some(tex));
         hbox.append(&img);
-    } else {
-        let img = Image::from_icon_name(if item.pinned {
-            "view-pin-symbolic"
-        } else {
-            "web-browser-symbolic"
-        });
-        img.set_pixel_size(18);
+    } else if item.url.starts_with("plasma://settings") {
+        let img = icons::image(IconId::Settings, 17);
         hbox.append(&img);
+    } else {
+        let letter = icons::monogram_letter(&item.title, &item.url);
+        let badge = icons::monogram_badge(&letter, &item.url, false);
+        hbox.append(&badge);
     }
 
     let text_col = BoxWidget::new(Orientation::Vertical, 1);
@@ -328,12 +328,14 @@ fn build_switcher_row(item: &SwitcherTabItem) -> ListBoxRow {
         hbox.append(&badge);
     }
     if item.muted || item.audible {
-        let audio = Image::from_icon_name(if item.muted {
-            "audio-volume-muted-symbolic"
-        } else {
-            "audio-volume-high-symbolic"
-        });
-        audio.set_pixel_size(14);
+        let audio = icons::image(
+            if item.muted {
+                IconId::VolumeMuted
+            } else {
+                IconId::VolumeHigh
+            },
+            14,
+        );
         hbox.append(&audio);
     }
 

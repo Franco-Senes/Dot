@@ -1,6 +1,7 @@
 //! Gestor reactivo del historial (`HistoryManager`) con persistencia atómica + debounce (~1 s)
 //! y panel lateral discreto (`Ctrl+H` / `Ctrl+Y`) agrupado por día (`Recall.swift`).
 
+use crate::icons::{self, IconId};
 use gnome_platform::gtk::{
     Align, AsEditable, AsWidget, BoxWidget, Button, EllipsizeMode, Label, ListBox, ListBoxRow,
     MenuButton, Orientation, PolicyType, Popover, ScrolledWindow, SearchEntry, SelectionMode,
@@ -250,8 +251,7 @@ impl HistoryPanel {
         clear_menu_btn.set_popover(Some(&clear_pop));
         header.append(&clear_menu_btn);
 
-        let close_btn = Button::from_icon_name("window-close-symbolic");
-        close_btn.add_css_class("flat");
+        let close_btn = icons::icon_button(IconId::Close, 15);
         close_btn.set_tooltip_text(Some("Cerrar panel (Esc)"));
         {
             let cb = on_close.clone();
@@ -416,8 +416,7 @@ impl HistoryPanel {
         if let Ok(parsed) = url::Url::parse(&entry.url) {
             if let Some(host) = parsed.host_str() {
                 let bare = host.strip_prefix("www.").unwrap_or(host).to_string();
-                let del_site = Button::from_icon_name("edit-clear-all-symbolic");
-                del_site.add_css_class("flat");
+                let del_site = icons::icon_button(IconId::ClearAll, 14);
                 del_site.add_css_class("search-tab-mini-btn");
                 del_site.set_tooltip_text(Some(&format!("Borrar todo de {bare}")));
                 let mgr = self.manager.clone();
@@ -429,8 +428,7 @@ impl HistoryPanel {
         }
 
         // Botón para borrar esta entrada individual.
-        let del_one = Button::from_icon_name("window-close-symbolic");
-        del_one.add_css_class("flat");
+        let del_one = icons::icon_button(IconId::Close, 13);
         del_one.add_css_class("search-tab-mini-btn");
         del_one.set_tooltip_text(Some("Borrar entrada"));
         {

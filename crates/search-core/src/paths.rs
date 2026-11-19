@@ -98,6 +98,10 @@ impl SearchPaths {
         self.data_dir.join("downloads.json")
     }
 
+    pub fn pin_folders_file(&self) -> PathBuf {
+        self.data_dir.join("pin-folders.json")
+    }
+
     pub fn cef_cache_dir(&self) -> PathBuf {
         self.cache_dir.join("cef")
     }

@@ -15,6 +15,17 @@ use std::time::{SystemTime, UNIX_EPOCH};
 /// Capacidad mínima garantizada para la pila de pestañas cerradas (`Ctrl+Shift+T`).
 pub const DEFAULT_CLOSED_TAB_CAPACITY: usize = 32;
 
+/// Estilo visual de una pestaña fijada en la barra lateral estilo Arc.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum PinStyle {
+    /// Cuadrado compacto en la cuadrícula superior de favoritos (hasta 4 por fila).
+    #[default]
+    Square,
+    /// Fila fijada en la lista superior (suelta o dentro de una carpeta de pines).
+    Row,
+}
+
 /// Entrada persistente de una pestaña en `session.json`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct SessionTab {
@@ -23,6 +34,10 @@ pub struct SessionTab {
     pub title: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pin: Option<String>,
+    #[serde(default, rename = "pinStyle", skip_serializing_if = "Option::is_none")]
+    pub pin_style: Option<PinStyle>,
+    #[serde(default, rename = "folderID", skip_serializing_if = "Option::is_none")]
+    pub folder_id: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -41,6 +56,8 @@ impl SessionTab {
             url: url.into(),
             title: title.into(),
             pin: None,
+            pin_style: None,
+            folder_id: None,
             name: None,
             home: None,
             group_id: None,
@@ -51,6 +68,16 @@ impl SessionTab {
 
     pub fn is_pinned(&self) -> bool {
         self.pin.is_some()
+    }
+
+    /// Estilo efectivo de fijación: las pestañas dentro de una carpeta son siempre `Row`,
+    /// y las fijadas antiguas sin `pinStyle` se muestran como `Square`.
+    pub fn effective_pin_style(&self) -> Option<PinStyle> {
+        self.pin.as_ref()?;
+        if self.folder_id.is_some() {
+            return Some(PinStyle::Row);
+        }
+        Some(self.pin_style.unwrap_or(PinStyle::Square))
     }
 
     /// Calcula una letra compacta por defecto para una pestaña fijada (estilo `Pins.swift`).
@@ -356,6 +383,8 @@ mod tests {
 
         let mut pinned = SessionTab::new("https://example.com/", "Example Domain");
         pinned.pin = Some("E".to_string());
+        pinned.pin_style = Some(PinStyle::Row);
+        pinned.folder_id = Some("pf-work".to_string());
         pinned.home = Some("https://example.com/".to_string());
         pinned.touched = Some(1795032000.0);
 

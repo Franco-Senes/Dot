@@ -40,9 +40,9 @@ Sintaxis admitida en `SEARCH_CHROMIUM_FLAGS`:
 
 | Crate | Descripción |
 |---|---|
-| `crates/search-core` | Lógica pura en Rust (sin GTK4 ni CEF): `chromium_flags`, `paths` XDG + `write_atomic`, resolución de direcciones/búsqueda/anti-homógrafos (`address`), ajustes JSON (`settings`), coincidencia difusa (`fuzzy`), sesiones y pila de cerradas (`session`), historial con frecencia e índice rápido `< 16 ms` (`history`), árbol de marcadores e import/export HTML Netscape (`bookmarks`), descargas sin sobrescribir (`downloads`) y trazas (`trace`). |
-| `crates/gnome-platform` | Envoltorio seguro e idiomático en Rust sobre las bibliotecas C del SDK de GNOME (`gtk-4`, `libadwaita-1`, `gio-2.0`, `gobject-2.0`, `glib-2.0`), incluyendo `AdwTabView`/`AdwTabBar`, `AdwOverlaySplitView`, `AdwPreferencesDialog`, `AdwShortcutsDialog`, `GtkPopover`, `GtkFileDialog`, `GtkFileLauncher`, `GNotification`, `GtkDragSource`/`GtkDropTarget` y `GdkTexture`. |
-| `crates/search` | Ejecutable principal `search`: aplicación `AdwApplication` multi-ventana (normales y privadas), pestañas arriba o barra lateral vertical conmutables en vivo (`Ctrl+Shift+S`), fijadas protegidas, selector difuso `Ctrl+K`, omnibox con autocompletado inline y sugerencias (historial, pestañas abiertas y marcadores), paneles laterales discretos de Historial (`Ctrl+H`), Marcadores (`Ctrl+Shift+O`, popover `Ctrl+D`) y Descargas (`Ctrl+Shift+Y`), preferencias (`Ctrl+,`), atajos (`Ctrl+?`), sesión diferida (`session.json`), búsqueda en página (`Ctrl+F`), motor `cef_engine` y vista `BrowserView`. |
+| `crates/search-core` | Lógica pura en Rust (sin GTK4 ni CEF): `chromium_flags`, `paths` XDG + `write_atomic`, resolución de direcciones/búsqueda/`plasma://`/anti-homógrafos (`address`), ajustes JSON (`settings`), coincidencia difusa (`fuzzy`), sesiones y pila de cerradas (`session`), carpetas de pines estilo Arc (`pin_folders`), historial con frecencia e índice rápido `< 16 ms` (`history`), árbol de marcadores e import/export HTML Netscape (`bookmarks`), descargas sin sobrescribir (`downloads`) y trazas (`trace`). |
+| `crates/gnome-platform` | Envoltorio seguro e idiomático en Rust sobre las bibliotecas C del SDK de GNOME (`gtk-4`, `libadwaita-1`, `gio-2.0`, `gobject-2.0`, `glib-2.0`), incluyendo `AdwTabView`/`AdwTabBar`, `AdwOverlaySplitView`, `AdwPreferencesGroup`/`SpinRow`, `AdwShortcutsDialog`, `GtkStack`, `GtkScale`, `GtkPopover`, `GtkFileDialog`, `GtkFileLauncher`, `GNotification`, `GtkDragSource`/`GtkDropTarget` y `GdkTexture`/`GdkMemoryTexture` como `GIcon`. |
+| `crates/search` | Ejecutable principal `search`: aplicación `AdwApplication` multi-ventana (normales y privadas), iconos vectoriales propios sin dependencias de tema (`icons.rs`), favicons CEF vía `MemoryTexture` con respaldo `/favicon.ico` y monogramas, pestañas arriba o barra lateral estilo Arc (`Ctrl+Shift+S`, cuadrícula de Favoritos, carpetas plegables hasta 3 niveles y DnD), página nativa completa `plasma://settings` (`Ctrl+,`, 8 secciones con búsqueda en vivo y 0 procesos CEF), selector difuso `Ctrl+K`, omnibox con autocompletado inline y sugerencias, paneles laterales discretos de Historial (`Ctrl+H`), Marcadores (`Ctrl+Shift+O`, popover `Ctrl+D`) y Descargas (`Ctrl+Shift+Y`), atajos (`Ctrl+?`), sesión diferida (`session.json`), búsqueda en página (`Ctrl+F`), motor `cef_engine` y vista `BrowserView`. |
 | `crates/search-bench` | Herramientas CLI de pruebas e inspección (`bench` y `test-find`). |
 | `crates/xtask` | Tareas de construcción e instalación (`compile-schemas` e `install`). |
 
@@ -72,7 +72,8 @@ En este repositorio el entorno autónomo ya incluye el SDK de GNOME 51, Rust 1.9
 # Compilar en modo release
 ./.toolchain/sdk cargo build --workspace --release
 
-# Ejecutar prueba de humo headless (Xvfb + D-Bus + CEF OSR)
+# Ejecutar pruebas de humo headless (Xvfb + D-Bus + CEF OSR y página nativa plasma://settings)
+./.toolchain/sdk-xvfb ./target/release/search --smoke-test plasma://settings
 ./.toolchain/sdk-xvfb ./target/release/search --smoke-test "data:text/html,<title>Hola Search</title><h1>Hola CEF</h1>"
 
 # Verificar persistencia y restauración diferida de 15 pestañas (2 fijadas, solo 1 CEF activo)

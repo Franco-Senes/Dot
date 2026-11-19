@@ -1,7 +1,7 @@
 //! Registro centralizado de acciones GIO (`app.*` y `win.*`), aceleradores de teclado con `Ctrl`
 //! y diálogo de atajos (`AdwShortcutsDialog`, `Ctrl+?`) — `Shortcuts.swift` + `ShortcutsPage.swift`.
 
-use crate::settings_ui;
+use crate::settings::SettingsStore;
 use crate::window::BrowserWindow;
 use gnome_platform::adw::{
     Application, ApplicationWindow, ShortcutsDialog, ShortcutsItem, ShortcutsSection,
@@ -9,12 +9,31 @@ use gnome_platform::adw::{
 use gnome_platform::gdk::Display;
 use gnome_platform::gio::SimpleAction;
 use search_core::address::clean_link;
+use std::cell::Cell;
+use std::rc::Rc;
+use std::time::{Duration, Instant};
 
-/// Registra las acciones globales de aplicación y declara todos los atajos de teclado de Fases 1 y 2.
-pub fn install_app_actions_and_accels(app: &Application) {
+/// Registra las acciones globales de aplicación y declara todos los atajos de teclado.
+pub fn install_app_actions_and_accels(app: &Application, settings: &SettingsStore) {
     let quit_action = SimpleAction::new("quit");
     let app_quit = app.clone();
+    let settings_quit = settings.clone();
+    let last_quit_press: Rc<Cell<Option<Instant>>> = Rc::new(Cell::new(None));
     quit_action.connect_activate(move || {
+        if settings_quit.with(|s| s.confirm_quit) {
+            let now = Instant::now();
+            let confirmed = last_quit_press
+                .get()
+                .map(|prev| now.duration_since(prev) <= Duration::from_secs(3))
+                .unwrap_or(false);
+            if !confirmed {
+                last_quit_press.set(Some(now));
+                search_core::info!(
+                    "Pulsa Ctrl+Q de nuevo en los próximos 3 s para confirmar salida"
+                );
+                return;
+            }
+        }
         app_quit.quit();
     });
     app.add_action(&quit_action);
@@ -290,7 +309,7 @@ pub fn install_window_actions(gtk_win: &ApplicationWindow, win: &BrowserWindow) 
 
     add_win_action(gtk_win, "open-settings", {
         let w = win.clone();
-        move || settings_ui::present_settings_dialog(w.gtk_window(), w.settings())
+        move || w.open_settings_tab(None)
     });
 
     add_win_action(gtk_win, "open-shortcuts", {
@@ -393,7 +412,7 @@ pub fn present_shortcuts_dialog(parent: &ApplicationWindow) {
         ),
         ("Pantalla completa", "F11"),
         ("Inspector web (DevTools)", "<Control><Shift>i F12"),
-        ("Preferencias", "<Control>comma"),
+        ("Ajustes (plasma://settings)", "<Control>comma"),
         ("Atajos de teclado", "<Control>question"),
         ("Salir de Search", "<Control>q"),
     ] {

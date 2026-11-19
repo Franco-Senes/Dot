@@ -425,6 +425,47 @@ pub(crate) fn connect_signal_action_activate<F: Fn() + 'static>(
     SignalHandlerId(id)
 }
 
+/// Conecta `GSimpleAction::activate` con parámetro `GVariant` tipo cadena (`"s"`).
+pub(crate) fn connect_signal_action_activate_string<F: Fn(String) + 'static>(
+    instance: *mut c_void,
+    callback: F,
+) -> SignalHandlerId {
+    unsafe extern "C" fn trampoline<F: Fn(String) + 'static>(
+        _action: *mut c_void,
+        param: *mut sys::GVariant,
+        user_data: sys::gpointer,
+    ) {
+        if param.is_null() {
+            return;
+        }
+        let mut len: sys::gsize = 0;
+        let raw = sys::g_variant_get_string(param, &mut len);
+        if raw.is_null() {
+            return;
+        }
+        let s = std::ffi::CStr::from_ptr(raw).to_string_lossy().into_owned();
+        let cb = &*(user_data as *const F);
+        cb(s);
+    }
+
+    let c_sig = to_cstring("activate");
+    let data = Box::into_raw(Box::new(callback)) as sys::gpointer;
+    let cb_ptr: sys::GCallback = Some(unsafe {
+        std::mem::transmute::<*const (), unsafe extern "C" fn()>(trampoline::<F> as *const ())
+    });
+    let id = unsafe {
+        sys::g_signal_connect_data(
+            instance,
+            c_sig.as_ptr(),
+            cb_ptr,
+            data,
+            Some(drop_boxed_closure::<F>),
+            0,
+        )
+    };
+    SignalHandlerId(id)
+}
+
 /// Conecta `GApplication::open`: `(app, GFile** files, gint n_files, const char* hint, user_data)`.
 pub(crate) fn connect_signal_app_open<F: Fn(Vec<String>) + 'static>(
     instance: *mut c_void,

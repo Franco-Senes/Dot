@@ -45,6 +45,10 @@ impl Bytes {
         }
     }
 
+    pub(crate) unsafe fn from_new_ptr(ptr: *mut sys::GBytes) -> Option<Self> {
+        NonNull::new(ptr).map(|ptr| Self { ptr })
+    }
+
     pub fn as_ptr(&self) -> *mut sys::GBytes {
         self.ptr.as_ptr()
     }

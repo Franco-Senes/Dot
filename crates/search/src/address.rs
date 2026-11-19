@@ -9,12 +9,13 @@
 //! - Navegación completa por teclado: `↑`/`↓`, `Enter`, `Shift+Supr` (borra entrada de
 //!   historial del disco y del desplegable) y `Escape`.
 
+use crate::icons::{self, IconId};
 use gnome_platform::adw::Clamp;
 use gnome_platform::gdk::{self, ModifierType};
 use gnome_platform::gtk::{
     Align, AsEditable, AsWidget, BoxWidget, EllipsizeMode, Entry, EventControllerFocus,
-    EventControllerKey, Image, InputHints, InputPurpose, Label, ListBox, ListBoxRow, Orientation,
-    Popover, PositionType, SelectionMode,
+    EventControllerKey, InputHints, InputPurpose, Label, ListBox, ListBoxRow, Orientation, Popover,
+    PositionType, SelectionMode,
 };
 use search_core::address::{display_at_rest, sanitize_url_for_ui};
 use search_core::history::{inline_completion, OmniboxSuggestion, OmniboxSuggestionKind};
@@ -356,13 +357,12 @@ impl AddressBar {
             let hbox = BoxWidget::new(Orientation::Horizontal, 8);
             hbox.set_margins(10, 10, 6, 6);
 
-            let icon_name = match item.kind {
-                OmniboxSuggestionKind::OpenTab { .. } => "tab-new-symbolic",
-                OmniboxSuggestionKind::Bookmark { .. } => "starred-symbolic",
-                OmniboxSuggestionKind::History { .. } => "document-open-recent-symbolic",
+            let icon_id = match item.kind {
+                OmniboxSuggestionKind::OpenTab { .. } => IconId::LayoutTabs,
+                OmniboxSuggestionKind::Bookmark { .. } => IconId::Star,
+                OmniboxSuggestionKind::History { .. } => IconId::History,
             };
-            let icon = Image::from_icon_name(icon_name);
-            icon.set_pixel_size(15);
+            let icon = icons::image(icon_id, 15);
             hbox.append(&icon);
 
             let col = BoxWidget::new(Orientation::Vertical, 1);

@@ -10,6 +10,7 @@ use crate::cef_engine::CefEngine;
 use crate::downloads::DownloadManager;
 use crate::history_ui::HistoryManager;
 use crate::settings::SettingsStore;
+use crate::sidebar_tabs::PinFoldersManager;
 use crate::style;
 use crate::tab_switcher::{self, SwitcherTabItem, TabSwitcherCallbacks};
 use crate::window::{BrowserWindow, SharedDataStores, WindowCallbacks};
@@ -69,10 +70,13 @@ impl AppController {
         session_enabled: bool,
     ) -> Self {
         let stores = SharedDataStores {
+            paths: paths.clone(),
             history: HistoryManager::load(paths.history_file()),
             bookmarks: BookmarksManager::load(paths.bookmarks_file()),
             downloads: DownloadManager::load(paths.downloads_file(), settings.clone()),
+            pin_folders: PinFoldersManager::load(paths.pin_folders_file()),
         };
+        let stack_cap = settings.with(|s| s.closed_tab_stack_size);
         Self {
             inner: Rc::new(AppControllerInner {
                 app,
@@ -81,7 +85,7 @@ impl AppController {
                 stores,
                 cef: RefCell::new(None),
                 windows: RefCell::new(Vec::new()),
-                closed_tabs: RefCell::new(ClosedTabStack::default()),
+                closed_tabs: RefCell::new(ClosedTabStack::new(stack_cap)),
                 save_debounce: Cell::new(None),
                 session_enabled: Cell::new(session_enabled),
                 shutting_down: Cell::new(false),
@@ -115,6 +119,8 @@ impl AppController {
                         url: closed.url,
                         title: closed.title,
                         pin: closed.pin_label,
+                        pin_style: None,
+                        folder_id: None,
                         name: None,
                         home: closed.home,
                         group_id: None,
@@ -415,6 +421,7 @@ impl AppController {
         self.inner.stores.history.flush_now();
         self.inner.stores.bookmarks.flush_now();
         self.inner.stores.downloads.flush_now();
+        self.inner.stores.pin_folders.flush_now();
         let windows: Vec<BrowserWindow> = self.inner.windows.borrow_mut().drain(..).collect();
         for win in windows {
             win.close_all_browsers();
@@ -472,7 +479,7 @@ pub fn run(
                 });
             }
 
-            actions::install_app_actions_and_accels(&app_startup);
+            actions::install_app_actions_and_accels(&app_startup, &settings_startup);
 
             let snapshot = settings_startup.snapshot();
             match CefEngine::initialize(&paths_startup, &snapshot) {
@@ -552,8 +559,13 @@ pub fn run(
                 SmokeMode::None => {}
             }
 
-            // Arranque normal: restaurar `session.json` con carga diferida.
-            let saved = SessionState::load(&paths_act.session_file());
+            // Arranque normal: restaurar `session.json` con carga diferida si el ajuste está activo.
+            let should_restore = settings_act.with(|s| s.restore_session);
+            let saved = if should_restore {
+                SessionState::load(&paths_act.session_file())
+            } else {
+                SessionState::default()
+            };
             if !saved.is_empty() {
                 if saved.sidebar != settings_act.with(|s| s.vertical_tabs) {
                     settings_act.update(|s| s.vertical_tabs = saved.sidebar);
@@ -676,6 +688,23 @@ fn attach_smoke_test_harness(
     smoke_url: String,
     fatal_failed: Arc<AtomicBool>,
 ) {
+    // Páginas internas nativas GTK4 (`plasma://settings`): verificar montaje sin CEF.
+    if win.is_active_tab_settings() {
+        let app_done = app.clone();
+        let win_done = win.clone();
+        glib::timeout_add_local_once(Duration::from_millis(120), move || {
+            let total_ms = startup_instant.elapsed().as_millis();
+            let active_url = win_done.active_tab_url();
+            let active_cef = browser_view::active_browser_count();
+            search_core::info!(
+                "Smoke test completado (página interna nativa): total_ms={total_ms} url=\"{active_url}\" active_cef={active_cef}"
+            );
+            win_done.close_all_browsers();
+            app_done.quit();
+        });
+        return;
+    }
+
     let Some(bv) = win.active_browser_view() else {
         fatal_failed.store(true, Ordering::SeqCst);
         app.quit();

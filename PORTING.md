@@ -102,7 +102,7 @@ Estados: `pendiente` · `directo` · `adaptado` · `diferido` · `imposible` · 
 | `Sources/Search/BookmarksBar.swift` | Barra horizontal opcional de marcadores | `crates/search/src/bookmarks_ui.rs` | `gtk4::Box`, `gtk4::PopoverMenu` | diferido | 3 |
 | `Sources/Search/BookmarksFile.swift` | Importador/exportador HTML Netscape de marcadores | `crates/search-core/src/bookmarks.rs` | Rust puro (`BufRead` / generador HTML) | hecho | 3 |
 | `Sources/Search/Bookmarks.swift` | Modelo de árbol `bookmarks.json`, búsqueda y gestión de marcadores | `crates/search-core/src/bookmarks.rs` + `crates/search/src/bookmarks_ui.rs` | `serde_json`, `adw::OverlaySplitView`, `gtk4::Popover` | hecho | 3 |
-| `Sources/Search/BrowserPinFolders.swift` | Operaciones sobre carpetas de pestañas fijadas | `crates/search-core/src/session.rs` | Rust puro | diferido | 2 |
+| `Sources/Search/BrowserPinFolders.swift` | Operaciones sobre carpetas de pestañas fijadas (crear, renombrar, anidar hasta 3 niveles, mover, colapsar) | `crates/search-core/src/pin_folders.rs` + `crates/search/src/sidebar_tabs.rs` | Rust puro (`pin-folders.json`) + `GtkRevealer` + DnD | hecho | 3b |
 | `Sources/Search/Browser.swift` | Coordinador por ventana de pestañas, navegación, privacidad y paneles | `crates/search/src/window.rs` | `adw::ApplicationWindow`, `adw::TabView`, `cef::RequestContext` | hecho | 1 |
 | `Sources/Search/CaptureChoices.swift` | Permisos recordados por origen (cámara, micro, ubicación, notif.) | `crates/search-core/src/settings.rs` | `cef::PermissionHandler`, `serde_json` | adaptado | 4 |
 | `Sources/Search/CleanLink.swift` | Limpieza de parámetros de rastreo (`utm_*`, `fbclid`, `gclid`) | `crates/search-core/src/address.rs` | `url::Url` | hecho | 1 |
@@ -145,7 +145,7 @@ Estados: `pendiente` · `directo` · `adaptado` · `diferido` · `imposible` · 
 | `Sources/Search/Hidden.swift` | Panel para inspeccionar y borrar reglas de Curtain por sitio o global | `crates/search/src/curtain.rs` | `adw::OverlaySplitView` / `gtk4::Popover`, `gtk4::ListBox` | adaptado | 4 |
 | `Sources/Search/History.swift` | Historial `history.json`, puntuación frecencia y autocompletado `<16ms` | `crates/search-core/src/history.rs` + `crates/search/src/history_ui.rs` | Rust puro (`serde_json`, índice en RAM) + `gtk4::ListView` | hecho | 3 |
 | `Sources/Search/HotKey.swift` | Atajo global de sistema Carbon (`RegisterEventHotKey`) | — | API Carbon exclusiva de macOS | imposible | — |
-| `Sources/Search/Icons.swift` | Obtención y caché de favicons | `crates/search/src/browser_view.rs` | `cef::DisplayHandler::on_favicon_urlchange` + `BrowserHost::download_image` | hecho | 2 |
+| `Sources/Search/Icons.swift` | Iconos de interfaz sin dependencias de tema + obtención y caché de favicons con monograma | `crates/search/src/icons.rs` + `crates/search/src/browser_view.rs` | Rasterizador SDF propio en `GdkMemoryTexture` (`GdkTexture` como `GIcon`) + `download_image` (`as_bitmap` BGRA8) + respaldo `/favicon.ico` | hecho | 3b |
 | `Sources/Search/ImageMenu.swift` | Acciones de menú contextual sobre imágenes | `crates/search/src/browser_view.rs` | `cef::ContextMenuHandler` | adaptado | 2 |
 | `Sources/Search/ImportArc.swift` | Importador de `StorableSidebar.json` de Arc | — | Arc no existe en Linux | imposible | — |
 | `Sources/Search/ImportFile.swift` | Importación desde archivos `.csv` y `.html` | `crates/search-core/src/vault_import.rs` | Rust puro (`csv`, parser HTML Netscape) | directo | 5 |
@@ -154,7 +154,7 @@ Estados: `pendiente` · `directo` · `adaptado` · `diferido` · `imposible` · 
 | `Sources/Search/ImportSession.swift` | Importador binario `SNSS` de sesiones Chromium | — | Fuera de alcance de Fase 5 (solo contraseñas/marcadores) | diferido | — |
 | `Sources/Search/Import.swift` | Descubrimiento y descifrado de contraseñas Firefox (`key4.db`+`logins.json`) y Chromium (`Login Data` `v10`/`v11`) | `crates/search-core/src/vault_import.rs` | `rusqlite`, `aes`, `cbc`, `des`, `pbkdf2`, `sha1`, `sha2`, `oo7` | adaptado | 5 |
 | `Sources/Search/Inspector.swift` | Apertura de DevTools (`Ctrl+Shift+I` / `F12`) | `crates/search/src/browser_view.rs` | `cef::BrowserHost::show_dev_tools` / `close_dev_tools` | hecho | 1 |
-| `Sources/Search/InternalPages.swift` | Enrutamiento de vistas internas (`search://settings`, etc.) | `crates/search/src/window.rs` | `adw::PreferencesDialog` / paneles `adw::OverlaySplitView` | hecho | 2 |
+| `Sources/Search/InternalPages.swift` | Enrutamiento de vistas internas (`plasma://settings`, `plasma://history`, `plasma://bookmarks`, `plasma://downloads`) | `crates/search-core/src/address.rs` + `crates/search/src/settings_page.rs` + `window.rs` | Pestaña nativa `SettingsPage` en `AdwTabView` (0 procesos CEF) / paneles `AdwOverlaySplitView` | hecho | 3b |
 | `Sources/Search/KeptScroll.swift` | Restauración de scroll en navegación atrás/adelante | `crates/search/src/browser_view.rs` | Nativo en el historial de sesión de Blink/CEF | hecho | 2 |
 | `Sources/Search/KeyLayout.swift` | Mapa físico de teclas Carbon (`TISCopyCurrent...`) | `crates/search/src/actions.rs` | `gtk4::ShortcutController` resuelve keyvals latinos nativamente | hecho | 1 |
 | `Sources/Search/Keyword.swift` | Palabras clave personalizadas de búsqueda (`yt`, `gh`) | `crates/search-core/src/address.rs` | Rust puro (`serde`) | directo | 3 |
@@ -181,8 +181,8 @@ Estados: `pendiente` · `directo` · `adaptado` · `diferido` · `imposible` · 
 | `Sources/Search/Passwords.swift` | Panel de contraseñas (buscar, mostrar con confirmación, copiar 30s, editar, borrar, exportar CSV) | `crates/search/src/vault_ui.rs` | `adw::PreferencesGroup`, `gdk4::Clipboard`, `glib::timeout_add_seconds_local` | adaptado | 5 |
 | `Sources/Search/Peek.swift` | Vista previa modal de enlaces | — | Función extra fuera de `PLAN.md` | diferido | — |
 | `Sources/Search/PinDrop.swift` | Drag & drop para reordenar pestañas y fijadas | `crates/search/src/sidebar_tabs.rs` | `gtk4::DragSource`, `gtk4::DropTarget` | hecho | 2 |
-| `Sources/Search/PinFolders.swift` | Modelo de carpetas de pines | — | Subsistema opcional estilo Arc | diferido | — |
-| `Sources/Search/PinFolderViews.swift` | Vistas de carpetas de pines | — | Subsistema opcional estilo Arc | diferido | — |
+| `Sources/Search/PinFolders.swift` | Modelo de carpetas de pines (hasta 3 niveles, prevención de ciclos, persistencia atómica `.bak`) | `crates/search-core/src/pin_folders.rs` | Rust puro (`$XDG_DATA_HOME/search/pin-folders.json`, `serde_json`) | hecho | 3b |
+| `Sources/Search/PinFolderViews.swift` | Vistas estilo Arc: cuadrícula de favoritos arriba, carpetas plegables animadas, edición en línea y DnD | `crates/search/src/sidebar_tabs.rs` | `GtkRevealer` (`SlideDown`), `GtkDragSource`/`GtkDropTarget`, `GtkPopoverMenu` | hecho | 3b |
 | `Sources/Search/Pins.swift` | Estado de pestañas fijadas (persisten en `session.json` y no cierran con `Ctrl+W`) | `crates/search-core/src/session.rs` | `adw::TabView::set_page_pinned`, `serde_json` | hecho | 2 |
 | `Sources/Search/Plate.swift` | Primitivas visuales reutilizables para paneles | `crates/search/src/window.rs` | `adw::Clamp`, `adw::PreferencesGroup`, `.boxed-list` | hecho | 3 |
 | `Sources/Search/Player.swift` | Indicador/control de audio en pestañas | `crates/search/src/sidebar_tabs.rs` | `BrowserHost::is_audio_muted` / `set_audio_muted` | hecho | 2 |
@@ -198,7 +198,7 @@ Estados: `pendiente` · `directo` · `adaptado` · `diferido` · `imposible` · 
 | `Sources/Search/Scripting.swift` | Interfaz de automatización externa (`Search.sdef`) | `crates/search/src/dbus.rs` | `zbus` (`io.github.searchlinux.Search1`) | adaptado | 7 |
 | `Sources/Search/Session.swift` | Persistencia y restauración diferida de ventanas, pestañas, fijadas y splits | `crates/search-core/src/session.rs` | `serde_json`, `paths::write_atomic`, debounce ~1 s, backup `.bak` | hecho | 2 |
 | `Sources/Search/SettingsIndex.swift` | Catálogo declarativo de ajustes | `crates/search-core/src/settings.rs` | Rust puro | hecho | 1 |
-| `Sources/Search/Settings.swift` | Ventana de preferencias del navegador | `crates/search/src/settings_ui.rs` | `adw::PreferencesDialog` | hecho | 2 |
+| `Sources/Search/Settings.swift` | Página completa de preferencias del navegador con búsqueda en vivo y 8 categorías | `crates/search/src/settings_page.rs` | Pestaña nativa `plasma://settings` (`AdwPreferencesGroup`, `GtkStack`, búsqueda instantánea) | hecho | 3b |
 | `Sources/Search/Sharing.swift` | Menú nativo de compartir macOS (`NSSharingServicePicker`) | — | Exclusivo de AppKit | diferido | — |
 | `Sources/Search/Shield.swift` | Bloqueador de anuncios/rastreadores a nivel de red + excepciones por dominio | `crates/search-core/src/shield.rs` + `crates/search/src/shield.rs` | `CefResourceRequestHandler::on_before_resource_load` + CSS cosmético | adaptado | 4 |
 | `Sources/Search/ShortcutsPage.swift` | Ventana de consulta de atajos de teclado | `crates/search/src/actions.rs` | `adw::ShortcutsDialog` | hecho | 2 |
@@ -514,6 +514,8 @@ Mismo formato JSON declarativo de `WKContentRuleList` (las 57 reglas de `Shield.
 | 2026-11-18 | **ID `io.github.searchlinux.Search`, `AdwTabView` único y PiP en ventana flotante propia** | Coherencia con GNOME/Flathub, cambio instantáneo entre pestañas superiores y barra lateral vertical, y paridad con `Float.swift`. |
 | 2026-11-18 | **Crate propia `crates/gnome-platform` sobre las bibliotecas C del SDK de GNOME 51 (`gtk-4`, `adwaita-1`, `gio-2.0`, `gobject-2.0`, `glib-2.0`)** | Permite compilar 100 % offline contra el SDK local con control directo de referencias `GObject`, `GdkMemoryTexture` OSR y `GSettings`, lista para ampliar en Fases 2–8 (`AdwTabView`, `AdwTabBar`, `AdwOverlaySplitView`, `libsecret-1`, `GDBus`). |
 | 2026-11-18 | **Sincronización automática `--ozone-platform=wayland\|x11\|headless` y `gtk_disable_setlocale()`** | Evita que Chromium intente conectar a un socket Wayland inexistente cuando GTK4 corre bajo X11/Xvfb y elimina conflictos de locale entre GTK4 y `libcef.so`. |
+| 2026-11-18 | **Iconos vectoriales rasterizados en Rust puro (`GdkMemoryTexture` + `GdkTexture` como `GIcon`) y favicons vía `as_bitmap` BGRA8** | En entornos KDE Plasma/Breeze o fuera de un sandbox Flatpak, los loaders `glycin`/`gdk-pixbuf` del SDK de GNOME 51 y los nombres simbólicos GNOME pueden fallar; usar `GdkMemoryTexture` directo garantiza nitidez HiDPI y cero dependencias externas en cualquier escritorio Linux. |
+| 2026-11-18 | **Página de ajustes nativa `plasma://settings` en pestaña real (`AdwTabView`) + carpetas de pines estilo Arc (`pin-folders.json`)** | Abre instantáneamente con 0 instancias `cef::Browser` activas, unifica las 8 categorías con búsqueda en vivo y persistencia inmediata en `settings.json`, y añade cuadrícula de favoritos + carpetas plegables hasta 3 niveles con animaciones controlables (`Smooth`/`Reduced`/`Instant`). |
 
 ## 12. Rendimiento y mediciones de flags de Chromium
 > Hardware de medición: **AMD Ryzen 5 5600G with Radeon Graphics** (12 hilos, Linux x86_64).

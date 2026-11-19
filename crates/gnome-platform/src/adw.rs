@@ -11,6 +11,16 @@ use libc::c_char;
 use std::ffi::{CStr, CString};
 use std::ptr;
 
+pub fn version() -> (u32, u32, u32) {
+    unsafe {
+        (
+            sys::adw_get_major_version(),
+            sys::adw_get_minor_version(),
+            sys::adw_get_micro_version(),
+        )
+    }
+}
+
 bitflags! {
     #[derive(Debug, Clone, Copy, PartialEq, Eq)]
     pub struct TabViewShortcuts: u32 {
@@ -1212,6 +1222,12 @@ impl ActionRow {
         }
     }
 
+    pub fn add_prefix(&self, widget: &impl AsWidget) {
+        unsafe {
+            sys::adw_action_row_add_prefix(self.obj.as_ptr().cast(), widget.as_widget_ptr());
+        }
+    }
+
     pub fn add_suffix(&self, widget: &impl AsWidget) {
         unsafe {
             sys::adw_action_row_add_suffix(self.obj.as_ptr().cast(), widget.as_widget_ptr());
@@ -1254,6 +1270,12 @@ impl SwitchRow {
         let c = to_cstring(subtitle);
         unsafe {
             sys::adw_action_row_set_subtitle(self.obj.as_ptr().cast(), c.as_ptr());
+        }
+    }
+
+    pub fn add_prefix(&self, widget: &impl AsWidget) {
+        unsafe {
+            sys::adw_action_row_add_prefix(self.obj.as_ptr().cast(), widget.as_widget_ptr());
         }
     }
 
@@ -1310,6 +1332,12 @@ impl ComboRow {
         let c = to_cstring(subtitle);
         unsafe {
             sys::adw_action_row_set_subtitle(self.obj.as_ptr().cast(), c.as_ptr());
+        }
+    }
+
+    pub fn add_prefix(&self, widget: &impl AsWidget) {
+        unsafe {
+            sys::adw_action_row_add_prefix(self.obj.as_ptr().cast(), widget.as_widget_ptr());
         }
     }
 
@@ -1392,6 +1420,65 @@ impl AsWidget for EntryRow {
 }
 
 impl AsEditable for EntryRow {}
+
+#[derive(Clone)]
+pub struct SpinRow {
+    obj: ObjectRef,
+}
+
+impl SpinRow {
+    pub fn with_range(min: f64, max: f64, step: f64) -> Self {
+        let ptr = unsafe { sys::adw_spin_row_new_with_range(min, max, step) };
+        let obj = unsafe { ObjectRef::from_new_ptr(ptr.cast()) };
+        Self { obj }
+    }
+
+    pub fn set_title(&self, title: &str) {
+        let c = to_cstring(title);
+        unsafe {
+            sys::adw_preferences_row_set_title(self.obj.as_ptr().cast(), c.as_ptr());
+        }
+    }
+
+    pub fn set_subtitle(&self, subtitle: &str) {
+        let c = to_cstring(subtitle);
+        unsafe {
+            sys::adw_action_row_set_subtitle(self.obj.as_ptr().cast(), c.as_ptr());
+        }
+    }
+
+    pub fn add_prefix(&self, widget: &impl AsWidget) {
+        unsafe {
+            sys::adw_action_row_add_prefix(self.obj.as_ptr().cast(), widget.as_widget_ptr());
+        }
+    }
+
+    pub fn value(&self) -> f64 {
+        unsafe { sys::adw_spin_row_get_value(self.obj.as_ptr().cast()) }
+    }
+
+    pub fn set_value(&self, value: f64) {
+        unsafe {
+            sys::adw_spin_row_set_value(self.obj.as_ptr().cast(), value);
+        }
+    }
+
+    pub fn set_digits(&self, digits: u32) {
+        unsafe {
+            sys::adw_spin_row_set_digits(self.obj.as_ptr().cast(), digits);
+        }
+    }
+
+    pub fn connect_value_notify<F: Fn() + 'static>(&self, callback: F) -> SignalHandlerId {
+        connect_signal_notify(self.obj.as_ptr(), "value", callback)
+    }
+}
+
+impl AsWidget for SpinRow {
+    fn as_widget_ptr(&self) -> *mut sys::GtkWidget {
+        self.obj.as_ptr().cast()
+    }
+}
 
 #[derive(Clone)]
 pub struct ShortcutsItem {

@@ -5,10 +5,11 @@
 //! completadas (abrir con `GtkFileLauncher`, mostrar en carpeta, reintentar y quitar).
 
 use crate::downloads::{ActiveDownloadInfo, ActiveDownloadStatus, DownloadManager};
+use crate::icons::{self, IconId};
 use gnome_platform::adw::ApplicationWindow;
 use gnome_platform::gtk::{
-    Align, AsWidget, BoxWidget, Button, EllipsizeMode, FileLauncher, Image, Label, ListBox,
-    ListBoxRow, Orientation, PolicyType, ProgressBar, ScrolledWindow, SelectionMode, Separator,
+    Align, AsWidget, BoxWidget, Button, EllipsizeMode, FileLauncher, Label, ListBox, ListBoxRow,
+    Orientation, PolicyType, ProgressBar, ScrolledWindow, SelectionMode, Separator,
 };
 use search_core::address::display_at_rest;
 use search_core::downloads::{format_bytes, format_speed, DownloadRecord};
@@ -64,8 +65,7 @@ impl DownloadsPanel {
         }
         header.append(&clear_btn);
 
-        let close_btn = Button::from_icon_name("window-close-symbolic");
-        close_btn.add_css_class("flat");
+        let close_btn = icons::icon_button(IconId::Close, 15);
         close_btn.set_tooltip_text(Some("Cerrar panel (Esc)"));
         {
             let cb = on_close.clone();
@@ -150,8 +150,7 @@ impl DownloadsPanel {
         vbox.set_margins(8, 8, 6, 6);
 
         let top = BoxWidget::new(Orientation::Horizontal, 6);
-        let icon = Image::from_icon_name("folder-download-symbolic");
-        icon.set_pixel_size(16);
+        let icon = icons::image(IconId::Download, 16);
         top.append(&icon);
 
         let name_lbl = Label::new(Some(&item.name));
@@ -162,8 +161,7 @@ impl DownloadsPanel {
 
         match item.status {
             ActiveDownloadStatus::InProgress | ActiveDownloadStatus::Paused => {
-                let cancel_btn = Button::from_icon_name("process-stop-symbolic");
-                cancel_btn.add_css_class("flat");
+                let cancel_btn = icons::icon_button(IconId::Stop, 14);
                 cancel_btn.add_css_class("search-tab-mini-btn");
                 cancel_btn.set_tooltip_text(Some("Cancelar descarga"));
                 let mgr = self.manager.clone();
@@ -173,8 +171,7 @@ impl DownloadsPanel {
             }
             ActiveDownloadStatus::Canceled | ActiveDownloadStatus::Interrupted => {
                 if !item.url.is_empty() {
-                    let retry_btn = Button::from_icon_name("view-refresh-symbolic");
-                    retry_btn.add_css_class("flat");
+                    let retry_btn = icons::icon_button(IconId::Refresh, 14);
                     retry_btn.add_css_class("search-tab-mini-btn");
                     retry_btn.set_tooltip_text(Some("Reintentar descarga"));
                     let retry = self.on_retry.clone();
@@ -187,8 +184,7 @@ impl DownloadsPanel {
                     });
                     top.append(&retry_btn);
                 }
-                let del_btn = Button::from_icon_name("window-close-symbolic");
-                del_btn.add_css_class("flat");
+                let del_btn = icons::icon_button(IconId::Close, 13);
                 del_btn.add_css_class("search-tab-mini-btn");
                 del_btn.set_tooltip_text(Some("Quitar de la lista"));
                 let mgr = self.manager.clone();
@@ -257,12 +253,14 @@ impl DownloadsPanel {
         hbox.set_margins(8, 8, 6, 6);
 
         let exists = rec.file_exists();
-        let icon = Image::from_icon_name(if exists {
-            "document-save-symbolic"
-        } else {
-            "dialog-warning-symbolic"
-        });
-        icon.set_pixel_size(16);
+        let icon = icons::image(
+            if exists {
+                IconId::Download
+            } else {
+                IconId::Warning
+            },
+            16,
+        );
         hbox.append(&icon);
 
         let text_col = BoxWidget::new(Orientation::Vertical, 2);
@@ -289,8 +287,7 @@ impl DownloadsPanel {
         hbox.append(&text_col);
 
         if exists {
-            let open_btn = Button::from_icon_name("document-open-symbolic");
-            open_btn.add_css_class("flat");
+            let open_btn = icons::icon_button(IconId::FileOpen, 14);
             open_btn.add_css_class("search-tab-mini-btn");
             open_btn.set_tooltip_text(Some("Abrir archivo"));
             let win = self.parent_window.clone();
@@ -300,8 +297,7 @@ impl DownloadsPanel {
             });
             hbox.append(&open_btn);
 
-            let folder_btn = Button::from_icon_name("folder-open-symbolic");
-            folder_btn.add_css_class("flat");
+            let folder_btn = icons::icon_button(IconId::FolderOpen, 14);
             folder_btn.add_css_class("search-tab-mini-btn");
             folder_btn.set_tooltip_text(Some("Mostrar en la carpeta"));
             let win = self.parent_window.clone();
@@ -311,8 +307,7 @@ impl DownloadsPanel {
             });
             hbox.append(&folder_btn);
         } else if !rec.url.is_empty() {
-            let retry_btn = Button::from_icon_name("view-refresh-symbolic");
-            retry_btn.add_css_class("flat");
+            let retry_btn = icons::icon_button(IconId::Refresh, 14);
             retry_btn.add_css_class("search-tab-mini-btn");
             retry_btn.set_tooltip_text(Some("Volver a descargar"));
             let retry = self.on_retry.clone();
@@ -321,8 +316,7 @@ impl DownloadsPanel {
             hbox.append(&retry_btn);
         }
 
-        let remove_btn = Button::from_icon_name("user-trash-symbolic");
-        remove_btn.add_css_class("flat");
+        let remove_btn = icons::icon_button(IconId::Trash, 14);
         remove_btn.add_css_class("search-tab-mini-btn");
         remove_btn.set_tooltip_text(Some("Quitar de la lista"));
         let mgr = self.manager.clone();

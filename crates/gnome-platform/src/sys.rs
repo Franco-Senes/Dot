@@ -321,6 +321,21 @@ pub struct GtkRevealer {
 }
 
 #[repr(C)]
+pub struct GtkStack {
+    _private: [u8; 0],
+}
+
+#[repr(C)]
+pub struct GtkRange {
+    _private: [u8; 0],
+}
+
+#[repr(C)]
+pub struct GtkScale {
+    _private: [u8; 0],
+}
+
+#[repr(C)]
 pub struct GtkCssProvider {
     _private: [u8; 0],
 }
@@ -471,6 +486,11 @@ pub struct AdwEntryRow {
 }
 
 #[repr(C)]
+pub struct AdwSpinRow {
+    _private: [u8; 0],
+}
+
+#[repr(C)]
 pub struct AdwShortcutsDialog {
     _private: [u8; 0],
 }
@@ -506,6 +526,9 @@ extern "C" {
     ) -> guint;
     pub fn g_source_remove(tag: guint) -> gboolean;
     pub fn g_get_user_special_dir(directory: c_int) -> *const c_char;
+    pub fn g_variant_type_new(type_string: *const c_char) -> *mut GVariantType;
+    pub fn g_variant_type_free(type_: *mut GVariantType);
+    pub fn g_variant_get_string(value: *mut GVariant, length: *mut gsize) -> *const c_char;
 }
 
 #[link(name = "gobject-2.0")]
@@ -567,6 +590,7 @@ extern "C" {
     pub fn g_menu_new() -> *mut GMenu;
     pub fn g_menu_append(menu: *mut GMenu, label: *const c_char, detailed_action: *const c_char);
     pub fn g_menu_append_section(menu: *mut GMenu, label: *const c_char, section: *mut GMenuModel);
+    pub fn g_menu_append_submenu(menu: *mut GMenu, label: *const c_char, submenu: *mut GMenuModel);
     pub fn g_menu_remove_all(menu: *mut GMenu);
 
     pub fn g_settings_schema_source_get_default() -> *mut GSettingsSchemaSource;
@@ -631,6 +655,9 @@ extern "C" {
     pub fn gtk_is_initialized() -> gboolean;
     pub fn gtk_disable_setlocale();
     pub fn gtk_disable_portals();
+    pub fn gtk_get_major_version() -> guint;
+    pub fn gtk_get_minor_version() -> guint;
+    pub fn gtk_get_micro_version() -> guint;
 
     pub fn gdk_display_get_default() -> *mut GdkDisplay;
     pub fn gdk_display_get_clipboard(display: *mut GdkDisplay) -> *mut GdkClipboard;
@@ -659,6 +686,7 @@ extern "C" {
     ) -> *mut GdkTexture;
     pub fn gdk_texture_get_width(texture: *mut GdkTexture) -> c_int;
     pub fn gdk_texture_get_height(texture: *mut GdkTexture) -> c_int;
+    pub fn gdk_texture_save_to_png_bytes(texture: *mut GdkTexture) -> *mut GBytes;
     pub fn gdk_content_provider_new_for_value(value: *const GValue) -> *mut GdkContentProvider;
     pub fn gdk_keyval_name(keyval: guint) -> *const c_char;
     pub fn gdk_keyval_to_lower(keyval: guint) -> guint;
@@ -716,6 +744,7 @@ extern "C" {
     pub fn gtk_widget_add_controller(widget: *mut GtkWidget, controller: *mut GtkEventController);
     pub fn gtk_widget_set_cursor_from_name(widget: *mut GtkWidget, name: *const c_char);
     pub fn gtk_widget_set_tooltip_text(widget: *mut GtkWidget, text: *const c_char);
+    pub fn gtk_widget_set_overflow(widget: *mut GtkWidget, overflow: c_int);
     pub fn gtk_widget_queue_draw(widget: *mut GtkWidget);
 
     pub fn gtk_window_set_title(window: *mut GtkWindow, title: *const c_char);
@@ -787,6 +816,7 @@ extern "C" {
     pub fn gtk_label_set_max_width_chars(self_: *mut GtkLabel, n_chars: c_int);
     pub fn gtk_label_set_wrap(self_: *mut GtkLabel, wrap: gboolean);
 
+    pub fn gtk_button_new() -> *mut GtkWidget;
     pub fn gtk_button_new_with_label(label: *const c_char) -> *mut GtkWidget;
     pub fn gtk_button_new_from_icon_name(icon_name: *const c_char) -> *mut GtkWidget;
     pub fn gtk_button_set_label(button: *mut GtkButton, label: *const c_char);
@@ -863,6 +893,7 @@ extern "C" {
         menu_model: *mut GMenuModel,
     );
     pub fn gtk_menu_button_set_popover(menu_button: *mut GtkMenuButton, popover: *mut GtkWidget);
+    pub fn gtk_menu_button_set_child(menu_button: *mut GtkMenuButton, child: *mut GtkWidget);
 
     pub fn gtk_drop_down_new_from_strings(strings: *const *const c_char) -> *mut GtkWidget;
     pub fn gtk_drop_down_get_selected(self_: *mut GtkDropDown) -> guint;
@@ -971,6 +1002,28 @@ extern "C" {
     pub fn gtk_revealer_set_transition_type(revealer: *mut GtkRevealer, transition: c_int);
     pub fn gtk_revealer_set_transition_duration(revealer: *mut GtkRevealer, duration: guint);
 
+    pub fn gtk_stack_new() -> *mut GtkWidget;
+    pub fn gtk_stack_add_named(
+        stack: *mut GtkStack,
+        child: *mut GtkWidget,
+        name: *const c_char,
+    ) -> *mut c_void;
+    pub fn gtk_stack_set_visible_child_name(stack: *mut GtkStack, name: *const c_char);
+    pub fn gtk_stack_get_visible_child_name(stack: *mut GtkStack) -> *const c_char;
+    pub fn gtk_stack_set_transition_type(stack: *mut GtkStack, transition: c_int);
+    pub fn gtk_stack_set_transition_duration(stack: *mut GtkStack, duration: guint);
+
+    pub fn gtk_scale_new_with_range(
+        orientation: c_int,
+        min: gdouble,
+        max: gdouble,
+        step: gdouble,
+    ) -> *mut GtkWidget;
+    pub fn gtk_scale_set_digits(scale: *mut GtkScale, digits: c_int);
+    pub fn gtk_scale_set_draw_value(scale: *mut GtkScale, draw_value: gboolean);
+    pub fn gtk_range_get_value(range: *mut GtkRange) -> gdouble;
+    pub fn gtk_range_set_value(range: *mut GtkRange, value: gdouble);
+
     pub fn gtk_event_controller_set_propagation_phase(
         controller: *mut GtkEventController,
         phase: c_int,
@@ -993,6 +1046,9 @@ extern "C" {
 extern "C" {
     pub fn adw_init();
     pub fn adw_is_initialized() -> gboolean;
+    pub fn adw_get_major_version() -> guint;
+    pub fn adw_get_minor_version() -> guint;
+    pub fn adw_get_micro_version() -> guint;
 
     pub fn adw_application_new(application_id: *const c_char, flags: c_uint)
         -> *mut AdwApplication;
@@ -1190,6 +1246,7 @@ extern "C" {
 
     pub fn adw_action_row_new() -> *mut GtkWidget;
     pub fn adw_action_row_set_subtitle(self_: *mut AdwActionRow, subtitle: *const c_char);
+    pub fn adw_action_row_add_prefix(self_: *mut AdwActionRow, widget: *mut GtkWidget);
     pub fn adw_action_row_add_suffix(self_: *mut AdwActionRow, widget: *mut GtkWidget);
 
     pub fn adw_switch_row_new() -> *mut GtkWidget;
@@ -1203,6 +1260,12 @@ extern "C" {
 
     pub fn adw_entry_row_new() -> *mut GtkWidget;
     pub fn adw_entry_row_set_show_apply_button(self_: *mut AdwEntryRow, show: gboolean);
+
+    pub fn adw_spin_row_new_with_range(min: gdouble, max: gdouble, step: gdouble)
+        -> *mut GtkWidget;
+    pub fn adw_spin_row_get_value(self_: *mut AdwSpinRow) -> gdouble;
+    pub fn adw_spin_row_set_value(self_: *mut AdwSpinRow, value: gdouble);
+    pub fn adw_spin_row_set_digits(self_: *mut AdwSpinRow, digits: guint);
 
     pub fn adw_shortcuts_dialog_new() -> *mut AdwDialog;
     pub fn adw_shortcuts_dialog_add(

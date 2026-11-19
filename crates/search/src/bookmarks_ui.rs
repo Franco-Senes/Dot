@@ -3,11 +3,12 @@
 //! carpetas, búsqueda, edición, borrado, reordenación Drag & Drop e importación/exportación
 //! HTML de marcadores Netscape (`Bookmarks.swift` + `BookmarksFile.swift`).
 
+use crate::icons::{self, IconId};
 use gnome_platform::adw::ApplicationWindow;
 use gnome_platform::gdk::{ContentProvider, DragAction};
 use gnome_platform::gtk::{
     Align, AsEditable, AsWidget, BoxWidget, Button, DragSource, DropDown, DropTarget,
-    EllipsizeMode, Entry, FileDialog, Image, Label, ListBox, ListBoxRow, MenuButton, Orientation,
+    EllipsizeMode, Entry, FileDialog, Label, ListBox, ListBoxRow, MenuButton, Orientation,
     PolicyType, Popover, PositionType, ScrolledWindow, SearchEntry, SelectionMode, Separator,
 };
 use search_core::address::{display_at_rest, sanitize_url_for_ui};
@@ -369,8 +370,7 @@ impl BookmarksPanel {
         title.set_hexpand(true);
         header.append(&title);
 
-        let add_folder_btn = Button::from_icon_name("folder-new-symbolic");
-        add_folder_btn.add_css_class("flat");
+        let add_folder_btn = icons::icon_button(IconId::FolderPlus, 15);
         add_folder_btn.set_tooltip_text(Some("Nueva carpeta"));
         header.append(&add_folder_btn);
 
@@ -389,14 +389,13 @@ impl BookmarksPanel {
         io_pop.set_child(Some(&io_box));
 
         let io_menu_btn = MenuButton::new();
-        io_menu_btn.set_icon_name("view-more-symbolic");
+        io_menu_btn.set_child(Some(&icons::image(IconId::MoreVert, 15)));
         io_menu_btn.add_css_class("flat");
         io_menu_btn.set_tooltip_text(Some("Importar o exportar marcadores HTML"));
         io_menu_btn.set_popover(Some(&io_pop));
         header.append(&io_menu_btn);
 
-        let close_btn = Button::from_icon_name("window-close-symbolic");
-        close_btn.add_css_class("flat");
+        let close_btn = icons::icon_button(IconId::Close, 15);
         close_btn.set_tooltip_text(Some("Cerrar panel (Esc)"));
         {
             let cb = on_close.clone();
@@ -741,16 +740,18 @@ impl BookmarksPanel {
         main_btn.set_hexpand(true);
 
         let btn_inner = BoxWidget::new(Orientation::Horizontal, 6);
-        let icon = Image::from_icon_name(if is_folder {
-            if is_open {
-                "folder-open-symbolic"
+        let icon = icons::image(
+            if is_folder {
+                if is_open {
+                    IconId::FolderOpen
+                } else {
+                    IconId::Folder
+                }
             } else {
-                "folder-symbolic"
-            }
-        } else {
-            "starred-symbolic"
-        });
-        icon.set_pixel_size(15);
+                IconId::Star
+            },
+            15,
+        );
         btn_inner.append(&icon);
 
         let text_col = BoxWidget::new(Orientation::Vertical, 1);
@@ -807,8 +808,7 @@ impl BookmarksPanel {
         hbox.append(&main_btn);
 
         // Editar título/URL.
-        let edit_btn = Button::from_icon_name("document-edit-symbolic");
-        edit_btn.add_css_class("flat");
+        let edit_btn = icons::icon_button(IconId::Edit, 14);
         edit_btn.add_css_class("search-tab-mini-btn");
         edit_btn.set_tooltip_text(Some("Editar"));
         {
@@ -819,8 +819,7 @@ impl BookmarksPanel {
         hbox.append(&edit_btn);
 
         // Borrar marcador o carpeta.
-        let del_btn = Button::from_icon_name("user-trash-symbolic");
-        del_btn.add_css_class("flat");
+        let del_btn = icons::icon_button(IconId::Trash, 14);
         del_btn.add_css_class("search-tab-mini-btn");
         del_btn.set_tooltip_text(Some("Eliminar"));
         {

@@ -90,6 +90,19 @@ impl Texture {
         unsafe { sys::gdk_texture_get_height(self.obj.as_ptr().cast()) }
     }
 
+    pub fn save_to_png_bytes(&self) -> Option<Bytes> {
+        unsafe {
+            let ptr = sys::gdk_texture_save_to_png_bytes(self.obj.as_ptr().cast());
+            Bytes::from_new_ptr(ptr)
+        }
+    }
+
+    /// `GdkTexture` implementa directamente `GIcon` y `GLoadableIcon` en GTK4,
+    /// evitando pasar por `gdk-pixbuf`/`glycin` al usarse en `AdwTabPage::set_icon`.
+    pub fn to_gicon(&self) -> crate::gio::Icon {
+        crate::gio::Icon::from_object_ref(self.obj.clone())
+    }
+
     pub fn as_paintable_ptr(&self) -> *mut sys::GdkPaintable {
         self.obj.as_ptr().cast()
     }
@@ -138,6 +151,16 @@ impl MemoryTexture {
         };
         let obj = unsafe { ObjectRef::from_new_ptr(ptr.cast()) };
         Self { obj }
+    }
+
+    pub fn to_texture(&self) -> Texture {
+        Texture {
+            obj: self.obj.clone(),
+        }
+    }
+
+    pub fn to_gicon(&self) -> crate::gio::Icon {
+        crate::gio::Icon::from_object_ref(self.obj.clone())
     }
 
     pub fn as_paintable_ptr(&self) -> *mut sys::GdkPaintable {
