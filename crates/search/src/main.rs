@@ -10,6 +10,7 @@ mod address;
 mod app;
 mod bench;
 mod bookmarks_ui;
+mod boosts_ui;
 mod browser_view;
 mod cef_engine;
 mod curtain;

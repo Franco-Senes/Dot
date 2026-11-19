@@ -3,6 +3,7 @@
 pub mod address;
 pub mod bench_proto;
 pub mod bookmarks;
+pub mod boosts;
 pub mod chromium_flags;
 pub mod clear_data;
 pub mod closed_tabs;
