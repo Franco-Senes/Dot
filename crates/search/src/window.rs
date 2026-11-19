@@ -1857,7 +1857,7 @@ impl BrowserWindow {
         }
     }
 
-    fn selected_tab_id(&self) -> Option<u64> {
+    pub fn selected_tab_id(&self) -> Option<u64> {
         let sel = self.inner.tab_view.selected_page()?;
         self.inner
             .tabs
@@ -1958,7 +1958,7 @@ impl BrowserWindow {
         }
     }
 
-    fn ensure_tab_awake(&self, tab_id: u64) -> Option<BrowserView> {
+    pub fn ensure_tab_awake(&self, tab_id: u64) -> Option<BrowserView> {
         let existing_or_spec = {
             let tabs = self.inner.tabs.borrow();
             let tab = tabs.iter().find(|t| t.id == tab_id)?;
@@ -3471,13 +3471,110 @@ impl BrowserWindow {
         }
     }
 
-    fn tab_browser_view(&self, tab_id: u64) -> Option<BrowserView> {
+    pub fn tab_browser_view(&self, tab_id: u64) -> Option<BrowserView> {
         self.inner
             .tabs
             .borrow()
             .iter()
             .find(|t| t.id == tab_id)
             .and_then(|t| t.browser.clone())
+    }
+
+    pub fn tab_summaries(&self) -> Vec<search_core::bench_proto::TabSummary> {
+        self.sync_order_with_tab_view();
+        let selected_page = self.inner.tab_view.selected_page();
+        self.inner
+            .tabs
+            .borrow()
+            .iter()
+            .map(|t| search_core::bench_proto::TabSummary {
+                id: t.id.to_string(),
+                title: t.display_title(),
+                url: t.url.clone(),
+                active: selected_page.as_ref() == Some(&t.page),
+                bench: false,
+                loading: t.loading,
+                asleep: t.browser.is_none() && t.settings_page.is_none(),
+                pinned: t.pin.is_some(),
+                private: self.inner.is_private,
+                group: t.folder_id.clone(),
+            })
+            .collect()
+    }
+
+    pub fn tab_summary(&self, tab_id: u64) -> Option<search_core::bench_proto::TabSummary> {
+        self.tab_summaries()
+            .into_iter()
+            .find(|s| s.id == tab_id.to_string())
+    }
+
+    pub fn pair_split_tabs(&self, dragged_id: u64, with_id: u64, side: &str) -> bool {
+        if dragged_id == with_id {
+            return false;
+        }
+        let has_both = {
+            let tabs = self.inner.tabs.borrow();
+            tabs.iter().any(|t| t.id == dragged_id) && tabs.iter().any(|t| t.id == with_id)
+        };
+        if !has_both {
+            return false;
+        }
+        self.separate_split_for_tab(dragged_id);
+        self.separate_split_for_tab(with_id);
+
+        let (left, right) = if side == "left" {
+            (dragged_id, with_id)
+        } else {
+            (with_id, dragged_id)
+        };
+        let split_id = self.inner.next_split_id.get();
+        self.inner.next_split_id.set(split_id.saturating_add(1));
+        let mut split = TabSplit::new_pair(split_id, left, right, 0.5);
+        split.focused = Some(dragged_id);
+        self.inner.splits.borrow_mut().push(split);
+
+        self.select_tab_by_id(dragged_id);
+        self.sync_split_presentation();
+        self.sync_sidebar();
+        self.notify_session_dirty();
+        true
+    }
+
+    pub fn set_split_fraction(&self, split_id: u64, fraction: f64) -> bool {
+        let changed = {
+            let mut splits = self.inner.splits.borrow_mut();
+            if let Some(sp) = splits.iter_mut().find(|sp| sp.id == split_id) {
+                sp.set_primary_fraction(fraction);
+                true
+            } else {
+                false
+            }
+        };
+        if changed {
+            self.sync_split_presentation();
+            self.notify_session_dirty();
+        }
+        changed
+    }
+
+    pub fn split_state_json(&self) -> serde_json::Value {
+        let splits: Vec<serde_json::Value> = self
+            .inner
+            .splits
+            .borrow()
+            .iter()
+            .map(|sp| {
+                let tabs: Vec<String> = sp.tabs.iter().map(u64::to_string).collect();
+                serde_json::json!({
+                    "id": sp.id.to_string(),
+                    "tabs": tabs,
+                    "axis": "horizontal",
+                    "sizes": sp.sizes,
+                    "focused": sp.focused.map(|id| id.to_string()),
+                })
+            })
+            .collect();
+        serde_json::json!({ "splits": splits })
     }
 
     fn sync_split_presentation(&self) {

@@ -422,3 +422,307 @@ impl Drop for Settings {
         }
     }
 }
+
+/// Conexión D-Bus de sesión obtenida desde `GApplication` (`g_application_get_dbus_connection`).
+#[derive(Clone)]
+pub struct DBusConnection {
+    obj: ObjectRef,
+}
+
+impl DBusConnection {
+    /// Envuelve un puntero prestado `*mut sys::GDBusConnection` sin transferir propiedad.
+    ///
+    /// # Safety
+    /// `ptr` debe ser un puntero válido a `GDBusConnection` o nulo.
+    pub unsafe fn from_borrowed_ptr(ptr: *mut sys::GDBusConnection) -> Option<Self> {
+        if ptr.is_null() {
+            None
+        } else {
+            Some(Self {
+                obj: ObjectRef::from_borrowed_ptr(ptr.cast())?,
+            })
+        }
+    }
+
+    /// Registra una interfaz D-Bus descrita por XML de introspección en `object_path`.
+    pub fn register_object<F>(
+        &self,
+        object_path: &str,
+        introspection_xml: &str,
+        interface_name: &str,
+        on_method_call: F,
+    ) -> Result<DBusRegistration, String>
+    where
+        F: Fn(&str, DBusParams, DBusInvocation) + 'static,
+    {
+        let c_xml = to_cstring(introspection_xml);
+        let c_iface = to_cstring(interface_name);
+        let c_path = to_cstring(object_path);
+
+        unsafe {
+            let mut err: *mut sys::GError = ptr::null_mut();
+            let node_info = sys::g_dbus_node_info_new_for_xml(c_xml.as_ptr(), &mut err);
+            if node_info.is_null() {
+                let msg = take_gerror_message(err, "g_dbus_node_info_new_for_xml failed");
+                return Err(msg);
+            }
+
+            let iface_info = sys::g_dbus_node_info_lookup_interface(node_info, c_iface.as_ptr());
+            if iface_info.is_null() {
+                sys::g_dbus_node_info_unref(node_info);
+                return Err(format!("interface '{interface_name}' not found in XML"));
+            }
+
+            let state = Box::new(DBusMethodState {
+                handler: Box::new(on_method_call),
+            });
+            let state_ptr = Box::into_raw(state);
+
+            let vtable = sys::GDBusInterfaceVTable {
+                method_call: Some(dbus_method_trampoline),
+                get_property: None,
+                set_property: None,
+                padding: [ptr::null_mut(); 8],
+            };
+
+            let reg_id = sys::g_dbus_connection_register_object(
+                self.obj.as_ptr().cast(),
+                c_path.as_ptr(),
+                iface_info,
+                &vtable,
+                state_ptr.cast(),
+                Some(dbus_method_state_destroy),
+                &mut err,
+            );
+            sys::g_dbus_node_info_unref(node_info);
+
+            if reg_id == 0 {
+                let msg = take_gerror_message(err, "g_dbus_connection_register_object failed");
+                return Err(msg);
+            }
+
+            Ok(DBusRegistration {
+                connection: self.clone(),
+                registration_id: reg_id,
+            })
+        }
+    }
+}
+
+pub struct DBusRegistration {
+    connection: DBusConnection,
+    registration_id: u32,
+}
+
+impl DBusRegistration {
+    pub fn unregister(mut self) {
+        if self.registration_id != 0 {
+            unsafe {
+                sys::g_dbus_connection_unregister_object(
+                    self.connection.obj.as_ptr().cast(),
+                    self.registration_id,
+                );
+            }
+            self.registration_id = 0;
+        }
+    }
+}
+
+impl Drop for DBusRegistration {
+    fn drop(&mut self) {
+        if self.registration_id != 0 {
+            unsafe {
+                sys::g_dbus_connection_unregister_object(
+                    self.connection.obj.as_ptr().cast(),
+                    self.registration_id,
+                );
+            }
+            self.registration_id = 0;
+        }
+    }
+}
+
+/// Parámetros recibidos en una llamada a método D-Bus (`GVariant` tupla).
+pub struct DBusParams {
+    ptr: *mut sys::GVariant,
+}
+
+impl DBusParams {
+    pub fn string(&self, index: usize) -> Option<String> {
+        if self.ptr.is_null() {
+            return None;
+        }
+        unsafe {
+            let child = sys::g_variant_get_child_value(self.ptr, index);
+            if child.is_null() {
+                return None;
+            }
+            let cstr = sys::g_variant_get_string(child, ptr::null_mut());
+            let out = if cstr.is_null() {
+                None
+            } else {
+                Some(CStr::from_ptr(cstr).to_string_lossy().into_owned())
+            };
+            sys::g_variant_unref(child);
+            out
+        }
+    }
+
+    pub fn uint64(&self, index: usize) -> Option<u64> {
+        if self.ptr.is_null() {
+            return None;
+        }
+        unsafe {
+            let child = sys::g_variant_get_child_value(self.ptr, index);
+            if child.is_null() {
+                return None;
+            }
+            let val = sys::g_variant_get_uint64(child);
+            sys::g_variant_unref(child);
+            Some(val)
+        }
+    }
+
+    pub fn boolean(&self, index: usize) -> Option<bool> {
+        if self.ptr.is_null() {
+            return None;
+        }
+        unsafe {
+            let child = sys::g_variant_get_child_value(self.ptr, index);
+            if child.is_null() {
+                return None;
+            }
+            let val = sys::g_variant_get_boolean(child) != 0;
+            sys::g_variant_unref(child);
+            Some(val)
+        }
+    }
+}
+
+/// Invocación D-Bus pendiente de respuesta.
+pub struct DBusInvocation {
+    ptr: *mut sys::GDBusMethodInvocation,
+}
+
+impl DBusInvocation {
+    pub fn return_unit(self) {
+        unsafe {
+            sys::g_dbus_method_invocation_return_value(self.ptr, ptr::null_mut());
+        }
+    }
+
+    pub fn return_string(self, value: &str) {
+        let c_val = to_cstring(value);
+        unsafe {
+            let v_str = sys::g_variant_new_string(c_val.as_ptr());
+            let tuple = sys::g_variant_new_tuple(&v_str, 1);
+            sys::g_dbus_method_invocation_return_value(self.ptr, tuple);
+        }
+    }
+
+    pub fn return_bool(self, value: bool) {
+        unsafe {
+            let v_bool = sys::g_variant_new_boolean(if value { sys::GTRUE } else { sys::GFALSE });
+            let tuple = sys::g_variant_new_tuple(&v_bool, 1);
+            sys::g_dbus_method_invocation_return_value(self.ptr, tuple);
+        }
+    }
+
+    /// Devuelve `(a(tss))`: array de tuplas `(tab_id, title, url)`.
+    pub fn return_tab_list(self, tabs: &[(u64, String, String)]) {
+        let c_elem_type = to_cstring("(tss)");
+        unsafe {
+            let elem_type = sys::g_variant_type_new(c_elem_type.as_ptr());
+            let mut items: Vec<*mut sys::GVariant> = Vec::with_capacity(tabs.len());
+            for (id, title, url) in tabs {
+                let c_title = to_cstring(title);
+                let c_url = to_cstring(url);
+                let fields = [
+                    sys::g_variant_new_uint64(*id),
+                    sys::g_variant_new_string(c_title.as_ptr()),
+                    sys::g_variant_new_string(c_url.as_ptr()),
+                ];
+                items.push(sys::g_variant_new_tuple(fields.as_ptr(), fields.len()));
+            }
+            let arr = sys::g_variant_new_array(
+                elem_type,
+                if items.is_empty() {
+                    ptr::null()
+                } else {
+                    items.as_ptr()
+                },
+                items.len(),
+            );
+            sys::g_variant_type_free(elem_type);
+            let tuple = sys::g_variant_new_tuple(&arr, 1);
+            sys::g_dbus_method_invocation_return_value(self.ptr, tuple);
+        }
+    }
+
+    pub fn return_error(self, error_name: &str, message: &str) {
+        let c_name = to_cstring(error_name);
+        let c_msg = to_cstring(message);
+        unsafe {
+            sys::g_dbus_method_invocation_return_dbus_error(
+                self.ptr,
+                c_name.as_ptr(),
+                c_msg.as_ptr(),
+            );
+        }
+    }
+}
+
+type DBusMethodHandler = Box<dyn Fn(&str, DBusParams, DBusInvocation)>;
+
+struct DBusMethodState {
+    handler: DBusMethodHandler,
+}
+
+unsafe extern "C" fn dbus_method_state_destroy(data: sys::gpointer) {
+    if !data.is_null() {
+        drop(Box::from_raw(data.cast::<DBusMethodState>()));
+    }
+}
+
+unsafe extern "C" fn dbus_method_trampoline(
+    _connection: *mut sys::GDBusConnection,
+    _sender: *const libc::c_char,
+    _object_path: *const libc::c_char,
+    _interface_name: *const libc::c_char,
+    method_name: *const libc::c_char,
+    parameters: *mut sys::GVariant,
+    invocation: *mut sys::GDBusMethodInvocation,
+    user_data: sys::gpointer,
+) {
+    if user_data.is_null() || method_name.is_null() || invocation.is_null() {
+        return;
+    }
+    let state = &*(user_data as *const DBusMethodState);
+    let method = CStr::from_ptr(method_name).to_string_lossy();
+    (state.handler)(
+        &method,
+        DBusParams { ptr: parameters },
+        DBusInvocation { ptr: invocation },
+    );
+}
+
+unsafe fn take_gerror_message(err: *mut sys::GError, fallback: &str) -> String {
+    if err.is_null() {
+        return fallback.to_string();
+    }
+    // GError layout: domain (u32), code (i32), message (*mut c_char)
+    #[repr(C)]
+    struct GErrorView {
+        _domain: u32,
+        _code: i32,
+        message: *mut libc::c_char,
+    }
+    let view = &*(err as *const GErrorView);
+    let msg = if view.message.is_null() {
+        fallback.to_string()
+    } else {
+        CStr::from_ptr(view.message).to_string_lossy().into_owned()
+    };
+    sys::g_error_free(err);
+    msg
+}
