@@ -16,6 +16,7 @@ use std::collections::HashMap;
 const TEX_SIZE: i32 = 32;
 
 /// Catálogo completo de iconos de interfaz usados en Search Linux.
+#[allow(dead_code)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum IconId {
     Plus,
@@ -56,6 +57,40 @@ pub enum IconId {
     MediaPlay,
     MediaPause,
     PipReturn,
+    Back,
+    Forward,
+    Home,
+    BookmarkFilled,
+    BookmarkOutline,
+    ShieldOff,
+    Lock,
+    LockOpen,
+    ZoomIn,
+    ZoomOut,
+    Camera,
+    Code,
+    Printer,
+    Copy,
+    QrCode,
+    SplitHorizontal,
+    Pip,
+    Eye,
+    EyeOff,
+    Moon,
+    Sun,
+    Command,
+    Clock,
+    Layers,
+    Sliders,
+    ExternalLink,
+    RotateCcw,
+    Ban,
+    CheckCircle,
+    XCircle,
+    BookOpen,
+    Note,
+    Spaces,
+    Broom,
 }
 
 thread_local! {
@@ -134,7 +169,7 @@ pub fn monogram_letter(title: &str, url: &str) -> String {
     if let Some(ch) = title.trim().chars().find(|c| c.is_alphanumeric()) {
         return ch.to_uppercase().to_string();
     }
-    "•".to_string()
+    "?".to_string()
 }
 
 /// Crea una insignia de monograma estilizada para pestañas sin favicon (estilo `Design.swift`).
@@ -247,6 +282,10 @@ impl Canvas {
         self.blend_sdf(|x, y| sd_rounded_box(x - cx, y - cy, bx, by, corner_r));
     }
 
+    fn fill_triangle(&mut self, a: (f32, f32), b: (f32, f32), c: (f32, f32)) {
+        self.blend_sdf(|x, y| sd_triangle(x, y, a, b, c));
+    }
+
     fn arc_stroke(
         &mut self,
         cx: f32,
@@ -309,6 +348,35 @@ fn sd_rounded_box(px: f32, py: f32, bx: f32, by: f32, r: f32) -> f32 {
     let qx = px.abs() - bx;
     let qy = py.abs() - by;
     qx.max(0.0).hypot(qy.max(0.0)) + qx.max(qy).min(0.0) - r
+}
+
+fn sd_triangle(px: f32, py: f32, p0: (f32, f32), p1: (f32, f32), p2: (f32, f32)) -> f32 {
+    let e0 = (p1.0 - p0.0, p1.1 - p0.1);
+    let e1 = (p2.0 - p1.0, p2.1 - p1.1);
+    let e2 = (p0.0 - p2.0, p0.1 - p2.1);
+    let v0 = (px - p0.0, py - p0.1);
+    let v1 = (px - p1.0, py - p1.1);
+    let v2 = (px - p2.0, py - p2.1);
+
+    let dot = |a: (f32, f32), b: (f32, f32)| a.0 * b.0 + a.1 * b.1;
+    let clamp01 = |t: f32| t.clamp(0.0, 1.0);
+
+    let t0 = clamp01(dot(v0, e0) / dot(e0, e0).max(1e-6));
+    let t1 = clamp01(dot(v1, e1) / dot(e1, e1).max(1e-6));
+    let t2 = clamp01(dot(v2, e2) / dot(e2, e2).max(1e-6));
+
+    let pq0 = (v0.0 - e0.0 * t0, v0.1 - e0.1 * t0);
+    let pq1 = (v1.0 - e1.0 * t1, v1.1 - e1.1 * t1);
+    let pq2 = (v2.0 - e2.0 * t2, v2.1 - e2.1 * t2);
+
+    let s = (e0.0 * e2.1 - e0.1 * e2.0).signum();
+    let d0 = (dot(pq0, pq0), s * (v0.0 * e0.1 - v0.1 * e0.0));
+    let d1 = (dot(pq1, pq1), s * (v1.0 * e1.1 - v1.1 * e1.0));
+    let d2 = (dot(pq2, pq2), s * (v2.0 * e2.1 - v2.1 * e2.0));
+
+    let min_dist_sq = d0.0.min(d1.0).min(d2.0);
+    let min_sign = d0.1.min(d1.1).min(d2.1);
+    -min_dist_sq.sqrt() * min_sign.signum()
 }
 
 fn rasterize_icon(id: IconId, dark: bool) -> Texture {
@@ -600,11 +668,380 @@ fn rasterize_icon(id: IconId, dark: bool) -> Texture {
             c.polyline(&[(8.8, 6.2), (6.0, 6.2), (6.0, 9.0)], 1.35);
             c.line(6.2, 6.4, 10.6, 10.8, 1.35);
         }
+        IconId::Back => {
+            // Desplazado ligeramente a la izquierda para centrado óptico.
+            c.line(12.8, 8.0, 3.2, 8.0, 1.5);
+            c.polyline(&[(7.2, 4.0), (3.0, 8.0), (7.2, 12.0)], 1.5);
+        }
+        IconId::Forward => {
+            c.line(3.2, 8.0, 12.8, 8.0, 1.5);
+            c.polyline(&[(8.8, 4.0), (13.0, 8.0), (8.8, 12.0)], 1.5);
+        }
+        IconId::Home => {
+            c.polyline(&[(2.2, 7.6), (8.0, 2.6), (13.8, 7.6)], 1.4);
+            c.polyline(&[(3.8, 6.6), (3.8, 13.2), (12.2, 13.2), (12.2, 6.6)], 1.35);
+            c.polyline(&[(6.6, 13.2), (6.6, 9.6), (9.4, 9.6), (9.4, 13.2)], 1.25);
+        }
+        IconId::BookmarkFilled => {
+            c.rounded_rect_fill(4.2, 2.6, 7.6, 7.8, 1.1);
+            c.fill_triangle((4.2, 9.8), (8.0, 9.8), (4.2, 13.4));
+            c.fill_triangle((11.8, 9.8), (8.0, 9.8), (11.8, 13.4));
+        }
+        IconId::BookmarkOutline => {
+            c.polyline(
+                &[
+                    (4.2, 13.4),
+                    (4.2, 2.8),
+                    (11.8, 2.8),
+                    (11.8, 13.4),
+                    (8.0, 10.4),
+                    (4.2, 13.4),
+                ],
+                1.35,
+            );
+        }
+        IconId::ShieldOff => {
+            c.polyline(
+                &[
+                    (8.0, 2.2),
+                    (13.0, 4.2),
+                    (12.6, 8.6),
+                    (8.0, 13.6),
+                    (3.4, 8.6),
+                    (3.0, 4.2),
+                    (8.0, 2.2),
+                ],
+                1.35,
+            );
+            c.line(2.6, 2.6, 13.4, 13.4, 1.5);
+        }
+        IconId::Lock => {
+            c.rounded_rect_stroke(3.4, 7.2, 9.2, 6.4, 1.5, 1.35);
+            c.arc_stroke(8.0, 5.4, 2.7, 180.0, 360.0, 1.35);
+            c.line(5.3, 5.4, 5.3, 7.2, 1.35);
+            c.line(10.7, 5.4, 10.7, 7.2, 1.35);
+            c.circle_fill(8.0, 10.4, 0.9);
+        }
+        IconId::LockOpen => {
+            c.rounded_rect_stroke(3.4, 7.2, 9.2, 6.4, 1.5, 1.35);
+            c.arc_stroke(9.6, 5.0, 2.6, 185.0, 355.0, 1.35);
+            c.line(7.0, 5.0, 7.0, 7.2, 1.35);
+            c.circle_fill(8.0, 10.4, 0.9);
+        }
+        IconId::ZoomIn => {
+            c.circle_stroke(7.0, 7.0, 4.3, 1.4);
+            c.line(10.2, 10.2, 13.4, 13.4, 1.55);
+            c.line(5.2, 7.0, 8.8, 7.0, 1.3);
+            c.line(7.0, 5.2, 7.0, 8.8, 1.3);
+        }
+        IconId::ZoomOut => {
+            c.circle_stroke(7.0, 7.0, 4.3, 1.4);
+            c.line(10.2, 10.2, 13.4, 13.4, 1.55);
+            c.line(5.2, 7.0, 8.8, 7.0, 1.3);
+        }
+        IconId::Camera => {
+            c.rounded_rect_stroke(2.0, 4.6, 12.0, 8.6, 1.8, 1.35);
+            c.polyline(&[(5.4, 4.6), (6.3, 2.8), (9.7, 2.8), (10.6, 4.6)], 1.3);
+            c.circle_stroke(8.0, 8.9, 2.2, 1.3);
+        }
+        IconId::Code => {
+            c.polyline(&[(5.2, 5.0), (2.2, 8.0), (5.2, 11.0)], 1.45);
+            c.line(9.2, 3.8, 6.8, 12.2, 1.35);
+            c.polyline(&[(10.8, 5.0), (13.8, 8.0), (10.8, 11.0)], 1.45);
+        }
+        IconId::Printer => {
+            c.rounded_rect_stroke(4.8, 2.2, 6.4, 3.0, 0.6, 1.25);
+            c.rounded_rect_stroke(2.2, 5.2, 11.6, 5.4, 1.4, 1.35);
+            c.rounded_rect_stroke(4.6, 9.2, 6.8, 4.4, 0.7, 1.25);
+            c.circle_fill(11.4, 7.2, 0.75);
+        }
+        IconId::Copy => {
+            c.polyline(
+                &[
+                    (5.6, 4.8),
+                    (5.6, 2.8),
+                    (13.2, 2.8),
+                    (13.2, 10.4),
+                    (11.0, 10.4),
+                ],
+                1.3,
+            );
+            c.rounded_rect_stroke(2.8, 5.4, 7.8, 8.0, 1.3, 1.35);
+        }
+        IconId::QrCode => {
+            c.rounded_rect_stroke(2.4, 2.4, 4.4, 4.4, 0.6, 1.25);
+            c.rounded_rect_stroke(9.2, 2.4, 4.4, 4.4, 0.6, 1.25);
+            c.rounded_rect_stroke(2.4, 9.2, 4.4, 4.4, 0.6, 1.25);
+            c.rounded_rect_fill(3.9, 3.9, 1.4, 1.4, 0.2);
+            c.rounded_rect_fill(10.7, 3.9, 1.4, 1.4, 0.2);
+            c.rounded_rect_fill(3.9, 10.7, 1.4, 1.4, 0.2);
+            c.rounded_rect_fill(9.2, 9.2, 1.6, 1.6, 0.2);
+            c.rounded_rect_fill(11.8, 9.2, 1.8, 1.8, 0.2);
+            c.rounded_rect_fill(9.2, 11.8, 1.8, 1.8, 0.2);
+            c.rounded_rect_fill(12.0, 12.0, 1.6, 1.6, 0.2);
+        }
+        IconId::SplitHorizontal => {
+            c.rounded_rect_stroke(2.0, 2.6, 12.0, 10.8, 1.8, 1.35);
+            c.line(8.0, 2.8, 8.0, 13.2, 1.35);
+        }
+        IconId::Pip => {
+            c.rounded_rect_stroke(2.0, 2.8, 12.0, 10.4, 1.6, 1.3);
+            c.rounded_rect_fill(7.6, 7.4, 4.8, 4.0, 0.8);
+        }
+        IconId::Eye => {
+            c.arc_stroke(8.0, 10.8, 6.8, 222.0, 318.0, 1.35);
+            c.arc_stroke(8.0, 5.2, 6.8, 42.0, 138.0, 1.35);
+            c.circle_stroke(8.0, 8.0, 2.0, 1.35);
+        }
+        IconId::EyeOff => {
+            c.arc_stroke(8.0, 10.8, 6.8, 222.0, 318.0, 1.3);
+            c.arc_stroke(8.0, 5.2, 6.8, 42.0, 138.0, 1.3);
+            c.circle_stroke(8.0, 8.0, 1.9, 1.3);
+            c.line(2.6, 2.6, 13.4, 13.4, 1.5);
+        }
+        IconId::Moon => {
+            c.arc_stroke(8.6, 8.0, 5.4, 65.0, 295.0, 1.4);
+            c.arc_stroke(11.4, 6.6, 4.2, 118.0, 252.0, 1.35);
+        }
+        IconId::Sun => {
+            c.circle_stroke(8.0, 8.0, 2.8, 1.4);
+            for i in 0..8 {
+                let ang = ((i as f32) * 45.0).to_radians();
+                let x1 = 8.0 + 4.5 * ang.cos();
+                let y1 = 8.0 + 4.5 * ang.sin();
+                let x2 = 8.0 + 6.1 * ang.cos();
+                let y2 = 8.0 + 6.1 * ang.sin();
+                c.line(x1, y1, x2, y2, 1.35);
+            }
+        }
+        IconId::Command => {
+            c.line(5.8, 5.8, 10.2, 5.8, 1.3);
+            c.line(5.8, 10.2, 10.2, 10.2, 1.3);
+            c.line(5.8, 5.8, 5.8, 10.2, 1.3);
+            c.line(10.2, 5.8, 10.2, 10.2, 1.3);
+            c.circle_stroke(4.2, 4.2, 1.6, 1.25);
+            c.circle_stroke(11.8, 4.2, 1.6, 1.25);
+            c.circle_stroke(4.2, 11.8, 1.6, 1.25);
+            c.circle_stroke(11.8, 11.8, 1.6, 1.25);
+        }
+        IconId::Clock => {
+            c.circle_stroke(8.0, 8.0, 5.6, 1.35);
+            c.line(8.0, 4.6, 8.0, 8.2, 1.35);
+            c.line(8.0, 8.2, 10.6, 9.8, 1.35);
+        }
+        IconId::Layers => {
+            c.polyline(
+                &[(8.0, 2.4), (13.6, 5.2), (8.0, 8.0), (2.4, 5.2), (8.0, 2.4)],
+                1.3,
+            );
+            c.polyline(&[(2.4, 8.0), (8.0, 10.8), (13.6, 8.0)], 1.3);
+            c.polyline(&[(2.4, 10.8), (8.0, 13.6), (13.6, 10.8)], 1.3);
+        }
+        IconId::Sliders => {
+            c.line(2.4, 4.2, 13.6, 4.2, 1.3);
+            c.circle_fill(5.4, 4.2, 1.3);
+            c.line(2.4, 8.0, 13.6, 8.0, 1.3);
+            c.circle_fill(10.6, 8.0, 1.3);
+            c.line(2.4, 11.8, 13.6, 11.8, 1.3);
+            c.circle_fill(6.6, 11.8, 1.3);
+        }
+        IconId::ExternalLink => {
+            c.polyline(
+                &[
+                    (9.0, 3.2),
+                    (3.0, 3.2),
+                    (3.0, 13.0),
+                    (12.8, 13.0),
+                    (12.8, 7.0),
+                ],
+                1.35,
+            );
+            c.line(7.4, 8.6, 13.2, 2.8, 1.4);
+            c.polyline(&[(9.6, 2.8), (13.2, 2.8), (13.2, 6.4)], 1.4);
+        }
+        IconId::RotateCcw => {
+            c.arc_stroke(8.0, 8.0, 4.8, -140.0, 175.0, 1.4);
+            c.polyline(&[(3.0, 3.4), (3.2, 6.4), (6.2, 6.0)], 1.4);
+        }
+        IconId::Ban => {
+            c.circle_stroke(8.0, 8.0, 5.5, 1.4);
+            c.line(4.1, 4.1, 11.9, 11.9, 1.4);
+        }
+        IconId::CheckCircle => {
+            c.circle_stroke(8.0, 8.0, 5.6, 1.35);
+            c.polyline(&[(5.2, 8.2), (7.2, 10.2), (11.0, 6.0)], 1.45);
+        }
+        IconId::XCircle => {
+            c.circle_stroke(8.0, 8.0, 5.6, 1.35);
+            c.line(5.6, 5.6, 10.4, 10.4, 1.4);
+            c.line(10.4, 5.6, 5.6, 10.4, 1.4);
+        }
+        IconId::BookOpen => {
+            c.line(8.0, 4.2, 8.0, 13.2, 1.25);
+            c.polyline(
+                &[
+                    (8.0, 4.2),
+                    (4.4, 3.0),
+                    (2.2, 3.6),
+                    (2.2, 12.2),
+                    (4.6, 11.8),
+                    (8.0, 13.2),
+                ],
+                1.3,
+            );
+            c.polyline(
+                &[
+                    (8.0, 4.2),
+                    (11.6, 3.0),
+                    (13.8, 3.6),
+                    (13.8, 12.2),
+                    (11.4, 11.8),
+                    (8.0, 13.2),
+                ],
+                1.3,
+            );
+        }
+        IconId::Note => {
+            c.polyline(
+                &[
+                    (3.2, 2.4),
+                    (10.0, 2.4),
+                    (12.8, 5.2),
+                    (12.8, 13.6),
+                    (3.2, 13.6),
+                    (3.2, 2.4),
+                ],
+                1.3,
+            );
+            c.polyline(&[(10.0, 2.4), (10.0, 5.2), (12.8, 5.2)], 1.25);
+            c.line(5.2, 7.8, 10.8, 7.8, 1.25);
+            c.line(5.2, 10.4, 9.2, 10.4, 1.25);
+        }
+        IconId::Spaces => {
+            c.rounded_rect_stroke(2.4, 2.4, 4.8, 4.8, 1.1, 1.25);
+            c.rounded_rect_stroke(8.8, 2.4, 4.8, 4.8, 1.1, 1.25);
+            c.rounded_rect_stroke(2.4, 8.8, 4.8, 4.8, 1.1, 1.25);
+            c.rounded_rect_stroke(8.8, 8.8, 4.8, 4.8, 1.1, 1.25);
+        }
+        IconId::Broom => {
+            c.line(12.2, 2.4, 7.6, 7.4, 1.45);
+            c.polyline(
+                &[(5.0, 6.6), (9.4, 9.4), (7.4, 13.4), (2.4, 10.4), (5.0, 6.6)],
+                1.3,
+            );
+            c.line(4.4, 11.6, 5.8, 9.4, 1.1);
+            c.line(6.2, 12.6, 7.6, 10.4, 1.1);
+        }
     }
 
     if dark {
         c.into_texture(242, 242, 247, 0.90)
     } else {
         c.into_texture(28, 28, 30, 0.86)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const ALL_ICONS: &[IconId] = &[
+        IconId::Plus,
+        IconId::Close,
+        IconId::Refresh,
+        IconId::ArrowUp,
+        IconId::ArrowDown,
+        IconId::ChevronRight,
+        IconId::ChevronDown,
+        IconId::Pin,
+        IconId::Globe,
+        IconId::LayoutTabs,
+        IconId::Folder,
+        IconId::FolderOpen,
+        IconId::FolderPlus,
+        IconId::Star,
+        IconId::History,
+        IconId::VolumeHigh,
+        IconId::VolumeMuted,
+        IconId::Download,
+        IconId::FileOpen,
+        IconId::Trash,
+        IconId::Edit,
+        IconId::Undo,
+        IconId::Stop,
+        IconId::Warning,
+        IconId::MoreVert,
+        IconId::ClearAll,
+        IconId::Search,
+        IconId::Check,
+        IconId::Settings,
+        IconId::Palette,
+        IconId::Shield,
+        IconId::Cpu,
+        IconId::Key,
+        IconId::Keyboard,
+        IconId::Info,
+        IconId::MediaPlay,
+        IconId::MediaPause,
+        IconId::PipReturn,
+        IconId::Back,
+        IconId::Forward,
+        IconId::Home,
+        IconId::BookmarkFilled,
+        IconId::BookmarkOutline,
+        IconId::ShieldOff,
+        IconId::Lock,
+        IconId::LockOpen,
+        IconId::ZoomIn,
+        IconId::ZoomOut,
+        IconId::Camera,
+        IconId::Code,
+        IconId::Printer,
+        IconId::Copy,
+        IconId::QrCode,
+        IconId::SplitHorizontal,
+        IconId::Pip,
+        IconId::Eye,
+        IconId::EyeOff,
+        IconId::Moon,
+        IconId::Sun,
+        IconId::Command,
+        IconId::Clock,
+        IconId::Layers,
+        IconId::Sliders,
+        IconId::ExternalLink,
+        IconId::RotateCcw,
+        IconId::Ban,
+        IconId::CheckCircle,
+        IconId::XCircle,
+        IconId::BookOpen,
+        IconId::Note,
+        IconId::Spaces,
+        IconId::Broom,
+    ];
+
+    #[test]
+    fn all_icons_rasterize_in_light_and_dark() {
+        let _guard = crate::GTK_TEST_MUTEX
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        if !gnome_platform::init() || gnome_platform::gdk::Display::default_display().is_none() {
+            return;
+        }
+        assert!(ALL_ICONS.len() >= 66);
+        for &id in ALL_ICONS {
+            for dark in [false, true] {
+                let tex = texture(id, dark);
+                let _ = tex.to_gicon();
+            }
+        }
+    }
+
+    #[test]
+    fn monogram_letter_uses_ascii_fallback() {
+        assert_eq!(monogram_letter("", "https://example.com"), "E");
+        assert_eq!(monogram_letter("About", "about:blank"), "A");
+        assert_eq!(monogram_letter("   ", "about:blank"), "?");
+        assert_eq!(monogram_letter("---", ""), "?");
     }
 }
