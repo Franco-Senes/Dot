@@ -52,6 +52,18 @@ impl Bytes {
     pub fn as_ptr(&self) -> *mut sys::GBytes {
         self.ptr.as_ptr()
     }
+
+    pub fn as_slice(&self) -> &[u8] {
+        let mut size: sys::gsize = 0;
+        unsafe {
+            let ptr = sys::g_bytes_get_data(self.ptr.as_ptr(), &mut size);
+            if ptr.is_null() || size == 0 {
+                &[]
+            } else {
+                std::slice::from_raw_parts(ptr.cast::<u8>(), size)
+            }
+        }
+    }
 }
 
 impl Drop for Bytes {

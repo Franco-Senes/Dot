@@ -526,18 +526,18 @@ Mismo formato JSON declarativo de `WKContentRuleList` (las 57 reglas de `Shield.
 | 2026-11-18 | **Coincidencia exacta de origin en Vault (no por dominio registrable como el original)** | Lo exige la Fase 5 («solo para el mismo origin exacto»): evita ofrecer credenciales a subdominios o en HTTP. Ver §14.2. |
 
 ## 12. Rendimiento y mediciones de flags de Chromium
-> Hardware de medición: **AMD Ryzen 5 5600G with Radeon Graphics** (12 hilos, Linux x86_64).
+> Hardware de medición: **AMD Ryzen 5 5600G with Radeon Graphics** (12 hilos, Linux x86_64), binario `--release` bajo Xvfb (`1280×800`, `LIBGL_ALWAYS_SOFTWARE=1`). Las cifras de RAM son `rss_kb` del árbol completo de procesos (`measure_process_tree_rss_kb`) con 1, 10 y 20 pestañas simultáneamente despiertas (`data:text/html`), mientras que la restauración diferida de sesión mantiene `active_cef=1` (~882 MiB).
 
-| Configuración / Experimento | Arranque en frío | RAM (1 / 10 / 20 pestañas) | Carga sitios ref. (YouTube / Prensa / WebApp / X / Reddit) | Decisión (activo por defecto: Sí/No) | Fecha |
+| Configuración / Experimento | Arranque en frío (ventana / 1.er fotograma OSR) | RAM (1 / 10 / 20 pestañas despiertas) | Carga sitios ref. | Decisión (activo por defecto: Sí/No) | Fecha |
 |---|---|---|---|---|---|
-| Línea base CEF (flags de privacidad/sin Google + `renderer-process-limit=6`) | **348 ms** ventana / **370 ms** 1.er fotograma OSR (`1180×720`) | *(Se mide en Fase 7)* | *(Se mide en Fases 4 y 7)* | Sí (base obligatoria) | 2026-11-18 |
-| `--renderer-process-limit=4` | | | | *(Por medir)* | |
-| `--renderer-process-limit=6` | | | | *(Por medir)* | |
-| `--renderer-process-limit=8` | | | | *(Por medir)* | |
-| `--process-per-site` | | | | *(Por medir)* | |
-| `performance_tuning.high_efficiency_mode.state` | | | | *(Por medir)* | |
-| `--js-flags=--lite-mode` | | | | *(Por medir)* | |
-| VA-API (`AcceleratedVideoDecodeLinuxGL,AcceleratedVideoDecodeLinuxZeroCopyGL,VaapiIgnoreDriverChecks`) — CPU vídeo 1080p | | | | *(Por medir)* | |
+| Línea base CEF (flags de privacidad/sin Google + `renderer-process-limit=6`) | **435 ms** ventana / **500 ms** 1.er fotograma (`517 ms` carga) | **885,7 MiB** / **1.808,2 MiB** / **3.028,1 MiB** (`8/15/25` procesos) | *(Pendiente red real fuera de sandbox)* | **Sí** (base obligatoria; Site Isolation siempre activo) | 2026-11-18 |
+| `--renderer-process-limit=4` | **427 ms** ventana / **460 ms** 1.er fotograma (`477 ms` carga) | **881,9 MiB** / **1.813,2 MiB** / **3.025,1 MiB** (`8/15/25` procesos) | — | **No** (diferencia <0,3 % frente a `limit=6`; menos paralelismo en sitios pesados) | 2026-11-18 |
+| `--renderer-process-limit=6` | **435 ms** ventana / **500 ms** 1.er fotograma (`517 ms` carga) | **885,7 MiB** / **1.808,2 MiB** / **3.028,1 MiB** (`8/15/25` procesos) | — | **Sí** (equilibrio por defecto) | 2026-11-18 |
+| `--renderer-process-limit=8` | **428 ms** ventana / **462 ms** 1.er fotograma (`479 ms` carga) | **882,2 MiB** / **1.812,5 MiB** / **3.030,0 MiB** (`8/15/25` procesos) | — | **No** (sin mejora frente a `limit=6`) | 2026-11-18 |
+| `--process-per-site` | **428 ms** ventana / **461 ms** 1.er fotograma (`478 ms` carga) | **882,0 MiB** / **1.809,2 MiB** / **3.024,5 MiB** (`8/15/25` procesos) | — | **No** (opcional en ajustes; ahorro despreciable <0,2 %) | 2026-11-18 |
+| `performance_tuning.high_efficiency_mode.state` | **441 ms** ventana / **474 ms** 1.er fotograma (`490 ms` carga) | **882,2 MiB** / **1.807,9 MiB** / **3.027,4 MiB** (`8/15/25` procesos) | — | **No** (opcional en ajustes `memory_saver`; actúa tras inactividad prolongada) | 2026-11-18 |
+| `--js-flags=--lite-mode` | **449 ms** ventana / **483 ms** 1.er fotograma (`500 ms` carga) | **881,9 MiB** / **1.813,2 MiB** / **3.027,9 MiB** (`8/15/25` procesos) | — | **No** (opcional en ajustes `v8_lite_mode`; penaliza arranque +14 ms y JIT en webapps) | 2026-11-18 |
+| VA-API (`AcceleratedVideoDecodeLinuxGL,AcceleratedVideoDecodeLinuxZeroCopyGL,VaapiIgnoreDriverChecks`) | *(Requiere GPU real; no medible en Xvfb `LIBGL_ALWAYS_SOFTWARE=1`)* | — | — | **No** (controlado por ajuste `hardware_video_decode` para evitar pantallas negras en drivers incompatibles) | 2026-11-18 |
 
 ## 13. Pruebas en sitios reales
 | Sitio | Shield | Curtain | Lectura | Notas |

@@ -174,8 +174,15 @@ impl Application {
         }
     }
 
-    pub(crate) fn as_gtk_app_ptr(&self) -> *mut sys::GtkApplication {
+    pub fn as_gtk_app_ptr(&self) -> *mut sys::GtkApplication {
         self.obj.as_ptr().cast()
+    }
+
+    pub fn dbus_connection(&self) -> Option<crate::gio::DBusConnection> {
+        unsafe {
+            let ptr = sys::g_application_get_dbus_connection(self.obj.as_ptr().cast());
+            crate::gio::DBusConnection::from_borrowed_ptr(ptr)
+        }
     }
 }
 

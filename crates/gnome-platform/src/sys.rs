@@ -520,11 +520,78 @@ pub struct AdwShortcutsItem {
     _private: [u8; 0],
 }
 
+#[repr(C)]
+pub struct GDBusConnection {
+    _private: [u8; 0],
+}
+
+#[repr(C)]
+pub struct GDBusNodeInfo {
+    _private: [u8; 0],
+}
+
+#[repr(C)]
+pub struct GDBusInterfaceInfo {
+    _private: [u8; 0],
+}
+
+#[repr(C)]
+pub struct GDBusMethodInvocation {
+    _private: [u8; 0],
+}
+
+pub type GDBusInterfaceMethodCallFunc = Option<
+    unsafe extern "C" fn(
+        connection: *mut GDBusConnection,
+        sender: *const c_char,
+        object_path: *const c_char,
+        interface_name: *const c_char,
+        method_name: *const c_char,
+        parameters: *mut GVariant,
+        invocation: *mut GDBusMethodInvocation,
+        user_data: gpointer,
+    ),
+>;
+
+pub type GDBusInterfaceGetPropertyFunc = Option<
+    unsafe extern "C" fn(
+        connection: *mut GDBusConnection,
+        sender: *const c_char,
+        object_path: *const c_char,
+        interface_name: *const c_char,
+        property_name: *const c_char,
+        error: *mut *mut GError,
+        user_data: gpointer,
+    ) -> *mut GVariant,
+>;
+
+pub type GDBusInterfaceSetPropertyFunc = Option<
+    unsafe extern "C" fn(
+        connection: *mut GDBusConnection,
+        sender: *const c_char,
+        object_path: *const c_char,
+        interface_name: *const c_char,
+        property_name: *const c_char,
+        value: *mut GVariant,
+        error: *mut *mut GError,
+        user_data: gpointer,
+    ) -> gboolean,
+>;
+
+#[repr(C)]
+pub struct GDBusInterfaceVTable {
+    pub method_call: GDBusInterfaceMethodCallFunc,
+    pub get_property: GDBusInterfaceGetPropertyFunc,
+    pub set_property: GDBusInterfaceSetPropertyFunc,
+    pub padding: [gpointer; 8],
+}
+
 #[link(name = "glib-2.0")]
 extern "C" {
     pub fn g_free(mem: gpointer);
     pub fn g_error_free(error: *mut GError);
     pub fn g_bytes_new(data: *const c_void, size: gsize) -> *mut GBytes;
+    pub fn g_bytes_get_data(bytes: *mut GBytes, size: *mut gsize) -> *const c_void;
     pub fn g_bytes_unref(bytes: *mut GBytes);
     pub fn g_idle_add_full(
         priority: gint,
@@ -544,6 +611,19 @@ extern "C" {
     pub fn g_variant_type_new(type_string: *const c_char) -> *mut GVariantType;
     pub fn g_variant_type_free(type_: *mut GVariantType);
     pub fn g_variant_get_string(value: *mut GVariant, length: *mut gsize) -> *const c_char;
+    pub fn g_variant_get_child_value(value: *mut GVariant, index_: gsize) -> *mut GVariant;
+    pub fn g_variant_get_uint64(value: *mut GVariant) -> u64;
+    pub fn g_variant_get_boolean(value: *mut GVariant) -> gboolean;
+    pub fn g_variant_new_string(string: *const c_char) -> *mut GVariant;
+    pub fn g_variant_new_uint64(value: u64) -> *mut GVariant;
+    pub fn g_variant_new_boolean(value: gboolean) -> *mut GVariant;
+    pub fn g_variant_new_tuple(children: *const *mut GVariant, n_children: gsize) -> *mut GVariant;
+    pub fn g_variant_new_array(
+        child_type: *const GVariantType,
+        children: *const *mut GVariant,
+        n_children: gsize,
+    ) -> *mut GVariant;
+    pub fn g_variant_unref(value: *mut GVariant);
 }
 
 #[link(name = "gobject-2.0")]
@@ -577,10 +657,46 @@ extern "C" {
     pub fn g_application_quit(application: *mut GApplication);
     pub fn g_application_hold(application: *mut GApplication);
     pub fn g_application_release(application: *mut GApplication);
+    pub fn g_application_get_dbus_connection(
+        application: *mut GApplication,
+    ) -> *mut GDBusConnection;
+    pub fn g_application_get_dbus_object_path(application: *mut GApplication) -> *const c_char;
     pub fn g_application_send_notification(
         application: *mut GApplication,
         id: *const c_char,
         notification: *mut GNotification,
+    );
+
+    pub fn g_dbus_node_info_new_for_xml(
+        xml_data: *const c_char,
+        error: *mut *mut GError,
+    ) -> *mut GDBusNodeInfo;
+    pub fn g_dbus_node_info_unref(info: *mut GDBusNodeInfo);
+    pub fn g_dbus_node_info_lookup_interface(
+        info: *mut GDBusNodeInfo,
+        name: *const c_char,
+    ) -> *mut GDBusInterfaceInfo;
+    pub fn g_dbus_connection_register_object(
+        connection: *mut GDBusConnection,
+        object_path: *const c_char,
+        interface_info: *mut GDBusInterfaceInfo,
+        vtable: *const GDBusInterfaceVTable,
+        user_data: gpointer,
+        user_data_free_func: GDestroyNotify,
+        error: *mut *mut GError,
+    ) -> guint;
+    pub fn g_dbus_connection_unregister_object(
+        connection: *mut GDBusConnection,
+        registration_id: guint,
+    ) -> gboolean;
+    pub fn g_dbus_method_invocation_return_value(
+        invocation: *mut GDBusMethodInvocation,
+        parameters: *mut GVariant,
+    );
+    pub fn g_dbus_method_invocation_return_dbus_error(
+        invocation: *mut GDBusMethodInvocation,
+        error_name: *const c_char,
+        error_message: *const c_char,
     );
 
     pub fn g_notification_new(title: *const c_char) -> *mut GNotification;

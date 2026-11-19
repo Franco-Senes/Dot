@@ -4,10 +4,12 @@
 //! las ventanas y modos de verificación headless (`--smoke-test`, `--smoke-test-session-*`).
 
 use crate::actions;
+use crate::bench::{self, BenchDispatchContext, BenchServer};
 use crate::bookmarks_ui::BookmarksManager;
 use crate::browser_view;
 use crate::cef_engine::CefEngine;
 use crate::curtain::CurtainManager;
+use crate::dbus::{DbusHandlers, DbusService};
 use crate::downloads::DownloadManager;
 use crate::history_ui::HistoryManager;
 use crate::settings::SettingsStore;
@@ -63,6 +65,9 @@ struct AppControllerInner {
     save_debounce: Cell<Option<SourceId>>,
     session_enabled: Cell<bool>,
     shutting_down: Cell<bool>,
+    startup_instant: Instant,
+    dbus: RefCell<Option<DbusService>>,
+    bench: RefCell<Option<BenchServer>>,
 }
 
 impl AppController {
@@ -71,6 +76,7 @@ impl AppController {
         paths: SearchPaths,
         settings: SettingsStore,
         session_enabled: bool,
+        startup_instant: Instant,
     ) -> Self {
         let stores = SharedDataStores {
             paths: paths.clone(),
@@ -95,6 +101,9 @@ impl AppController {
                 save_debounce: Cell::new(None),
                 session_enabled: Cell::new(session_enabled),
                 shutting_down: Cell::new(false),
+                startup_instant,
+                dbus: RefCell::new(None),
+                bench: RefCell::new(None),
             }),
         }
     }
@@ -421,8 +430,168 @@ impl AppController {
         }
     }
 
+    fn sync_bench_server(&self, should_run: bool) {
+        if should_run {
+            if self.inner.bench.borrow().is_some() {
+                return;
+            }
+            let Ok(sock_path) = bench::configured_socket_path() else {
+                return;
+            };
+            let ctrl = self.clone();
+            let ctx = Rc::new(BenchDispatchContext {
+                startup_instant: self.inner.startup_instant,
+                runtime_dir: self.inner.paths.runtime_dir.clone(),
+                windows: Rc::new(RefCell::new(Vec::new())), // replaced below
+                spawn_window: Rc::new({
+                    let ctrl_sp = ctrl.clone();
+                    move |priv_win, url| ctrl_sp.spawn_window(priv_win, url)
+                }),
+                save_session: Rc::new({
+                    let ctrl_sv = ctrl.clone();
+                    move || ctrl_sv.save_session_now()
+                }),
+                quit_app: Rc::new({
+                    let app_q = self.inner.app.clone();
+                    move || app_q.quit()
+                }),
+            });
+            let _ = ctx;
+            let ctrl_disp = self.clone();
+            match BenchServer::start(sock_path, move |req, reply| {
+                let wins_snapshot = ctrl_disp.inner.windows.borrow().clone();
+                let ctx = BenchDispatchContext {
+                    startup_instant: ctrl_disp.inner.startup_instant,
+                    runtime_dir: ctrl_disp.inner.paths.runtime_dir.clone(),
+                    windows: Rc::new(RefCell::new(wins_snapshot)),
+                    spawn_window: Rc::new({
+                        let c = ctrl_disp.clone();
+                        move |priv_win, url| c.spawn_window(priv_win, url)
+                    }),
+                    save_session: Rc::new({
+                        let c = ctrl_disp.clone();
+                        move || c.save_session_now()
+                    }),
+                    quit_app: Rc::new({
+                        let a = ctrl_disp.inner.app.clone();
+                        move || a.quit()
+                    }),
+                };
+                bench::dispatch_command(&ctx, req, reply);
+            }) {
+                Ok(srv) => *self.inner.bench.borrow_mut() = Some(srv),
+                Err(err) => search_core::warn!("No se pudo iniciar bench.sock: {err:#}"),
+            }
+        } else {
+            *self.inner.bench.borrow_mut() = None;
+        }
+    }
+
+    fn install_dbus(&self) {
+        let ctrl_open = self.clone();
+        let ctrl_win = self.clone();
+        let ctrl_list = self.clone();
+        let ctrl_act = self.clone();
+        let ctrl_close = self.clone();
+        let ctrl_rel = self.clone();
+        let ctrl_url = self.clone();
+
+        let svc = DbusService::register(
+            &self.inner.app,
+            DbusHandlers {
+                open_url: Box::new(move |url, new_tab| {
+                    let target = ctrl_open
+                        .inner
+                        .windows
+                        .borrow()
+                        .iter()
+                        .find(|w| !w.is_private())
+                        .cloned()
+                        .or_else(|| ctrl_open.inner.windows.borrow().first().cloned());
+                    if let Some(win) = target {
+                        if new_tab {
+                            let _ = win.open_tab(Some(url), true, false, false);
+                        } else {
+                            win.navigate_typed_input(url);
+                        }
+                        win.present();
+                    } else if let Ok(win) = ctrl_open.spawn_window(false, Some(url)) {
+                        win.present();
+                    }
+                }),
+                new_window: Box::new(move |private| {
+                    if let Ok(win) = ctrl_win.spawn_window(private, None) {
+                        win.present();
+                    }
+                }),
+                list_tabs: Box::new(move || {
+                    ctrl_list
+                        .inner
+                        .windows
+                        .borrow()
+                        .iter()
+                        .flat_map(BrowserWindow::open_tab_infos)
+                        .map(|t| (t.tab_id, t.title, t.url))
+                        .collect()
+                }),
+                activate_tab: Box::new(move |tab_id| {
+                    let target = ctrl_act
+                        .inner
+                        .windows
+                        .borrow()
+                        .iter()
+                        .find(|w| w.tab_summary(tab_id).is_some())
+                        .cloned();
+                    if let Some(win) = target {
+                        let ok = win.select_tab_by_id(tab_id);
+                        win.present();
+                        ok
+                    } else {
+                        false
+                    }
+                }),
+                close_tab: Box::new(move |tab_id| {
+                    let target = ctrl_close
+                        .inner
+                        .windows
+                        .borrow()
+                        .iter()
+                        .find(|w| w.tab_summary(tab_id).is_some())
+                        .cloned();
+                    target.is_some_and(|w| w.close_tab_by_id(tab_id))
+                }),
+                reload_active: Box::new(move || {
+                    let target = ctrl_rel
+                        .inner
+                        .windows
+                        .borrow()
+                        .iter()
+                        .find(|w| w.gtk_window().is_active())
+                        .cloned()
+                        .or_else(|| ctrl_rel.inner.windows.borrow().first().cloned());
+                    if let Some(win) = target {
+                        if let Some(tid) = win.selected_tab_id() {
+                            win.reload_tab(tid);
+                        }
+                    }
+                }),
+                current_url: Box::new(move || {
+                    let wins = ctrl_url.inner.windows.borrow();
+                    wins.iter()
+                        .find(|w| w.gtk_window().is_active())
+                        .or_else(|| wins.first())
+                        .map(|w| w.active_tab_url())
+                        .unwrap_or_default()
+                }),
+            },
+        );
+        *self.inner.dbus.borrow_mut() = svc;
+    }
+
     fn shutdown(&self) {
         self.inner.shutting_down.set(true);
+        *self.inner.bench.borrow_mut() = None;
+        *self.inner.dbus.borrow_mut() = None;
         self.save_session_now();
         self.inner.stores.history.flush_now();
         self.inner.stores.bookmarks.flush_now();
@@ -448,8 +617,9 @@ pub fn run(
     cli: CliOptions,
 ) -> i32 {
     let is_smoke = cli.smoke_mode != SmokeMode::None;
-    let flags = if is_smoke {
-        ApplicationFlags::NON_UNIQUE
+    let isolated_bench = bench::is_bench_env_enabled();
+    let flags = if is_smoke || isolated_bench {
+        ApplicationFlags::NON_UNIQUE | ApplicationFlags::HANDLES_OPEN
     } else {
         ApplicationFlags::HANDLES_OPEN
     };
@@ -461,6 +631,7 @@ pub fn run(
         paths.clone(),
         settings.clone(),
         session_enabled,
+        startup_instant,
     );
     let fatal_failed = Arc::new(AtomicBool::new(false));
 
@@ -483,6 +654,8 @@ pub fn run(
                 settings_startup.subscribe(move |updated| {
                     style::apply_color_look(&app_theme.style_manager(), updated.look);
                     ctrl_layout.schedule_session_save();
+                    ctrl_layout
+                        .sync_bench_server(updated.bench_enabled || bench::is_bench_env_enabled());
                 });
             }
 
@@ -492,6 +665,11 @@ pub fn run(
             match CefEngine::initialize(&paths_startup, &snapshot) {
                 Ok(engine) => {
                     ctrl_startup.set_cef_engine(engine);
+                    if !is_smoke {
+                        ctrl_startup.install_dbus();
+                    }
+                    ctrl_startup
+                        .sync_bench_server(snapshot.bench_enabled || bench::is_bench_env_enabled());
                 }
                 Err(err) => {
                     search_core::error!("Fallo crítico al inicializar CEF: {err:#}");

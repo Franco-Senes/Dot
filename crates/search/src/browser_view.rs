@@ -139,6 +139,15 @@ enum PageIpcMessage {
         #[serde(default)]
         article: Option<ReaderArticle>,
     },
+    #[serde(rename = "bench_eval")]
+    BenchEval {
+        req_id: u64,
+        ok: bool,
+        #[serde(default)]
+        value: serde_json::Value,
+        #[serde(default)]
+        error: Option<String>,
+    },
 }
 
 pub type ReaderExtractedCallback = Box<dyn Fn(bool, Option<String>, Option<ReaderArticle>)>;
@@ -174,6 +183,9 @@ pub struct BrowserCallbacks {
     pub on_context_menu: Option<Box<dyn Fn(PageContextMenuInfo)>>,
 }
 
+type PendingEvalCallback = Box<dyn FnOnce(Result<serde_json::Value, String>)>;
+type PendingFindCallback = Box<dyn FnOnce(i32, i32)>;
+
 struct SharedState {
     browser: RefCell<Option<Browser>>,
     settings: SettingsStore,
@@ -200,6 +212,7 @@ struct SharedState {
     zoom_factor: Cell<f64>,
     paint_frames: Cell<u64>,
     non_empty_frames: Cell<u64>,
+    load_finish_count: Cell<u64>,
     tls_nonce: String,
     audio_nonce: String,
     ipc_nonce: String,
@@ -212,6 +225,10 @@ struct SharedState {
     callbacks: RefCell<BrowserCallbacks>,
     vault_enabled: Cell<bool>,
     vault_frames: RefCell<HashMap<String, VaultFrameToken>>,
+    next_eval_id: Cell<u64>,
+    pending_evals: RefCell<HashMap<u64, PendingEvalCallback>>,
+    pending_find: RefCell<Option<PendingFindCallback>>,
+    last_frame: RefCell<Option<(MemoryTexture, i32, i32)>>,
 }
 
 impl Drop for SharedState {
@@ -299,6 +316,7 @@ impl BrowserView {
             zoom_factor: Cell::new(initial_zoom),
             paint_frames: Cell::new(0),
             non_empty_frames: Cell::new(0),
+            load_finish_count: Cell::new(0),
             tls_nonce: generate_hex_nonce_128(),
             audio_nonce: generate_hex_nonce_128(),
             ipc_nonce: generate_hex_nonce_128(),
@@ -311,6 +329,10 @@ impl BrowserView {
             callbacks: RefCell::new(BrowserCallbacks::default()),
             vault_enabled: Cell::new(false),
             vault_frames: RefCell::new(HashMap::new()),
+            next_eval_id: Cell::new(1),
+            pending_evals: RefCell::new(HashMap::new()),
+            pending_find: RefCell::new(None),
+            last_frame: RefCell::new(None),
         });
 
         let window_info = WindowInfo {
@@ -423,6 +445,53 @@ impl BrowserView {
             let cef_src = CefString::from(source_name);
             frame.execute_java_script(Some(&cef_js), Some(&cef_src), 1);
         }
+    }
+
+    pub fn eval_js_async<F>(&self, js: &str, callback: F)
+    where
+        F: FnOnce(Result<serde_json::Value, String>) + 'static,
+    {
+        if self.main_frame().is_none() {
+            callback(Err("no main frame".to_string()));
+            return;
+        }
+        let req_id = self.shared.next_eval_id.get();
+        self.shared.next_eval_id.set(req_id.saturating_add(1));
+        self.shared
+            .pending_evals
+            .borrow_mut()
+            .insert(req_id, Box::new(callback));
+
+        let js_json = serde_json::to_string(js).unwrap_or_else(|_| "\"\"".to_string());
+        let prefix = format!("__search_ipc_{}:", self.shared.ipc_nonce);
+        let prefix_json = serde_json::to_string(&prefix).unwrap_or_else(|_| "\"\"".to_string());
+        let wrapper = format!(
+            "(async () => {{\
+                try {{\
+                    const __res = await Promise.resolve((0, eval)({js_json}));\
+                    console.log({prefix_json} + JSON.stringify({{ kind: 'bench_eval', req_id: {req_id}, ok: true, value: __res === undefined ? null : __res }}));\
+                }} catch (e) {{\
+                    console.log({prefix_json} + JSON.stringify({{ kind: 'bench_eval', req_id: {req_id}, ok: false, value: null, error: String(e) }}));\
+                }}\
+            }})();"
+        );
+        self.execute_js(&wrapper, "search://bench-eval");
+    }
+
+    pub fn snapshot_png(&self, path: &std::path::Path) -> anyhow::Result<(i32, i32)> {
+        let frame = self.shared.last_frame.borrow().clone();
+        let Some((mem_tex, w, h)) = frame else {
+            anyhow::bail!("aún no hay fotograma pintado para capturar");
+        };
+        let bytes = mem_tex
+            .to_texture()
+            .save_to_png_bytes()
+            .ok_or_else(|| anyhow::anyhow!("gdk_texture_save_to_png_bytes devolvió null"))?;
+        if let Some(parent) = path.parent() {
+            let _ = std::fs::create_dir_all(parent);
+        }
+        std::fs::write(path, bytes.as_slice())?;
+        Ok((w, h))
     }
 
     pub fn is_curtain_picking(&self) -> bool {
@@ -621,6 +690,20 @@ impl BrowserView {
         );
     }
 
+    pub fn find_async<F>(
+        &self,
+        text: &str,
+        forward: bool,
+        match_case: bool,
+        find_next: bool,
+        callback: F,
+    ) where
+        F: FnOnce(i32, i32) + 'static,
+    {
+        *self.shared.pending_find.borrow_mut() = Some(Box::new(callback));
+        self.find(text, forward, match_case, find_next);
+    }
+
     pub fn stop_finding(&self, clear_selection: bool) {
         if let Some(host) = self.host() {
             host.stop_finding(i32::from(clear_selection));
@@ -651,6 +734,10 @@ impl BrowserView {
 
     pub fn non_empty_paint_count(&self) -> u64 {
         self.shared.non_empty_frames.get()
+    }
+
+    pub fn load_finish_count(&self) -> u64 {
+        self.shared.load_finish_count.get()
     }
 
     #[allow(dead_code)]
@@ -1160,6 +1247,7 @@ wrap_render_handler! {
                 stride,
             );
             self.shared.picture.set_texture(Some(&texture));
+            *self.shared.last_frame.borrow_mut() = Some((texture, width, height));
 
             let next_total = self.shared.paint_frames.get().saturating_add(1);
             self.shared.paint_frames.set(next_total);
@@ -1348,13 +1436,6 @@ wrap_display_handler! {
             let Some(msg) = message.map(CefString::to_string) else {
                 return 0;
             };
-            // Puente IPC autenticado (Vault): se suprime siempre del log, válido o no, porque
-            // puede transportar una contraseña. El contenido se pone a cero al terminar.
-            if msg.starts_with(IPC_PREFIX) {
-                let msg = zeroize::Zeroizing::new(msg);
-                self.shared.route_vault_ipc(browser, &msg[IPC_PREFIX.len()..]);
-                return 1;
-            }
             let prefix = format!("__search_audio_{}:", self.shared.audio_nonce);
             if let Some(flag) = msg.strip_prefix(&prefix) {
                 let playing = flag.trim() == "1";
@@ -1396,10 +1477,31 @@ wrap_display_handler! {
                             cb(ok, reason, article);
                         }
                     }
+                    Ok(PageIpcMessage::BenchEval {
+                        req_id,
+                        ok,
+                        value,
+                        error,
+                    }) => {
+                        if let Some(cb) = self.shared.pending_evals.borrow_mut().remove(&req_id) {
+                            if ok {
+                                cb(Ok(value));
+                            } else {
+                                cb(Err(error.unwrap_or_else(|| "JS error".to_string())));
+                            }
+                        }
+                    }
                     Err(err) => {
                         search_core::warn!("Mensaje IPC inválido descartado: {err}");
                     }
                 }
+                return 1;
+            }
+            // Puente IPC autenticado (Vault): se suprime siempre del log, válido o no, porque
+            // puede transportar una contraseña. El contenido se pone a cero al terminar.
+            if msg.starts_with(IPC_PREFIX) {
+                let msg = zeroize::Zeroizing::new(msg);
+                self.shared.route_vault_ipc(browser, &msg[IPC_PREFIX.len()..]);
                 return 1;
             }
             0
@@ -1467,6 +1569,11 @@ wrap_load_handler! {
             let back = can_go_back != 0;
             let fwd = can_go_forward != 0;
             self.shared.is_loading.set(loading);
+            if !loading {
+                self.shared
+                    .load_finish_count
+                    .set(self.shared.load_finish_count.get().saturating_add(1));
+            }
             self.shared.can_go_back.set(back);
             self.shared.can_go_forward.set(fwd);
             if let Some(ref cb) = self.shared.callbacks.borrow().on_loading_state_changed {
@@ -1723,10 +1830,15 @@ wrap_find_handler! {
             count: ::std::os::raw::c_int,
             _selection_rect: Option<&Rect>,
             active_match_ordinal: ::std::os::raw::c_int,
-            _final_update: ::std::os::raw::c_int,
+            final_update: ::std::os::raw::c_int,
         ) {
             if let Some(ref cb) = self.shared.callbacks.borrow().on_find_result {
                 cb(active_match_ordinal, count);
+            }
+            if final_update != 0 {
+                if let Some(cb) = self.shared.pending_find.borrow_mut().take() {
+                    cb(active_match_ordinal, count);
+                }
             }
         }
     }
