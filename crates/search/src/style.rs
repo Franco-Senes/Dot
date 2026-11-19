@@ -1,15 +1,169 @@
 //! Hoja CSS sobria, pulida y con transiciones suaves (`Design.swift`) + sincronización
-//! de esquema claro/oscuro con `AdwStyleManager`.
+//! de esquema claro/oscuro con `AdwStyleManager` y supresión de transiciones al cambiar de tema.
 //!
 //! Nota GTK4 CSS: usar exclusivamente propiedades estándar (`margin-left`/`margin-right`,
 //! `padding-left`/`padding-right`, etc.) para cero advertencias del analizador CSS.
 
 use gnome_platform::adw::{ColorScheme, StyleManager};
 use gnome_platform::gdk::Display;
+use gnome_platform::glib;
 use gnome_platform::gtk::{CssProvider, STYLE_PROVIDER_PRIORITY_APPLICATION};
 use search_core::settings::ColorLook;
+use std::cell::RefCell;
+use std::time::Duration;
+
+thread_local! {
+    static THEME_SWITCH_PROVIDER: RefCell<Option<CssProvider>> = const { RefCell::new(None) };
+}
 
 const BASE_CSS: &str = r#"
+/* ============================================================================
+ * Interacciones globales: foco accesible, pulsación 0.96 y supresión de tema
+ * ============================================================================ */
+button:focus-visible,
+togglebutton:focus-visible,
+entry:focus-visible,
+row:focus-visible {
+    outline-style: solid;
+    outline-width: 2px;
+    outline-color: alpha(@accent_bg_color, 0.72);
+    outline-offset: 1px;
+}
+
+button:not(:disabled),
+togglebutton:not(:disabled) {
+    transition-property: transform, background-color, border-color, box-shadow, opacity;
+    transition-duration: 140ms;
+    transition-timing-function: cubic-bezier(0.2, 0, 0, 1);
+}
+
+button:not(:disabled):active,
+togglebutton:not(:disabled):active {
+    transform: scale(0.96);
+    transition-property: transform;
+    transition-duration: 150ms;
+    transition-timing-function: ease-out;
+}
+
+/* Desactivar transiciones CSS cuando ui_motion = instant o durante cambio de tema */
+window.search-motion-instant *,
+window.search-theme-switching * {
+    transition-duration: 0ms;
+}
+
+/* ============================================================================
+ * Primitivas reutilizables (.pill, .kbd-chip, .zoom-pill, .toast-bar, etc.)
+ * ============================================================================ */
+.pill {
+    font-size: 0.75rem;
+    font-weight: 600;
+    padding: 2px 9px;
+    border-radius: 999px;
+    border: 1px solid transparent;
+    background-color: alpha(currentColor, 0.08);
+}
+
+.pill.accent {
+    background-color: alpha(@accent_bg_color, 0.16);
+    color: @accent_color;
+}
+
+.pill.numeric,
+.zoom-pill {
+    font-variant-numeric: tabular-nums;
+}
+
+.zoom-pill {
+    font-size: 0.76rem;
+    font-weight: 600;
+    padding: 2px 8px;
+    border-radius: 999px;
+    border: 1px solid alpha(currentColor, 0.10);
+    background-color: alpha(currentColor, 0.06);
+}
+
+.kbd-chip {
+    font-family: monospace;
+    font-size: 0.72rem;
+    font-weight: 600;
+    font-variant-numeric: tabular-nums;
+    padding: 2px 6px;
+    border-radius: 6px;
+    background-color: alpha(currentColor, 0.075);
+    border: 1px solid alpha(currentColor, 0.14);
+    box-shadow: 0 1px 0 alpha(#000000, 0.10);
+    opacity: 0.88;
+}
+
+.workspace-pill,
+button.workspace-pill {
+    font-size: 0.78rem;
+    font-weight: 500;
+    padding: 3px 10px;
+    border-radius: 999px;
+    border: 1px solid transparent;
+    background-color: alpha(currentColor, 0.06);
+    transition: background-color 120ms cubic-bezier(0.2, 0, 0, 1),
+                border-color 120ms cubic-bezier(0.2, 0, 0, 1),
+                color 120ms cubic-bezier(0.2, 0, 0, 1);
+}
+
+.workspace-pill:hover,
+button.workspace-pill:hover {
+    background-color: alpha(currentColor, 0.11);
+}
+
+.workspace-pill.active,
+button.workspace-pill.active {
+    background-color: alpha(@accent_bg_color, 0.18);
+    border-color: alpha(@accent_bg_color, 0.45);
+    color: @accent_color;
+    font-weight: 600;
+}
+
+.toast-bar {
+    background-color: alpha(@window_bg_color, 0.96);
+    color: @window_fg_color;
+    border: 1px solid transparent;
+    border-radius: 999px;
+    padding: 6px 14px;
+    font-size: 0.84rem;
+    font-weight: 500;
+    box-shadow: 0 6px 20px alpha(#000000, 0.16), 0 1px 4px alpha(#000000, 0.08);
+}
+
+.empty-state {
+    padding: 28px 20px;
+    opacity: 0.68;
+}
+
+button.primary,
+.primary {
+    background-color: @accent_bg_color;
+    color: @accent_fg_color;
+    border: 1px solid transparent;
+    font-weight: 600;
+}
+
+button.primary:hover,
+.primary:hover {
+    background-color: mix(@accent_bg_color, #ffffff, 0.08);
+}
+
+button.destructive,
+.destructive {
+    background-color: alpha(@error_bg_color, 0.14);
+    color: @error_color;
+    border: 1px solid alpha(@error_color, 0.24);
+    font-weight: 600;
+}
+
+button.destructive:hover,
+.destructive:hover {
+    background-color: alpha(@error_bg_color, 0.22);
+    border-color: alpha(@error_color, 0.42);
+}
+
 /* ============================================================================
  * Cabecera minimalista y barra de direcciones (Omnibox)
  * ============================================================================ */
@@ -40,13 +194,15 @@ entry.search-address-entry {
     padding-right: 12px;
     font-size: 0.94rem;
     background-color: alpha(currentColor, 0.055);
-    border: 1px solid alpha(currentColor, 0.06);
+    border: 1px solid alpha(currentColor, 0.08);
     box-shadow: none;
-    transition: background-color 140ms ease, border-color 140ms ease, box-shadow 140ms ease;
+    transition: background-color 140ms cubic-bezier(0.2, 0, 0, 1),
+                border-color 140ms cubic-bezier(0.2, 0, 0, 1),
+                box-shadow 140ms cubic-bezier(0.2, 0, 0, 1);
 }
 
 entry.search-address-entry:hover {
-    background-color: alpha(currentColor, 0.08);
+    background-color: alpha(currentColor, 0.085);
 }
 
 entry.search-address-entry:focus-within {
@@ -69,7 +225,7 @@ box.search-main-hbox.cards-enabled {
 box.search-stage-shell {
     background-color: transparent;
     padding: 0;
-    transition: padding 160ms ease;
+    transition: padding 150ms cubic-bezier(0.2, 0, 0, 1);
 }
 
 box.search-main-hbox.cards-enabled box.search-stage-shell {
@@ -82,9 +238,10 @@ box.search-main-hbox.cards-enabled box.search-stage-shell {
 box.search-stage-card {
     background-color: @view_bg_color;
     border-radius: 0;
-    border: none;
+    border: 1px solid transparent;
     box-shadow: none;
-    transition: border-radius 160ms ease, box-shadow 160ms ease;
+    transition: border-radius 150ms cubic-bezier(0.2, 0, 0, 1),
+                box-shadow 150ms cubic-bezier(0.2, 0, 0, 1);
 }
 
 box.search-main-hbox.cards-enabled box.search-stage-card {
@@ -96,11 +253,6 @@ box.search-main-hbox.cards-enabled box.search-stage-card {
 /* Barra superior compacta opcional */
 window.search-compact-tabs tabbar tab {
     min-height: 28px;
-}
-
-/* Desactivar transiciones CSS cuando ui_motion = instant */
-window.search-motion-instant * {
-    transition-duration: 0ms;
 }
 
 /* ============================================================================
@@ -127,21 +279,68 @@ label.search-status-pill {
     border-radius: 7px;
     padding: 3px 9px;
     font-size: 0.79rem;
-    box-shadow: 0 2px 8px alpha(#000000, 0.12);
-    transition: opacity 140ms ease;
+    box-shadow: 0 2px 8px alpha(#000000, 0.10), 0 1px 2px alpha(#000000, 0.06);
+    transition: opacity 140ms cubic-bezier(0.2, 0, 0, 1);
 }
 
 box.search-find-bar {
     background-color: @headerbar_bg_color;
     border-bottom: 1px solid alpha(currentColor, 0.10);
-    padding: 5px 10px;
+    padding: 6px 10px;
+}
+
+box.search-find-toggles {
+    padding: 2px;
+    border-radius: 9px;
+    background-color: alpha(currentColor, 0.05);
+    border: 1px solid alpha(currentColor, 0.07);
+}
+
+togglebutton.search-find-toggle,
+button.search-find-toggle {
+    min-width: 28px;
+    min-height: 26px;
+    padding: 0 7px;
+    border-radius: 7px;
+    border: 1px solid transparent;
+    background-color: transparent;
+    font-size: 0.78rem;
+    font-weight: 600;
+    opacity: 0.76;
+    transition: background-color 120ms cubic-bezier(0.2, 0, 0, 1),
+                border-color 120ms cubic-bezier(0.2, 0, 0, 1),
+                color 120ms cubic-bezier(0.2, 0, 0, 1),
+                opacity 120ms cubic-bezier(0.2, 0, 0, 1);
+}
+
+togglebutton.search-find-toggle:hover,
+button.search-find-toggle:hover {
+    opacity: 1.0;
+    background-color: alpha(currentColor, 0.08);
+}
+
+togglebutton.search-find-toggle:checked,
+button.search-find-toggle.active {
+    opacity: 1.0;
+    background-color: alpha(@accent_bg_color, 0.18);
+    border-color: alpha(@accent_bg_color, 0.42);
+    color: @accent_color;
 }
 
 label.search-find-count {
     font-variant-numeric: tabular-nums;
-    opacity: 0.72;
-    font-size: 0.84rem;
-    min-width: 64px;
+    opacity: 0.76;
+    font-size: 0.83rem;
+    min-width: 72px;
+    padding: 2px 6px;
+    border-radius: 6px;
+}
+
+label.search-find-count.no-matches {
+    opacity: 1.0;
+    color: @warning_color;
+    background-color: alpha(@warning_color, 0.14);
+    font-weight: 600;
 }
 
 /* ============================================================================
@@ -161,7 +360,7 @@ box.search-sidebar-resize-handle {
     min-width: 6px;
     background-color: transparent;
     border-right: 2px solid transparent;
-    transition: border-color 140ms ease;
+    transition: border-color 140ms cubic-bezier(0.2, 0, 0, 1);
 }
 
 box.search-sidebar-resize-handle:hover,
@@ -181,19 +380,22 @@ button.search-fav-tile {
     background-color: alpha(currentColor, 0.055);
     border: 1px solid alpha(currentColor, 0.05);
     box-shadow: none;
-    transition: background-color 140ms ease, border-color 140ms ease, box-shadow 140ms ease;
+    transition: background-color 130ms cubic-bezier(0.2, 0, 0, 1),
+                border-color 130ms cubic-bezier(0.2, 0, 0, 1),
+                box-shadow 130ms cubic-bezier(0.2, 0, 0, 1),
+                transform 150ms cubic-bezier(0.2, 0, 0, 1);
 }
 
 button.search-fav-tile:hover {
     background-color: alpha(currentColor, 0.10);
     border-color: alpha(currentColor, 0.10);
-    box-shadow: 0 1px 4px alpha(#000000, 0.08);
+    box-shadow: 0 2px 6px alpha(#000000, 0.08), 0 1px 2px alpha(#000000, 0.05);
 }
 
 button.search-fav-tile.active {
     background-color: @view_bg_color;
     border-color: alpha(@accent_bg_color, 0.55);
-    box-shadow: 0 1px 6px alpha(#000000, 0.10);
+    box-shadow: 0 2px 8px alpha(#000000, 0.10), 0 1px 2px alpha(#000000, 0.06);
 }
 
 box.search-sidebar-section-header {
@@ -218,7 +420,7 @@ button.search-folder-row {
     border-radius: 8px;
     padding: 4px 7px;
     margin: 1px 0;
-    transition: background-color 130ms ease;
+    transition: background-color 120ms cubic-bezier(0.2, 0, 0, 1);
 }
 
 button.search-folder-row:hover {
@@ -256,7 +458,8 @@ box.search-tab-row {
     border-radius: 8px;
     padding: 5px 7px;
     margin: 1px 0;
-    transition: background-color 130ms ease, box-shadow 130ms ease;
+    transition: background-color 120ms cubic-bezier(0.2, 0, 0, 1),
+                box-shadow 120ms cubic-bezier(0.2, 0, 0, 1);
 }
 
 box.search-roomy-sidebar row.search-tab-row,
@@ -272,7 +475,7 @@ box.search-tab-row:hover {
 row.search-tab-row.active,
 box.search-tab-row.active {
     background-color: @view_bg_color;
-    box-shadow: 0 1px 3px alpha(#000000, 0.07);
+    box-shadow: 0 1px 3px alpha(#000000, 0.07), 0 0 1px alpha(#000000, 0.05);
     font-weight: 500;
 }
 
@@ -282,10 +485,30 @@ button.search-tab-mini-btn {
     padding: 0;
     border-radius: 6px;
     opacity: 0.68;
-    transition: opacity 130ms ease, background-color 130ms ease;
+    transition: opacity 120ms cubic-bezier(0.2, 0, 0, 1),
+                background-color 120ms cubic-bezier(0.2, 0, 0, 1),
+                transform 150ms cubic-bezier(0.2, 0, 0, 1);
 }
 
-button.search-tab-mini-btn:hover {
+box.search-sidebar row.search-tab-row button.search-tab-mini-btn,
+box.search-sidebar box.search-tab-row button.search-tab-mini-btn {
+    opacity: 0;
+}
+
+box.search-sidebar row.search-tab-row:hover button.search-tab-mini-btn,
+box.search-sidebar row.search-tab-row:focus-within button.search-tab-mini-btn,
+box.search-sidebar row.search-tab-row.active button.search-tab-mini-btn,
+box.search-sidebar box.search-tab-row:hover button.search-tab-mini-btn,
+box.search-sidebar box.search-tab-row:focus-within button.search-tab-mini-btn,
+box.search-sidebar box.search-tab-row.active button.search-tab-mini-btn {
+    opacity: 0.78;
+}
+
+button.search-tab-mini-btn:hover,
+box.search-sidebar row.search-tab-row button.search-tab-mini-btn:hover,
+box.search-sidebar row.search-tab-row button.search-tab-mini-btn:focus-visible,
+box.search-sidebar box.search-tab-row button.search-tab-mini-btn:hover,
+box.search-sidebar box.search-tab-row button.search-tab-mini-btn:focus-visible {
     opacity: 1.0;
     background-color: alpha(currentColor, 0.10);
 }
@@ -300,7 +523,8 @@ button.search-sidebar-new-tab {
     padding: 5px 8px;
     font-size: 0.88rem;
     opacity: 0.80;
-    transition: opacity 130ms ease, background-color 130ms ease;
+    transition: opacity 120ms cubic-bezier(0.2, 0, 0, 1),
+                background-color 120ms cubic-bezier(0.2, 0, 0, 1);
 }
 
 button.search-sidebar-new-tab:hover {
@@ -314,7 +538,8 @@ button.search-sidebar-settings-btn {
     padding: 0;
     border-radius: 8px;
     opacity: 0.70;
-    transition: opacity 130ms ease, background-color 130ms ease;
+    transition: opacity 120ms cubic-bezier(0.2, 0, 0, 1),
+                background-color 120ms cubic-bezier(0.2, 0, 0, 1);
 }
 
 button.search-sidebar-settings-btn:hover {
@@ -373,7 +598,8 @@ button.search-settings-rail-btn {
     border-radius: 8px;
     padding: 7px 10px;
     margin: 1px 0;
-    transition: background-color 130ms ease, color 130ms ease;
+    transition: background-color 120ms cubic-bezier(0.2, 0, 0, 1),
+                color 120ms cubic-bezier(0.2, 0, 0, 1);
 }
 
 button.search-settings-rail-btn:hover {
@@ -409,7 +635,8 @@ button.search-settings-result-btn {
     border-radius: 10px;
     background-color: alpha(currentColor, 0.04);
     border: 1px solid alpha(currentColor, 0.06);
-    transition: background-color 130ms ease, border-color 130ms ease;
+    transition: background-color 120ms cubic-bezier(0.2, 0, 0, 1),
+                border-color 120ms cubic-bezier(0.2, 0, 0, 1);
 }
 
 button.search-settings-result-btn:hover {
@@ -437,7 +664,7 @@ label.search-keycap {
 }
 
 /* ============================================================================
- * Selector difuso `Ctrl+K`, desplegable del omnibox y paneles laterales
+ * Paleta de comandos y selector `Ctrl+K`, desplegable del omnibox y paneles
  * ============================================================================ */
 box.search-switcher-root {
     padding: 12px;
@@ -449,9 +676,9 @@ listbox.search-switcher-list {
 
 listbox.search-switcher-list row.search-switcher-row {
     border-radius: 8px;
-    padding: 6px 10px;
+    padding: 7px 10px;
     margin: 1px 0;
-    transition: background-color 120ms ease;
+    transition: background-color 120ms cubic-bezier(0.2, 0, 0, 1);
 }
 
 listbox.search-switcher-list row.search-switcher-row:selected {
@@ -465,16 +692,32 @@ label.search-switcher-url {
 
 label.search-switcher-badge {
     font-size: 0.72rem;
+    font-weight: 600;
     padding: 2px 7px;
     border-radius: 999px;
     background-color: alpha(currentColor, 0.09);
     opacity: 0.86;
 }
 
+label.search-switcher-badge.command {
+    background-color: alpha(@accent_bg_color, 0.16);
+    color: @accent_color;
+    opacity: 1.0;
+}
+
+label.search-switcher-section {
+    font-size: 0.72rem;
+    font-weight: 600;
+    letter-spacing: 0.04em;
+    opacity: 0.56;
+    padding-left: 4px;
+}
+
 popover.search-omnibox-popover > contents {
     padding: 4px;
-    border-radius: 11px;
-    box-shadow: 0 8px 26px alpha(#000000, 0.16);
+    border-radius: 12px;
+    border: 1px solid transparent;
+    box-shadow: 0 8px 24px alpha(#000000, 0.16), 0 2px 6px alpha(#000000, 0.08);
 }
 
 listbox.search-omnibox-list {
@@ -484,7 +727,7 @@ listbox.search-omnibox-list {
 listbox.search-omnibox-list row.search-omnibox-row {
     border-radius: 8px;
     margin: 1px 0;
-    transition: background-color 120ms ease;
+    transition: background-color 120ms cubic-bezier(0.2, 0, 0, 1);
 }
 
 listbox.search-omnibox-list row.search-omnibox-row:selected {
@@ -542,7 +785,7 @@ listbox.search-panel-list row.search-panel-row {
 button.search-panel-item-btn {
     padding: 4px 6px;
     border-radius: 7px;
-    transition: background-color 120ms ease;
+    transition: background-color 120ms cubic-bezier(0.2, 0, 0, 1);
 }
 
 box.search-panel-editor {
@@ -550,13 +793,15 @@ box.search-panel-editor {
     border-radius: 8px;
     background-color: alpha(currentColor, 0.05);
 }
+
 box.search-reader-pill {
     background-color: alpha(@window_bg_color, 0.92);
     border: 1px solid alpha(currentColor, 0.14);
     border-radius: 999px;
     padding: 3px 6px;
-    opacity: 0.72;
-    transition: opacity 120ms ease;
+    box-shadow: 0 4px 14px alpha(#000000, 0.12), 0 1px 3px alpha(#000000, 0.06);
+    opacity: 0.76;
+    transition: opacity 120ms cubic-bezier(0.2, 0, 0, 1);
 }
 
 box.search-reader-pill:hover {
@@ -592,6 +837,7 @@ label.search-toast-pill {
     padding: 6px 14px;
     font-size: 0.84rem;
     font-weight: 500;
+    box-shadow: 0 6px 20px alpha(#000000, 0.14), 0 1px 4px alpha(#000000, 0.08);
 }
 
 /* ============================================================================
@@ -600,7 +846,7 @@ label.search-toast-pill {
 paned.search-split-paned > separator {
     min-width: 5px;
     background-color: alpha(currentColor, 0.08);
-    transition: background-color 140ms ease;
+    transition: background-color 140ms cubic-bezier(0.2, 0, 0, 1);
 }
 
 paned.search-split-paned > separator:hover {
@@ -609,7 +855,7 @@ paned.search-split-paned > separator:hover {
 
 box.search-split-pane {
     border: 2px solid transparent;
-    transition: border-color 140ms ease;
+    transition: border-color 140ms cubic-bezier(0.2, 0, 0, 1);
 }
 
 box.search-split-pane.focused {
@@ -652,15 +898,63 @@ pub fn install_css() {
         let provider = CssProvider::new();
         provider.load_from_string(BASE_CSS);
         provider.add_to_display(&display, STYLE_PROVIDER_PRIORITY_APPLICATION);
+
+        THEME_SWITCH_PROVIDER.with(|slot| {
+            let mut guard = slot.borrow_mut();
+            if guard.is_none() {
+                let switch_provider = CssProvider::new();
+                switch_provider.add_to_display(&display, STYLE_PROVIDER_PRIORITY_APPLICATION + 1);
+                *guard = Some(switch_provider);
+            }
+        });
     }
 }
 
-/// Aplica el esquema de color (`system`, `light` o `dark`) sobre `AdwStyleManager`.
+/// Aplica el esquema de color (`system`, `light` o `dark`) sobre `AdwStyleManager`,
+/// suprimiendo transiciones durante el cambio de tema para evitar parpadeos de color.
 pub fn apply_color_look(style_manager: &StyleManager, look: ColorLook) {
     let scheme = match look {
         ColorLook::System => ColorScheme::Default,
         ColorLook::Light => ColorScheme::ForceLight,
         ColorLook::Dark => ColorScheme::ForceDark,
     };
+
+    THEME_SWITCH_PROVIDER.with(|slot| {
+        if let Some(provider) = slot.borrow().as_ref() {
+            provider.load_from_string("* { transition-duration: 0ms; }");
+            let p_restore = provider.clone();
+            glib::timeout_add_local_once(Duration::from_millis(32), move || {
+                p_restore.load_from_string("");
+            });
+        }
+    });
+
     style_manager.set_color_scheme(scheme);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn base_css_has_no_gtk4_deprecated_logical_properties_or_transition_all() {
+        assert!(!BASE_CSS.contains("margin-start"));
+        assert!(!BASE_CSS.contains("margin-end"));
+        assert!(!BASE_CSS.contains("padding-start"));
+        assert!(!BASE_CSS.contains("padding-end"));
+        assert!(!BASE_CSS.contains("transition: all"));
+        assert!(!BASE_CSS.contains("transition-property: all"));
+    }
+
+    #[test]
+    fn base_css_loads_into_gtk_css_provider() {
+        let _guard = crate::GTK_TEST_MUTEX
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        if !gnome_platform::init() || gnome_platform::gdk::Display::default_display().is_none() {
+            return;
+        }
+        let provider = CssProvider::new();
+        provider.load_from_string(BASE_CSS);
+    }
 }
