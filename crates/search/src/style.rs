@@ -538,6 +538,56 @@ box.search-panel-editor {
     border-radius: 8px;
     background-color: alpha(currentColor, 0.05);
 }
+/* ============================================================================
+ * Split View (`GtkPaned`) y Picture-in-Picture (`GtkWindow`)
+ * ============================================================================ */
+paned.search-split-paned > separator {
+    min-width: 5px;
+    background-color: alpha(currentColor, 0.08);
+    transition: background-color 140ms ease;
+}
+
+paned.search-split-paned > separator:hover {
+    background-color: alpha(@accent_bg_color, 0.45);
+}
+
+box.search-split-pane {
+    border: 2px solid transparent;
+    transition: border-color 140ms ease;
+}
+
+box.search-split-pane.focused {
+    border-color: alpha(@accent_bg_color, 0.45);
+}
+
+image.search-split-tab-favicon {
+    margin-left: -3px;
+    opacity: 0.92;
+}
+
+window.search-pip-window {
+    background-color: #000000;
+    border-radius: 10px;
+}
+
+box.search-pip-controls {
+    margin-top: 8px;
+    margin-right: 8px;
+    padding: 3px 5px;
+    border-radius: 999px;
+    background-color: alpha(#141416, 0.68);
+}
+
+button.search-pip-btn {
+    min-width: 24px;
+    min-height: 24px;
+    padding: 2px;
+    color: #ffffff;
+}
+
+button.search-pip-btn:hover {
+    background-color: alpha(#ffffff, 0.18);
+}
 "#;
 
 /// Registra el proveedor CSS de la aplicación en el `GdkDisplay` activo.

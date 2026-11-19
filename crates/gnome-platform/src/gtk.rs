@@ -3,10 +3,11 @@ use crate::gdk::{
 };
 use crate::gio::{Icon, Menu, SimpleActionGroup};
 use crate::object::{
-    connect_signal_drag_prepare, connect_signal_drop_string, connect_signal_f64_f64,
-    connect_signal_f64_f64_bool, connect_signal_i32_f64_f64, connect_signal_i32_i32,
-    connect_signal_key_pressed, connect_signal_key_released, connect_signal_notify,
-    connect_signal_ptr, connect_signal_void, to_cstring, ObjectRef, SignalHandlerId,
+    connect_signal_bool_ret, connect_signal_drag_prepare, connect_signal_drop_string,
+    connect_signal_f64_f64, connect_signal_f64_f64_bool, connect_signal_i32_f64_f64,
+    connect_signal_i32_i32, connect_signal_key_pressed, connect_signal_key_released,
+    connect_signal_notify, connect_signal_ptr, connect_signal_void, to_cstring, ObjectRef,
+    SignalHandlerId,
 };
 use crate::sys;
 use bitflags::bitflags;
@@ -2276,5 +2277,272 @@ impl FileLauncher {
                 ptr::null_mut(),
             );
         }
+    }
+}
+
+#[derive(Clone)]
+pub struct Paned {
+    obj: ObjectRef,
+}
+
+impl Paned {
+    pub fn new(orientation: Orientation) -> Self {
+        let ptr = unsafe { sys::gtk_paned_new(orientation as i32) };
+        let obj = unsafe { ObjectRef::from_new_ptr(ptr.cast()) };
+        Self { obj }
+    }
+
+    pub fn set_start_child(&self, child: Option<&impl AsWidget>) {
+        unsafe {
+            let ptr = child.map_or(ptr::null_mut(), AsWidget::as_widget_ptr);
+            sys::gtk_paned_set_start_child(self.obj.as_ptr().cast(), ptr);
+        }
+    }
+
+    pub fn set_end_child(&self, child: Option<&impl AsWidget>) {
+        unsafe {
+            let ptr = child.map_or(ptr::null_mut(), AsWidget::as_widget_ptr);
+            sys::gtk_paned_set_end_child(self.obj.as_ptr().cast(), ptr);
+        }
+    }
+
+    pub fn set_resize_start_child(&self, resize: bool) {
+        unsafe {
+            sys::gtk_paned_set_resize_start_child(
+                self.obj.as_ptr().cast(),
+                if resize { sys::GTRUE } else { sys::GFALSE },
+            );
+        }
+    }
+
+    pub fn set_resize_end_child(&self, resize: bool) {
+        unsafe {
+            sys::gtk_paned_set_resize_end_child(
+                self.obj.as_ptr().cast(),
+                if resize { sys::GTRUE } else { sys::GFALSE },
+            );
+        }
+    }
+
+    pub fn set_shrink_start_child(&self, shrink: bool) {
+        unsafe {
+            sys::gtk_paned_set_shrink_start_child(
+                self.obj.as_ptr().cast(),
+                if shrink { sys::GTRUE } else { sys::GFALSE },
+            );
+        }
+    }
+
+    pub fn set_shrink_end_child(&self, shrink: bool) {
+        unsafe {
+            sys::gtk_paned_set_shrink_end_child(
+                self.obj.as_ptr().cast(),
+                if shrink { sys::GTRUE } else { sys::GFALSE },
+            );
+        }
+    }
+
+    pub fn set_position(&self, position: i32) {
+        unsafe {
+            sys::gtk_paned_set_position(self.obj.as_ptr().cast(), position);
+        }
+    }
+
+    pub fn position(&self) -> i32 {
+        unsafe { sys::gtk_paned_get_position(self.obj.as_ptr().cast()) }
+    }
+
+    pub fn set_wide_handle(&self, wide: bool) {
+        unsafe {
+            sys::gtk_paned_set_wide_handle(
+                self.obj.as_ptr().cast(),
+                if wide { sys::GTRUE } else { sys::GFALSE },
+            );
+        }
+    }
+
+    pub fn connect_position_notify<F: Fn() + 'static>(&self, callback: F) -> SignalHandlerId {
+        connect_signal_notify(self.obj.as_ptr(), "position", callback)
+    }
+}
+
+impl AsWidget for Paned {
+    fn as_widget_ptr(&self) -> *mut sys::GtkWidget {
+        self.obj.as_ptr().cast()
+    }
+}
+
+#[derive(Clone)]
+pub struct Window {
+    obj: ObjectRef,
+}
+
+impl Window {
+    pub fn new() -> Self {
+        let ptr = unsafe { sys::gtk_window_new() };
+        let obj = unsafe { ObjectRef::from_new_ptr(ptr.cast()) };
+        Self { obj }
+    }
+
+    pub fn set_title(&self, title: &str) {
+        let c_title = to_cstring(title);
+        unsafe {
+            sys::gtk_window_set_title(self.obj.as_ptr().cast(), c_title.as_ptr());
+        }
+    }
+
+    pub fn set_decorated(&self, decorated: bool) {
+        unsafe {
+            sys::gtk_window_set_decorated(
+                self.obj.as_ptr().cast(),
+                if decorated { sys::GTRUE } else { sys::GFALSE },
+            );
+        }
+    }
+
+    pub fn set_resizable(&self, resizable: bool) {
+        unsafe {
+            sys::gtk_window_set_resizable(
+                self.obj.as_ptr().cast(),
+                if resizable { sys::GTRUE } else { sys::GFALSE },
+            );
+        }
+    }
+
+    pub fn set_default_size(&self, width: i32, height: i32) {
+        unsafe {
+            sys::gtk_window_set_default_size(self.obj.as_ptr().cast(), width, height);
+        }
+    }
+
+    pub fn default_size(&self) -> (i32, i32) {
+        let mut w = 0;
+        let mut h = 0;
+        unsafe {
+            sys::gtk_window_get_default_size(self.obj.as_ptr().cast(), &mut w, &mut h);
+        }
+        (w, h)
+    }
+
+    pub fn set_child(&self, child: Option<&impl AsWidget>) {
+        unsafe {
+            let ptr = child.map_or(ptr::null_mut(), AsWidget::as_widget_ptr);
+            sys::gtk_window_set_child(self.obj.as_ptr().cast(), ptr);
+        }
+    }
+
+    pub fn set_transient_for(&self, parent: Option<&crate::adw::ApplicationWindow>) {
+        unsafe {
+            let ptr = parent.map_or(ptr::null_mut(), |w| w.as_window_ptr());
+            sys::gtk_window_set_transient_for(self.obj.as_ptr().cast(), ptr);
+        }
+    }
+
+    pub fn set_hide_on_close(&self, hide: bool) {
+        unsafe {
+            sys::gtk_window_set_hide_on_close(
+                self.obj.as_ptr().cast(),
+                if hide { sys::GTRUE } else { sys::GFALSE },
+            );
+        }
+    }
+
+    pub fn present(&self) {
+        unsafe {
+            sys::gtk_window_present(self.obj.as_ptr().cast());
+        }
+    }
+
+    pub fn close(&self) {
+        unsafe {
+            sys::gtk_window_close(self.obj.as_ptr().cast());
+        }
+    }
+
+    pub fn destroy(&self) {
+        unsafe {
+            sys::gtk_window_destroy(self.obj.as_ptr().cast());
+        }
+    }
+
+    pub fn connect_close_request<F: Fn() -> bool + 'static>(&self, callback: F) -> SignalHandlerId {
+        connect_signal_bool_ret(self.obj.as_ptr(), "close-request", callback)
+    }
+}
+
+impl Default for Window {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl AsWidget for Window {
+    fn as_widget_ptr(&self) -> *mut sys::GtkWidget {
+        self.obj.as_ptr().cast()
+    }
+}
+
+#[derive(Clone)]
+pub struct WindowHandle {
+    obj: ObjectRef,
+}
+
+impl WindowHandle {
+    pub fn new() -> Self {
+        let ptr = unsafe { sys::gtk_window_handle_new() };
+        let obj = unsafe { ObjectRef::from_new_ptr(ptr.cast()) };
+        Self { obj }
+    }
+
+    pub fn set_child(&self, child: Option<&impl AsWidget>) {
+        unsafe {
+            let ptr = child.map_or(ptr::null_mut(), AsWidget::as_widget_ptr);
+            sys::gtk_window_handle_set_child(self.obj.as_ptr().cast(), ptr);
+        }
+    }
+}
+
+impl Default for WindowHandle {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl AsWidget for WindowHandle {
+    fn as_widget_ptr(&self) -> *mut sys::GtkWidget {
+        self.obj.as_ptr().cast()
+    }
+}
+
+#[derive(Clone)]
+pub struct AspectFrame {
+    obj: ObjectRef,
+}
+
+impl AspectFrame {
+    pub fn new(xalign: f32, yalign: f32, ratio: f32, obey_child: bool) -> Self {
+        let ptr = unsafe {
+            sys::gtk_aspect_frame_new(
+                xalign,
+                yalign,
+                ratio,
+                if obey_child { sys::GTRUE } else { sys::GFALSE },
+            )
+        };
+        let obj = unsafe { ObjectRef::from_new_ptr(ptr.cast()) };
+        Self { obj }
+    }
+
+    pub fn set_child(&self, child: Option<&impl AsWidget>) {
+        unsafe {
+            let ptr = child.map_or(ptr::null_mut(), AsWidget::as_widget_ptr);
+            sys::gtk_aspect_frame_set_child(self.obj.as_ptr().cast(), ptr);
+        }
+    }
+}
+
+impl AsWidget for AspectFrame {
+    fn as_widget_ptr(&self) -> *mut sys::GtkWidget {
+        self.obj.as_ptr().cast()
     }
 }

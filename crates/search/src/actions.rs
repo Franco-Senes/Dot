@@ -106,6 +106,15 @@ pub fn install_app_actions_and_accels(app: &Application, settings: &SettingsStor
         "win.toggle-downloads",
         &["<Control><Shift>y", "<Control><Shift>j"],
     );
+
+    // Fase 6 — Split View y Picture-in-Picture.
+    app.set_accels_for_action(
+        "win.split-tab",
+        &["<Control><Shift>backslash", "<Control><Alt>n"],
+    );
+    app.set_accels_for_action("win.split-focus-other", &["<Control><Alt>backslash"]);
+    app.set_accels_for_action("win.split-separate", &["<Control><Alt>s"]);
+    app.set_accels_for_action("win.toggle-pip", &["<Control><Shift>p"]);
 }
 
 /// Registra todas las acciones de ventana (`win.*`) sobre `gtk_win`.
@@ -337,6 +346,37 @@ pub fn install_window_actions(gtk_win: &ApplicationWindow, win: &BrowserWindow) 
         let w = win.clone();
         move || w.toggle_downloads_panel()
     });
+
+    // Fase 6.
+    add_win_action(gtk_win, "split-tab", {
+        let w = win.clone();
+        move || w.split_current_tab(None)
+    });
+
+    add_win_action(gtk_win, "split-focus-other", {
+        let w = win.clone();
+        move || w.focus_other_split_pane()
+    });
+
+    add_win_action(gtk_win, "split-separate", {
+        let w = win.clone();
+        move || w.separate_active_split()
+    });
+
+    add_win_action(gtk_win, "split-swap", {
+        let w = win.clone();
+        move || w.swap_active_split()
+    });
+
+    add_win_action(gtk_win, "split-close-pane", {
+        let w = win.clone();
+        move || w.close_active_split_pane()
+    });
+
+    add_win_action(gtk_win, "toggle-pip", {
+        let w = win.clone();
+        move || w.toggle_pip_for_active_tab()
+    });
 }
 
 /// Muestra el diálogo nativo `AdwShortcutsDialog` (`Ctrl+?`) con todos los atajos activos.
@@ -354,6 +394,10 @@ pub fn present_shortcuts_dialog(parent: &ApplicationWindow) {
         ("Ir a pestaña 1…8", "<Control>1...<Control>8"),
         ("Ir a la última pestaña", "<Control>9"),
         ("Duplicar pestaña", "<Control><Alt>d"),
+        ("Dividir pestaña (Split View)", "<Control><Shift>backslash"),
+        ("Cambiar foco entre paneles", "<Control><Alt>backslash"),
+        ("Separar paneles divididos", "<Control><Alt>s"),
+        ("Picture-in-Picture", "<Control><Shift>p"),
         ("Silenciar o activar sonido", "<Control><Shift>m"),
         (
             "Alternar pestañas arriba / barra lateral",
