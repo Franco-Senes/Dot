@@ -27,6 +27,10 @@ const GENERATED_CLASS_PREFIXES: &[&str] = &[
     "css-", "sc-", "jsx-", "emotion-", "svelte-", "style-", "styles-", "styled-", "chakra-", "mui-",
 ];
 
+fn default_true() -> bool {
+    true
+}
+
 /// Regla persistida para ocultar un elemento en un sitio (`PORTING.md` §4 `curtain.json`).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Veil {
@@ -35,6 +39,15 @@ pub struct Veil {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub note: Option<String>,
     pub date: f64,
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+}
+
+/// Estadísticas de importación de reglas Curtain desde JSON.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct CurtainImportStats {
+    pub added: usize,
+    pub skipped: usize,
 }
 
 /// Almacén persistente de reglas Curtain agrupadas por dominio sin `www.`.
@@ -178,7 +191,26 @@ impl CurtainStore {
             label: lbl,
             note: clean_note,
             date,
+            enabled: true,
         });
+        true
+    }
+
+    /// Activa o desactiva una regla existente en `host` sin eliminarla. Devuelve `true` si cambió.
+    pub fn set_enabled(&mut self, host: &str, selector: &str, enabled: bool) -> bool {
+        let Some(norm_host) = site_host(host) else {
+            return false;
+        };
+        let Some(list) = self.by_host.get_mut(&norm_host) else {
+            return false;
+        };
+        let Some(veil) = list.iter_mut().find(|v| v.selector == selector) else {
+            return false;
+        };
+        if veil.enabled == enabled {
+            return false;
+        }
+        veil.enabled = enabled;
         true
     }
 
@@ -233,10 +265,39 @@ impl CurtainStore {
     pub fn css_for_host(&self, host: &str, spared_selector: Option<&str>) -> String {
         self.veils(host)
             .iter()
-            .filter(|v| Some(v.selector.as_str()) != spared_selector)
+            .filter(|v| v.enabled && Some(v.selector.as_str()) != spared_selector)
             .map(|v| format!("{} {{ display: none !important; }}", v.selector))
             .collect::<Vec<_>>()
             .join("\n")
+    }
+
+    /// Exporta todas las reglas normalizadas como JSON legible.
+    pub fn export_json(&self) -> Result<String> {
+        let mut normalized = self.clone();
+        normalized.normalize();
+        let mut out = serde_json::to_string_pretty(&normalized)?;
+        out.push('\n');
+        Ok(out)
+    }
+
+    /// Importa reglas desde JSON y las fusiona sin duplicar `(host, selector)`.
+    pub fn import_json(&mut self, raw: &str) -> Result<CurtainImportStats> {
+        let mut incoming: Self = serde_json::from_str(raw)?;
+        incoming.normalize();
+        let mut stats = CurtainImportStats::default();
+        for (host, veils) in incoming.by_host {
+            let entry = self.by_host.entry(host).or_default();
+            for veil in veils {
+                if entry.iter().any(|v| v.selector == veil.selector) {
+                    stats.skipped += 1;
+                } else {
+                    entry.push(veil);
+                    stats.added += 1;
+                }
+            }
+        }
+        self.normalize();
+        Ok(stats)
     }
 }
 
@@ -1102,5 +1163,60 @@ mod tests {
             generate_selector(&snapshot_from_fixture(&dom, second_card)).as_deref(),
             Some("section.story-body > div.card:nth-of-type(2)")
         );
+    }
+
+    #[test]
+    fn toggle_rule_enabled_omits_from_css_without_deleting() {
+        let mut store = CurtainStore::default();
+        assert!(store.hide(
+            "https://example.com",
+            "#banner".into(),
+            "Banner".into(),
+            None,
+            1.0
+        ));
+        assert!(store.css_for_host("example.com", None).contains("#banner"));
+
+        assert!(store.set_enabled("example.com", "#banner", false));
+        assert!(!store.set_enabled("example.com", "#banner", false));
+        assert_eq!(store.veils("example.com").len(), 1);
+        assert!(!store.veils("example.com")[0].enabled);
+        assert!(store.css_for_host("example.com", None).is_empty());
+
+        assert!(store.set_enabled("example.com", "#banner", true));
+        assert!(store.css_for_host("example.com", None).contains("#banner"));
+    }
+
+    #[test]
+    fn export_and_import_json_merges_without_duplicates() {
+        let mut src = CurtainStore::default();
+        src.hide(
+            "https://example.com",
+            "#cookie-bar".into(),
+            "Cookies".into(),
+            None,
+            10.0,
+        );
+        src.hide(
+            "https://news.example.org",
+            ".promo".into(),
+            "Promo".into(),
+            Some("abajo".into()),
+            20.0,
+        );
+        let json = src.export_json().expect("export");
+
+        let mut dst = CurtainStore::default();
+        dst.hide(
+            "https://example.com",
+            "#cookie-bar".into(),
+            "Cookies".into(),
+            None,
+            5.0,
+        );
+        let stats = dst.import_json(&json).expect("import");
+        assert_eq!(stats.added, 1);
+        assert_eq!(stats.skipped, 1);
+        assert_eq!(dst.total_rules(), 2);
     }
 }
