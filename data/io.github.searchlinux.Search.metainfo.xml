@@ -1,0 +1,78 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<component type="desktop-application">
+  <id>io.github.searchlinux.Search</id>
+  <metadata_license>CC0-1.0</metadata_license>
+  <project_license>MIT</project_license>
+
+  <name>Search</name>
+  <summary>Small, fast, quiet web browser</summary>
+  <summary xml:lang="es">Navegador web pequeño, rápido y silencioso</summary>
+
+  <description>
+    <p>
+      Search is a native Linux port of Search (originally created for macOS by
+      Office Commun), built in Rust with GTK4, libadwaita, and Chromium Embedded
+      Framework in windowless Alloy mode.
+    </p>
+    <p>
+      Its interface shows only tabs (top bar or vertical sidebar) and the web
+      page: no toolbars, no home page, no accounts, no sync, and no telemetry.
+    </p>
+    <p xml:lang="es">
+      Search es un port nativo para Linux de Search (creado originalmente para
+      macOS por Office Commun), desarrollado íntegramente en Rust con GTK4,
+      libadwaita y Chromium Embedded Framework en modo Alloy sin interfaz de Chrome.
+    </p>
+    <p xml:lang="es">
+      La interfaz se limita a las pestañas (arriba o en barra lateral vertical) y
+      la página: sin barras de herramientas, sin página de inicio, sin cuentas,
+      sin sincronización y sin telemetría.
+    </p>
+    <ul>
+      <li>Strict privacy by default: third-party cookies blocked, Global Privacy Control (Sec-GPC), click-ID stripping, and zero background Google services.</li>
+      <li>Built-in Shield ad/tracker blocking, Curtain element hider, Reader Mode, Split View, and Picture-in-Picture.</li>
+      <li>Local Secret Service password Vault with zero plaintext credentials on disk.</li>
+      <li>Native Wayland and X11 support with automatic light and dark desktop integration.</li>
+    </ul>
+  </description>
+
+  <developer id="io.github.searchlinux">
+    <name>search-linux contributors (based on Search by Office Commun)</name>
+  </developer>
+
+  <launchable type="desktop-id">io.github.searchlinux.Search.desktop</launchable>
+
+  <url type="homepage">https://github.com/driceroland/Search</url>
+  <url type="bugtracker">https://github.com/driceroland/Search/issues</url>
+  <url type="vcs-browser">https://github.com/driceroland/Search</url>
+
+  <branding>
+    <color type="primary" scheme_preference="light">#f6f6f6</color>
+    <color type="primary" scheme_preference="dark">#171717</color>
+  </branding>
+
+  <categories>
+    <category>Network</category>
+    <category>WebBrowser</category>
+  </categories>
+
+  <recommends>
+    <control>pointing</control>
+    <control>keyboard</control>
+    <control>touch</control>
+  </recommends>
+
+  <requires>
+    <display_length compare="ge">360</display_length>
+  </requires>
+
+  <content_rating type="oars-1.1" />
+
+  <releases>
+    <release version="0.1.0" date="2026-11-18">
+      <description>
+        <p>Initial Linux port with GTK4/libadwaita UI, CEF 156 Alloy OSR engine, tabs and session persistence, history, bookmarks, downloads, privacy protections, bench tooling, and Flatpak packaging.</p>
+      </description>
+    </release>
+  </releases>
+</component>

@@ -1,0 +1,46 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  rust-and-desktop-checks:
+    name: Format, Clippy, Tests & Metadata
+    runs-on: ubuntu-latest
+    container:
+      image: ghcr.io/flathub-infra/flatpak-github-actions:gnome-51
+    env:
+      CARGO_TERM_COLOR: always
+      PATH: /usr/lib/sdk/rust-stable/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Check formatting
+        run: cargo fmt --all -- --check
+
+      - name: Validate desktop entry
+        run: desktop-file-validate data/io.github.searchlinux.Search.desktop
+
+      - name: Validate AppStream metainfo
+        run: appstreamcli validate --no-net data/io.github.searchlinux.Search.metainfo.xml
+
+      - name: Compile GSettings schema
+        run: glib-compile-schemas --strict --dry-run data
+
+      - name: Clippy (strict)
+        run: cargo clippy --workspace --all-targets -- -D warnings
+
+      - name: Verify OpenSSL in SDK (used by synthetic CRX3 RSA-2048 tests)
+        run: openssl version
+
+      - name: Unit tests
+        run: cargo test --workspace
+
+      - name: Headless fixture self-check (search-bench)
+        run: cargo run --package search-bench --bin test-find -- --fixture-check

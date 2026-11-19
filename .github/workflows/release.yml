@@ -1,0 +1,43 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  release-flatpak:
+    name: Build & Publish Release
+    runs-on: ubuntu-latest
+    container:
+      image: ghcr.io/flathub-infra/flatpak-github-actions:gnome-51
+      options: --privileged
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Validate metadata
+        run: |
+          desktop-file-validate data/io.github.searchlinux.Search.desktop
+          appstreamcli validate --no-net data/io.github.searchlinux.Search.metainfo.xml
+
+      - name: Build Flatpak bundle
+        uses: flatpak/flatpak-github-actions/flatpak-builder@v6
+        with:
+          bundle: io.github.searchlinux.Search.flatpak
+          manifest-path: build-aux/flatpak/io.github.searchlinux.Search.yml
+          cache-key: flatpak-release-${{ github.ref_name }}
+
+      - name: Generate SHA-256 checksums
+        run: sha256sum io.github.searchlinux.Search.flatpak > SHA256SUMS.txt
+
+      - name: Publish GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            io.github.searchlinux.Search.flatpak
+            SHA256SUMS.txt
+          generate_release_notes: true
