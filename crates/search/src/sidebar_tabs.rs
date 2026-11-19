@@ -8,13 +8,14 @@
 //! 4. Pie discreto con `+ Nueva pestaña` y botón compacto de `Ajustes (plasma://settings)`.
 
 use crate::icons::{self, IconId};
-use gnome_platform::gdk::{ContentProvider, DragAction, Rectangle, Texture};
+use gnome_platform::gdk::{self, ContentProvider, DragAction, Rectangle, Texture};
 use gnome_platform::gtk::{
     Align, AsEditable, AsWidget, BoxWidget, Button, DragSource, DropTarget, EllipsizeMode, Entry,
-    GestureClick, Image, Label, ListBox, ListBoxRow, Orientation, PolicyType, Popover,
-    PositionType, Revealer, RevealerTransitionType, ScrolledWindow, SelectionMode, Separator,
-    Spinner,
+    EventControllerMotion, GestureClick, Image, Label, ListBox, ListBoxRow, Orientation,
+    PolicyType, Popover, PositionType, Revealer, RevealerTransitionType, ScrolledWindow,
+    SearchEntry, SelectionMode, Separator, Spinner,
 };
+use search_core::address::clean_link;
 use search_core::pin_folders::{PinFolder, PinFolderStore, MAX_PIN_FOLDER_DEPTH};
 use search_core::session::PinStyle;
 use search_core::settings::{AppSettings, TabGlyph};
@@ -228,6 +229,18 @@ pub struct SidebarCallbacks {
     pub on_select: Option<Box<dyn Fn(u64)>>,
     pub on_close: Option<Box<dyn Fn(u64)>>,
     pub on_toggle_mute: Option<Box<dyn Fn(u64)>>,
+    #[allow(dead_code)]
+    pub on_duplicate_tab: Option<Box<dyn Fn(u64)>>,
+    #[allow(dead_code)]
+    pub on_copy_clean_url: Option<Box<dyn Fn(u64, String)>>,
+    #[allow(dead_code)]
+    pub on_move_to_new_window: Option<Box<dyn Fn(u64)>>,
+    #[allow(dead_code)]
+    pub on_close_tabs_below: Option<Box<dyn Fn(u64)>>,
+    #[allow(dead_code)]
+    pub on_close_other_tabs: Option<Box<dyn Fn(u64)>>,
+    #[allow(dead_code)]
+    pub on_reopen_closed_tab: Option<Box<dyn Fn()>>,
     pub on_context_menu: Option<ContextMenuCallback>,
     pub on_reorder: Option<Box<dyn Fn(u64, u64)>>,
     pub on_drop_tab_into_folder: Option<Box<dyn Fn(u64, String)>>,
@@ -253,6 +266,8 @@ enum FolderEditorMode {
 #[derive(Clone)]
 pub struct SidebarTabs {
     root: BoxWidget,
+    filter_entry: SearchEntry,
+    filter_empty_box: BoxWidget,
     favorites_box: BoxWidget,
     pinned_header: BoxWidget,
     folder_editor_box: BoxWidget,
@@ -267,6 +282,9 @@ pub struct SidebarTabs {
     folder_popover: Rc<RefCell<Option<Popover>>>,
     current_width: Rc<Cell<i32>>,
     motion_ms: Rc<Cell<u32>>,
+    last_items: Rc<RefCell<Vec<SidebarTabItem>>>,
+    last_folders: Rc<RefCell<Vec<PinFolder>>>,
+    last_opts: Rc<Cell<SidebarRenderOptions>>,
     callbacks: Rc<RefCell<SidebarCallbacks>>,
 }
 
@@ -282,6 +300,25 @@ impl SidebarTabs {
         root.add_css_class("search-sidebar");
         root.set_size_request(clamped_width, -1);
         root.set_vexpand(true);
+
+        // 0. Filtro en vivo de pestañas.
+        let filter_entry = SearchEntry::new();
+        filter_entry.set_placeholder_text("Filtrar pestañas…");
+        filter_entry.set_tooltip_text(Some("Filtrar pestañas abiertas por título o dirección"));
+        filter_entry.set_margins(4, 4, 2, 2);
+
+        let filter_empty_box = BoxWidget::new(Orientation::Vertical, 6);
+        filter_empty_box.set_margins(12, 12, 24, 12);
+        filter_empty_box.set_halign(Align::Center);
+        filter_empty_box.set_visible(false);
+        let filter_empty_lbl = Label::new(Some("Sin pestañas coincidentes"));
+        filter_empty_lbl.add_css_class("search-panel-empty");
+        filter_empty_lbl.set_halign(Align::Center);
+        let clear_filter_btn = Button::with_label("Limpiar filtro");
+        clear_filter_btn.add_css_class("flat");
+        clear_filter_btn.set_halign(Align::Center);
+        filter_empty_box.append(&filter_empty_lbl);
+        filter_empty_box.append(&clear_filter_btn);
 
         // 1. Cuadrícula superior de Favoritos (hasta 4 cuadrados por fila).
         let favorites_box = BoxWidget::new(Orientation::Vertical, 5);
@@ -342,6 +379,7 @@ impl SidebarTabs {
 
         // Scrollable combinando filas fijadas y pestañas regulares si crecen mucho.
         let scroll_inner = BoxWidget::new(Orientation::Vertical, 3);
+        scroll_inner.append(&filter_empty_box);
         scroll_inner.append(&pinned_header);
         scroll_inner.append(&folder_editor_box);
         scroll_inner.append(&pinned_tree_box);
@@ -381,6 +419,7 @@ impl SidebarTabs {
         footer.append(&new_tab_btn);
         footer.append(&settings_btn);
 
+        root.append(&filter_entry);
         root.append(&favorites_box);
         root.append(&scrolled);
         root.append(&footer);
@@ -392,6 +431,8 @@ impl SidebarTabs {
 
         let sidebar = Self {
             root,
+            filter_entry: filter_entry.clone(),
+            filter_empty_box,
             favorites_box,
             pinned_header,
             folder_editor_box,
@@ -406,8 +447,25 @@ impl SidebarTabs {
             folder_popover,
             current_width: Rc::new(Cell::new(clamped_width)),
             motion_ms,
+            last_items: Rc::new(RefCell::new(Vec::new())),
+            last_folders: Rc::new(RefCell::new(Vec::new())),
+            last_opts: Rc::new(Cell::new(SidebarRenderOptions::default())),
             callbacks: callbacks.clone(),
         };
+
+        {
+            let s = sidebar.clone();
+            filter_entry.connect_search_changed(move || {
+                s.render_filtered();
+            });
+        }
+        {
+            let fe = filter_entry.clone();
+            clear_filter_btn.connect_clicked(move || {
+                fe.set_text("");
+                fe.grab_focus();
+            });
+        }
 
         // Botones del pie.
         {
@@ -704,21 +762,61 @@ impl SidebarTabs {
         folders: &[PinFolder],
         opts: SidebarRenderOptions,
     ) {
+        *self.last_items.borrow_mut() = items.to_vec();
+        *self.last_folders.borrow_mut() = folders.to_vec();
+        self.last_opts.set(opts);
+        self.render_filtered();
+    }
+
+    fn render_filtered(&self) {
+        let all_items = self.last_items.borrow();
+        let folders = self.last_folders.borrow();
+        let opts = self.last_opts.get();
+
         self.set_roomy(opts.roomy);
         self.set_motion_duration(opts.motion_ms);
         let dark = icons::is_dark_theme();
         self.refresh_theme_icons(dark);
 
+        let query = self.filter_entry.text().trim().to_lowercase();
+        let filtered_items: Vec<&SidebarTabItem> = if query.is_empty() {
+            all_items.iter().collect()
+        } else {
+            all_items
+                .iter()
+                .filter(|i| {
+                    i.title.to_lowercase().contains(&query) || i.url.to_lowercase().contains(&query)
+                })
+                .collect()
+        };
+
+        if !query.is_empty() && filtered_items.is_empty() {
+            self.favorites_box.set_visible(false);
+            self.pinned_header.set_visible(false);
+            self.pinned_tree_box.set_visible(false);
+            self.pinned_sep.set_visible(false);
+            self.list_box.remove_all();
+            self.filter_empty_box.set_visible(true);
+            return;
+        }
+        self.filter_empty_box.set_visible(false);
+
         // Separar favoritos cuadrados, filas fijadas y pestañas regulares.
-        let squares: Vec<&SidebarTabItem> = items
+        let squares: Vec<&SidebarTabItem> = filtered_items
             .iter()
+            .copied()
             .filter(|i| i.pin_style == Some(PinStyle::Square) && i.folder_id.is_none())
             .collect();
-        let pinned_rows: Vec<&SidebarTabItem> = items
+        let pinned_rows: Vec<&SidebarTabItem> = filtered_items
             .iter()
+            .copied()
             .filter(|i| i.pin_style == Some(PinStyle::Row) || i.folder_id.is_some())
             .collect();
-        let regular: Vec<&SidebarTabItem> = items.iter().filter(|i| !i.is_pinned()).collect();
+        let regular: Vec<&SidebarTabItem> = filtered_items
+            .iter()
+            .copied()
+            .filter(|i| !i.is_pinned())
+            .collect();
 
         // 1. Reconstruir cuadrícula superior de Favoritos (hasta 4 por fila).
         rebuild_box_children(&self.favorites_box, || {
@@ -738,13 +836,14 @@ impl SidebarTabs {
 
         // 2. Reconstruir árbol de carpetas de pines y filas fijadas.
         let has_pinned_tree = !folders.is_empty() || !pinned_rows.is_empty();
-        self.pinned_header.set_visible(true);
+        self.pinned_header
+            .set_visible(query.is_empty() || has_pinned_tree);
         rebuild_box_children(&self.pinned_tree_box, || {
             if !has_pinned_tree {
                 return Vec::new();
             }
             let mut out = Vec::new();
-            self.build_folder_level(None, 0, folders, &pinned_rows, opts, dark, &mut out);
+            self.build_folder_level(None, 0, &folders, &pinned_rows, opts, dark, &mut out);
             out
         });
         self.pinned_tree_box.set_visible(has_pinned_tree);
@@ -760,6 +859,165 @@ impl SidebarTabs {
             let row = build_tab_list_row(item, false, 0, opts, dark, &self.callbacks);
             self.list_box.append(&row);
         }
+    }
+
+    /// Abre el menú contextual enriquecido de una pestaña cuando no se delega externamente.
+    #[allow(clippy::too_many_arguments, dead_code)]
+    pub fn open_tab_context_menu(
+        &self,
+        tab_id: u64,
+        tab_url: &str,
+        is_muted: bool,
+        is_pinned: bool,
+        anchor: &BoxWidget,
+        x: f64,
+        y: f64,
+    ) {
+        if let Some(old) = self.folder_popover.borrow_mut().take() {
+            old.popdown();
+            old.unparent();
+        }
+        let pop = Popover::new();
+        pop.set_parent(anchor);
+        pop.set_has_arrow(false);
+        pop.set_position(PositionType::Right);
+        pop.set_pointing_to(Some(Rectangle {
+            x: x.round() as i32,
+            y: y.round() as i32,
+            width: 1,
+            height: 1,
+        }));
+
+        let menu_box = BoxWidget::new(Orientation::Vertical, 2);
+        menu_box.set_margins(4, 4, 4, 4);
+
+        let add_item = |label: &str, destructive: bool, action: Box<dyn Fn()>| {
+            let btn = Button::with_label(label);
+            btn.add_css_class("flat");
+            if destructive {
+                btn.add_css_class("destructive-action");
+            }
+            let p = pop.clone();
+            btn.connect_clicked(move || {
+                p.popdown();
+                action();
+            });
+            menu_box.append(&btn);
+        };
+
+        {
+            let cbs = self.callbacks.clone();
+            add_item(
+                "Duplicar pestaña",
+                false,
+                Box::new(move || {
+                    if let Some(ref cb) = cbs.borrow().on_duplicate_tab {
+                        cb(tab_id);
+                    }
+                }),
+            );
+        }
+        {
+            let cbs = self.callbacks.clone();
+            let mute_lbl = if is_muted {
+                "Activar sonido"
+            } else {
+                "Silenciar pestaña"
+            };
+            add_item(
+                mute_lbl,
+                false,
+                Box::new(move || {
+                    if let Some(ref cb) = cbs.borrow().on_toggle_mute {
+                        cb(tab_id);
+                    }
+                }),
+            );
+        }
+        {
+            let cbs = self.callbacks.clone();
+            let clean_url = clean_link(tab_url);
+            add_item(
+                "Copiar URL limpia",
+                false,
+                Box::new(move || {
+                    if let Some(ref cb) = cbs.borrow().on_copy_clean_url {
+                        cb(tab_id, clean_url.clone());
+                    } else if let Some(disp) = gdk::Display::default_display() {
+                        disp.set_clipboard_text(&clean_url);
+                    }
+                }),
+            );
+        }
+        {
+            let cbs = self.callbacks.clone();
+            add_item(
+                "Mover a ventana nueva",
+                false,
+                Box::new(move || {
+                    if let Some(ref cb) = cbs.borrow().on_move_to_new_window {
+                        cb(tab_id);
+                    }
+                }),
+            );
+        }
+
+        menu_box.append(&Separator::new(Orientation::Horizontal));
+
+        {
+            let cbs = self.callbacks.clone();
+            add_item(
+                "Cerrar pestañas debajo",
+                false,
+                Box::new(move || {
+                    if let Some(ref cb) = cbs.borrow().on_close_tabs_below {
+                        cb(tab_id);
+                    }
+                }),
+            );
+        }
+        {
+            let cbs = self.callbacks.clone();
+            add_item(
+                "Cerrar otras pestañas",
+                false,
+                Box::new(move || {
+                    if let Some(ref cb) = cbs.borrow().on_close_other_tabs {
+                        cb(tab_id);
+                    }
+                }),
+            );
+        }
+        {
+            let cbs = self.callbacks.clone();
+            add_item(
+                "Reabrir pestaña cerrada",
+                false,
+                Box::new(move || {
+                    if let Some(ref cb) = cbs.borrow().on_reopen_closed_tab {
+                        cb();
+                    }
+                }),
+            );
+        }
+
+        if !is_pinned {
+            menu_box.append(&Separator::new(Orientation::Horizontal));
+            let cbs = self.callbacks.clone();
+            add_item(
+                "Cerrar pestaña",
+                true,
+                Box::new(move || {
+                    if let Some(ref cb) = cbs.borrow().on_close {
+                        cb(tab_id);
+                    }
+                }),
+            );
+        }
+
+        pop.set_child(Some(&menu_box));
+        pop.popup();
+        *self.folder_popover.borrow_mut() = Some(pop);
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -1230,6 +1488,7 @@ fn build_tab_row_content(
         let close_btn = icons::icon_button_for_theme(IconId::Close, 12, dark);
         close_btn.add_css_class("search-tab-mini-btn");
         close_btn.set_tooltip_text(Some("Cerrar pestaña"));
+        close_btn.set_visible(false);
         {
             let cbs = callbacks.clone();
             close_btn.connect_clicked(move || {
@@ -1239,6 +1498,21 @@ fn build_tab_row_content(
             });
         }
         hbox.append(&close_btn);
+
+        let motion = EventControllerMotion::new();
+        {
+            let cb = close_btn.clone();
+            motion.connect_enter(move |_x, _y| {
+                cb.set_visible(true);
+            });
+        }
+        {
+            let cb = close_btn;
+            motion.connect_leave(move || {
+                cb.set_visible(false);
+            });
+        }
+        hbox.add_controller(&motion);
     }
 
     // Clic izquierdo selecciona; clic central cierra (si no está fijada); clic derecho abre menú contextual.

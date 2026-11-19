@@ -711,6 +711,32 @@ fn build_general_section(
         "Evita cerrar el navegador por accidente",
         "quit salir confirm ctrl+q",
     );
+
+    thread_local! {
+        static START_PAGE_NEWTAB: std::cell::Cell<bool> = const { std::cell::Cell::new(true) };
+    }
+    let start_page_row = SwitchRow::new();
+    start_page_row.set_title("Abrir página de inicio (plasma://newtab) al crear pestaña");
+    start_page_row.set_subtitle(
+        "Muestra la página de inicio Plasma con accesos rápidos en cada nueva pestaña",
+    );
+    start_page_row.set_active(START_PAGE_NEWTAB.with(|c| c.get()));
+    {
+        let row_ref = start_page_row.clone();
+        start_page_row.connect_active_notify(move || {
+            let active = row_ref.is_active();
+            START_PAGE_NEWTAB.with(|c| c.set(active));
+        });
+    }
+    startup_group.add(&start_page_row);
+    push_index(
+        index,
+        "general",
+        "General",
+        "Página de inicio (plasma://newtab)",
+        "Mostrar página de inicio Plasma en cada nueva pestaña",
+        "start page inicio newtab plasma",
+    );
     col.append(&startup_group);
 
     // Descargas
@@ -936,6 +962,80 @@ fn build_appearance_section(
         "theme tema look dark light oscuro claro",
     );
 
+    let force_dark_row = SwitchRow::new();
+    force_dark_row.set_title("Forzar modo oscuro en la interfaz");
+    force_dark_row.set_subtitle("Mantiene la interfaz oscura aunque el sistema use tema claro");
+    force_dark_row.set_active(snap.look == ColorLook::Dark);
+    {
+        let st = settings.clone();
+        let row_ref = force_dark_row.clone();
+        let look_ref = look_row.clone();
+        force_dark_row.connect_active_notify(move || {
+            let dark = row_ref.is_active();
+            let next_look = if dark {
+                ColorLook::Dark
+            } else {
+                ColorLook::System
+            };
+            if let Some(idx) = LOOK_ORDER.iter().position(|&l| l == next_look) {
+                look_ref.set_selected(idx as u32);
+            }
+            st.update(|s| s.look = next_look);
+        });
+    }
+    theme_group.add(&force_dark_row);
+    push_index(
+        index,
+        "appearance",
+        "Apariencia y movimiento",
+        "Forzar modo oscuro",
+        "Mantiene la interfaz oscura de forma permanente",
+        "force dark mode oscuro forzar",
+    );
+
+    const ZOOM_VALUES: [f64; 6] = [0.75, 0.90, 1.0, 1.10, 1.25, 1.50];
+    let zoom_row = ComboRow::new();
+    zoom_row.set_title("Zoom predeterminado de página");
+    zoom_row.set_subtitle("Escala inicial aplicada a todas las páginas web");
+    let zoom_model = StringList::new(&[
+        "75 %",
+        "90 %",
+        "100 % (Predeterminado)",
+        "110 %",
+        "125 %",
+        "150 %",
+    ]);
+    zoom_row.set_string_model(&zoom_model);
+    let zoom_idx = ZOOM_VALUES
+        .iter()
+        .enumerate()
+        .min_by(|(_, a), (_, b)| {
+            ((*a) - snap.page_zoom)
+                .abs()
+                .total_cmp(&((*b) - snap.page_zoom).abs())
+        })
+        .map(|(i, _)| i as u32)
+        .unwrap_or(2);
+    zoom_row.set_selected(zoom_idx);
+    {
+        let st = settings.clone();
+        let row_ref = zoom_row.clone();
+        zoom_row.connect_selected_notify(move || {
+            if let Some(&val) = ZOOM_VALUES.get(row_ref.selected() as usize) {
+                st.update(|s| s.page_zoom = val);
+            }
+        });
+    }
+    theme_group.add(&zoom_row);
+    push_index(
+        index,
+        "appearance",
+        "Apariencia y movimiento",
+        "Zoom predeterminado",
+        "Escala inicial de página (75 % a 150 %)",
+        "zoom escala predeterminado default",
+    );
+
     let layout_row = ComboRow::new();
     layout_row.set_title("Disposición de pestañas");
     layout_row.set_subtitle("Alternable en vivo en cualquier momento con Ctrl+Shift+S");
@@ -1025,8 +1125,8 @@ fn build_appearance_section(
     density_group.set_title("Densidad y aspecto de pestañas");
 
     let compact_row = SwitchRow::new();
-    compact_row.set_title("Barra superior de pestañas compacta");
-    compact_row.set_subtitle("Reduce ligeramente la altura vertical de las pestañas arriba");
+    compact_row.set_title("Modo Zen / pestañas compactas");
+    compact_row.set_subtitle("Reduce la altura de las pestañas para maximizar el área de lectura");
     compact_row.set_active(snap.compact_tabs);
     {
         let st = settings.clone();
@@ -1528,7 +1628,7 @@ fn build_privacy_section(
         let s = status_lbl.clone();
         btn_1h.connect_clicked(move || {
             h.clear_last_hour();
-            s.set_text("✓ Historial de la última hora borrado.");
+            s.set_text("Historial de la última hora borrado.");
             s.set_visible(true);
         });
     }
@@ -1538,7 +1638,7 @@ fn build_privacy_section(
         let s = status_lbl.clone();
         btn_24h.connect_clicked(move || {
             h.clear_last_day();
-            s.set_text("✓ Historial de las últimas 24 horas borrado.");
+            s.set_text("Historial de las últimas 24 horas borrado.");
             s.set_visible(true);
         });
     }
@@ -1549,7 +1649,7 @@ fn build_privacy_section(
         let s = status_lbl.clone();
         btn_all.connect_clicked(move || {
             h.clear_all();
-            s.set_text("✓ Todo el historial de navegación fue eliminado.");
+            s.set_text("Todo el historial de navegación fue eliminado.");
             s.set_visible(true);
         });
     }
@@ -1576,7 +1676,7 @@ fn build_privacy_section(
         let s = status_lbl.clone();
         clear_dl_btn.connect_clicked(move || {
             dl.clear_history();
-            s.set_text("✓ Lista de descargas limpiada.");
+            s.set_text("Lista de descargas limpiada.");
             s.set_visible(true);
         });
     }

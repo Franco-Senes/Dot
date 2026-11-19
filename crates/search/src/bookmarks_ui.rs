@@ -8,7 +8,7 @@ use gnome_platform::adw::ApplicationWindow;
 use gnome_platform::gdk::{ContentProvider, DragAction};
 use gnome_platform::gtk::{
     Align, AsEditable, AsWidget, BoxWidget, Button, DragSource, DropDown, DropTarget,
-    EllipsizeMode, Entry, FileDialog, Label, ListBox, ListBoxRow, MenuButton, Orientation,
+    EllipsizeMode, Entry, FileDialog, Image, Label, ListBox, ListBoxRow, MenuButton, Orientation,
     PolicyType, Popover, PositionType, ScrolledWindow, SearchEntry, SelectionMode, Separator,
 };
 use search_core::address::{display_at_rest, sanitize_url_for_ui};
@@ -324,6 +324,11 @@ pub fn open_bookmark_popover(
 pub struct BookmarksPanel {
     root: BoxWidget,
     search_entry: SearchEntry,
+    folder_filter_btn: MenuButton,
+    folder_filter_pop: Popover,
+    folder_filter_box: BoxWidget,
+    folder_filter_btns: Rc<RefCell<Vec<Button>>>,
+    folder_filter: Rc<RefCell<Option<Option<String>>>>,
     new_folder_box: BoxWidget,
     new_folder_entry: Entry,
     edit_box: BoxWidget,
@@ -331,7 +336,11 @@ pub struct BookmarksPanel {
     edit_url_entry: Entry,
     status_label: Label,
     list_box: ListBox,
-    empty_label: Label,
+    empty_box: BoxWidget,
+    empty_icon: Image,
+    empty_title: Label,
+    empty_desc: Label,
+    empty_cta: Button,
     manager: BookmarksManager,
     parent_window: ApplicationWindow,
     on_open_url: OpenUrlCallback,
@@ -452,8 +461,24 @@ impl BookmarksPanel {
 
         let search_entry = SearchEntry::new();
         search_entry.set_placeholder_text("Buscar marcadores…");
-        search_entry.set_margins(8, 8, 0, 4);
+        search_entry.set_margins(8, 8, 0, 2);
         root.append(&search_entry);
+
+        let folder_filter_pop = Popover::new();
+        let folder_filter_box = BoxWidget::new(Orientation::Vertical, 2);
+        folder_filter_box.set_margins(4, 4, 4, 4);
+        folder_filter_pop.set_child(Some(&folder_filter_box));
+
+        let folder_filter_btn = MenuButton::new();
+        folder_filter_btn.set_label("Carpeta: Todas");
+        folder_filter_btn.add_css_class("flat");
+        folder_filter_btn.set_margins(8, 8, 0, 4);
+        folder_filter_btn.set_tooltip_text(Some("Filtrar marcadores por carpeta"));
+        folder_filter_btn.set_popover(Some(&folder_filter_pop));
+        root.append(&folder_filter_btn);
+
+        let folder_filter_btns = Rc::new(RefCell::new(Vec::new()));
+        let folder_filter = Rc::new(RefCell::new(None));
 
         root.append(&Separator::new(Orientation::Horizontal));
 
@@ -462,16 +487,35 @@ impl BookmarksPanel {
         list_box.set_selection_mode(SelectionMode::None);
         list_box.set_activate_on_single_click(false);
 
-        let empty_label = Label::new(Some(
-            "No hay marcadores guardados\nUsa Ctrl+D para añadir esta página",
+        let empty_box = BoxWidget::new(Orientation::Vertical, 8);
+        empty_box.set_margins(20, 20, 32, 20);
+        empty_box.set_halign(Align::Center);
+        empty_box.set_valign(Align::Start);
+
+        let empty_icon = icons::image(IconId::Star, 28);
+        empty_icon.set_halign(Align::Center);
+        empty_box.append(&empty_icon);
+
+        let empty_title = Label::new(Some("Sin marcadores guardados"));
+        empty_title.add_css_class("search-panel-title");
+        empty_title.set_halign(Align::Center);
+        empty_box.append(&empty_title);
+
+        let empty_desc = Label::new(Some(
+            "Guarda páginas con Ctrl+D o importa tus marcadores desde otro navegador.",
         ));
-        empty_label.add_css_class("search-panel-empty");
-        empty_label.set_margins(16, 16, 28, 16);
-        empty_label.set_halign(Align::Center);
-        empty_label.set_valign(Align::Start);
+        empty_desc.add_css_class("search-panel-empty");
+        empty_desc.set_wrap(true);
+        empty_desc.set_halign(Align::Center);
+        empty_box.append(&empty_desc);
+
+        let empty_cta = Button::with_label("Importar marcadores HTML");
+        empty_cta.add_css_class("suggested-action");
+        empty_cta.set_halign(Align::Center);
+        empty_box.append(&empty_cta);
 
         let list_container = BoxWidget::new(Orientation::Vertical, 0);
-        list_container.append(&empty_label);
+        list_container.append(&empty_box);
         list_container.append(&list_box);
 
         let scroller = ScrolledWindow::new();
@@ -484,6 +528,11 @@ impl BookmarksPanel {
         let panel = Self {
             root,
             search_entry: search_entry.clone(),
+            folder_filter_btn,
+            folder_filter_pop,
+            folder_filter_box,
+            folder_filter_btns,
+            folder_filter,
             new_folder_box: new_folder_box.clone(),
             new_folder_entry: new_folder_entry.clone(),
             edit_box: edit_box.clone(),
@@ -491,7 +540,11 @@ impl BookmarksPanel {
             edit_url_entry: edit_url_entry.clone(),
             status_label: status_label.clone(),
             list_box,
-            empty_label,
+            empty_box,
+            empty_icon,
+            empty_title,
+            empty_desc,
+            empty_cta: empty_cta.clone(),
             manager: manager.clone(),
             parent_window: parent_window.clone(),
             on_open_url,
@@ -572,11 +625,9 @@ impl BookmarksPanel {
         }
 
         // Cableado: importar HTML Netscape.
-        {
+        let trigger_import = Rc::new({
             let p = panel.clone();
-            let pop = io_pop.clone();
-            import_btn.connect_clicked(move || {
-                pop.popdown();
+            move || {
                 let dlg = FileDialog::new();
                 dlg.set_title("Importar marcadores HTML (Netscape)");
                 let p_done = p.clone();
@@ -596,6 +647,32 @@ impl BookmarksPanel {
                         }
                     }
                 });
+            }
+        });
+        {
+            let pop = io_pop.clone();
+            let imp = trigger_import.clone();
+            import_btn.connect_clicked(move || {
+                pop.popdown();
+                imp();
+            });
+        }
+
+        // CTA del estado vacío (limpiar filtros si está filtrado; importar si está vacío).
+        {
+            let p = panel.clone();
+            let imp = trigger_import;
+            empty_cta.connect_clicked(move || {
+                let has_filter =
+                    !p.search_entry.text().trim().is_empty() || p.folder_filter.borrow().is_some();
+                if has_filter {
+                    p.search_entry.set_text("");
+                    *p.folder_filter.borrow_mut() = None;
+                    p.folder_filter_btn.set_label("Carpeta: Todas");
+                    p.refresh();
+                } else {
+                    imp();
+                }
             });
         }
 
@@ -614,7 +691,7 @@ impl BookmarksPanel {
                     let html = p_done.manager.export_netscape_html();
                     match search_core::paths::write_atomic(&path, html.as_bytes()) {
                         Ok(()) => {
-                            p_done.show_status("Marcadores exportados correctamente");
+                            p_done.show_status("Marcadores exportados");
                         }
                         Err(err) => {
                             search_core::warn!("Error al exportar marcadores HTML: {err:#}");
@@ -675,33 +752,115 @@ impl BookmarksPanel {
         self.edit_title_entry.select_all();
     }
 
+    fn sync_folder_filter(&self) {
+        for old in self.folder_filter_btns.borrow_mut().drain(..) {
+            self.folder_filter_box.remove(&old);
+        }
+
+        let add_opt = |label: &str, display_label: &str, target: Option<Option<String>>| {
+            let btn = Button::with_label(label);
+            btn.add_css_class("flat");
+            let p = self.clone();
+            let disp = display_label.to_string();
+            btn.connect_clicked(move || {
+                *p.folder_filter.borrow_mut() = target.clone();
+                p.folder_filter_btn.set_label(&disp);
+                p.folder_filter_pop.popdown();
+                p.refresh();
+            });
+            self.folder_filter_box.append(&btn);
+            self.folder_filter_btns.borrow_mut().push(btn);
+        };
+
+        add_opt("Todas las carpetas", "Carpeta: Todas", None);
+        add_opt("Sin carpeta", "Carpeta: Sin carpeta", Some(None));
+
+        let folders = self.manager.folders();
+        for f in folders {
+            let indent = "  ".repeat(f.depth);
+            let item_lbl = format!("{indent}{}", f.title);
+            let btn_lbl = format!("Carpeta: {}", f.title);
+            add_opt(&item_lbl, &btn_lbl, Some(Some(f.id)));
+        }
+    }
+
+    fn show_empty_state(&self, filtered: bool) {
+        let dark = icons::is_dark_theme();
+        if filtered {
+            icons::set_image_icon(&self.empty_icon, IconId::Search, dark);
+            self.empty_title.set_text("Sin marcadores coincidentes");
+            self.empty_desc
+                .set_text("Prueba con otro término o cambia el filtro de carpeta.");
+            self.empty_cta.set_label("Limpiar filtros");
+        } else {
+            icons::set_image_icon(&self.empty_icon, IconId::Star, dark);
+            self.empty_title.set_text("Sin marcadores guardados");
+            self.empty_desc.set_text(
+                "Guarda páginas con Ctrl+D o importa tus marcadores desde otro navegador.",
+            );
+            self.empty_cta.set_label("Importar marcadores HTML");
+        }
+        self.empty_box.set_visible(true);
+    }
+
     pub fn refresh(&self) {
+        self.sync_folder_filter();
         self.list_box.remove_all();
         let query = self.search_entry.text();
         let trimmed = query.trim();
 
+        let folder_filter = self.folder_filter.borrow().clone();
+
         if !trimmed.is_empty() {
             let matches = self.manager.with_store(|s| s.search(trimmed, true, 200));
-            self.empty_label.set_visible(matches.is_empty());
             if matches.is_empty() {
-                self.empty_label.set_text("Sin marcadores coincidentes");
-            }
-            for m in matches {
-                let row = self.build_node_row(&m.node, 0, Some(&m.folder_path));
-                self.list_box.append(&row);
+                self.show_empty_state(true);
+            } else {
+                self.empty_box.set_visible(false);
+                for m in matches {
+                    let row = self.build_node_row(&m.node, 0, Some(&m.folder_path));
+                    self.list_box.append(&row);
+                }
             }
             return;
         }
 
         let roots = self.manager.with_store(|s| s.roots().to_vec());
         if roots.is_empty() {
-            self.empty_label
-                .set_text("No hay marcadores guardados\nUsa Ctrl+D para añadir esta página");
-            self.empty_label.set_visible(true);
+            self.show_empty_state(false);
             return;
         }
-        self.empty_label.set_visible(false);
-        self.append_tree_nodes(&roots, 0);
+
+        match folder_filter {
+            None => {
+                self.empty_box.set_visible(false);
+                self.append_tree_nodes(&roots, 0);
+            }
+            Some(None) => {
+                // Solo marcadores sueltos en la raíz ("Sin carpeta").
+                let loose: Vec<BookmarkNode> =
+                    roots.into_iter().filter(|n| !n.is_folder()).collect();
+                if loose.is_empty() {
+                    self.show_empty_state(true);
+                } else {
+                    self.empty_box.set_visible(false);
+                    self.append_tree_nodes(&loose, 0);
+                }
+            }
+            Some(Some(ref target_id)) => {
+                if let Some(folder_node) = find_folder_by_id(&roots, target_id) {
+                    let kids = folder_node.children.as_deref().unwrap_or(&[]);
+                    if kids.is_empty() {
+                        self.show_empty_state(true);
+                    } else {
+                        self.empty_box.set_visible(false);
+                        self.append_tree_nodes(kids, 0);
+                    }
+                } else {
+                    self.show_empty_state(true);
+                }
+            }
+        }
     }
 
     fn append_tree_nodes(&self, nodes: &[BookmarkNode], depth: usize) {
@@ -862,4 +1021,18 @@ impl BookmarksPanel {
         row.set_child(Some(&hbox));
         row
     }
+}
+
+fn find_folder_by_id<'a>(nodes: &'a [BookmarkNode], target_id: &str) -> Option<&'a BookmarkNode> {
+    for node in nodes {
+        if node.is_folder() && node.id == target_id {
+            return Some(node);
+        }
+        if let Some(ref kids) = node.children {
+            if let Some(found) = find_folder_by_id(kids, target_id) {
+                return Some(found);
+            }
+        }
+    }
+    None
 }

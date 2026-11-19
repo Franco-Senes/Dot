@@ -7,13 +7,15 @@
 use crate::downloads::{ActiveDownloadInfo, ActiveDownloadStatus, DownloadManager};
 use crate::icons::{self, IconId};
 use gnome_platform::adw::ApplicationWindow;
+use gnome_platform::gdk;
 use gnome_platform::gtk::{
     Align, AsWidget, BoxWidget, Button, EllipsizeMode, FileLauncher, Label, ListBox, ListBoxRow,
-    Orientation, PolicyType, ProgressBar, ScrolledWindow, SelectionMode, Separator,
+    MenuButton, Orientation, PolicyType, Popover, ProgressBar, ScrolledWindow, SelectionMode,
+    Separator,
 };
 use search_core::address::display_at_rest;
 use search_core::downloads::{format_bytes, format_speed, DownloadRecord};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::rc::Rc;
 
 type RetryCallback = Rc<dyn Fn(String)>;
@@ -23,7 +25,7 @@ type CloseCallback = Rc<dyn Fn()>;
 pub struct DownloadsPanel {
     root: BoxWidget,
     list_box: ListBox,
-    empty_label: Label,
+    empty_box: BoxWidget,
     manager: DownloadManager,
     parent_window: ApplicationWindow,
     on_retry: RetryCallback,
@@ -54,7 +56,7 @@ impl DownloadsPanel {
         title.set_hexpand(true);
         header.append(&title);
 
-        let clear_btn = Button::with_label("Limpiar");
+        let clear_btn = Button::with_label("Limpiar completadas");
         clear_btn.add_css_class("flat");
         clear_btn.set_tooltip_text(Some("Limpiar lista de descargas completadas"));
         {
@@ -66,7 +68,7 @@ impl DownloadsPanel {
         header.append(&clear_btn);
 
         let close_btn = icons::icon_button(IconId::Close, 15);
-        close_btn.set_tooltip_text(Some("Cerrar panel (Esc)"));
+        close_btn.set_tooltip_text(Some("Cerrar panel de descargas (Esc)"));
         {
             let cb = on_close.clone();
             close_btn.connect_clicked(move || cb());
@@ -81,14 +83,42 @@ impl DownloadsPanel {
         list_box.set_selection_mode(SelectionMode::None);
         list_box.set_activate_on_single_click(false);
 
-        let empty_label = Label::new(Some("No hay descargas recientes"));
-        empty_label.add_css_class("search-panel-empty");
-        empty_label.set_margins(16, 16, 28, 16);
-        empty_label.set_halign(Align::Center);
-        empty_label.set_valign(Align::Start);
+        let empty_box = BoxWidget::new(Orientation::Vertical, 8);
+        empty_box.set_margins(20, 20, 32, 20);
+        empty_box.set_halign(Align::Center);
+        empty_box.set_valign(Align::Start);
+
+        let empty_icon = icons::image(IconId::Download, 28);
+        empty_icon.set_halign(Align::Center);
+        empty_box.append(&empty_icon);
+
+        let empty_title = Label::new(Some("Sin descargas recientes"));
+        empty_title.add_css_class("search-panel-title");
+        empty_title.set_halign(Align::Center);
+        empty_box.append(&empty_title);
+
+        let empty_desc = Label::new(Some(
+            "Los archivos que descargues aparecerán aquí con su progreso y ubicación.",
+        ));
+        empty_desc.add_css_class("search-panel-empty");
+        empty_desc.set_wrap(true);
+        empty_desc.set_halign(Align::Center);
+        empty_box.append(&empty_desc);
+
+        let open_dir_btn = Button::with_label("Abrir carpeta de descargas");
+        open_dir_btn.add_css_class("suggested-action");
+        open_dir_btn.set_halign(Align::Center);
+        {
+            let win = parent_window.clone();
+            open_dir_btn.connect_clicked(move || {
+                let dir = default_downloads_dir();
+                FileLauncher::launch_file(Some(&win), &dir);
+            });
+        }
+        empty_box.append(&open_dir_btn);
 
         let list_container = BoxWidget::new(Orientation::Vertical, 0);
-        list_container.append(&empty_label);
+        list_container.append(&empty_box);
         list_container.append(&list_box);
 
         let scroller = ScrolledWindow::new();
@@ -101,7 +131,7 @@ impl DownloadsPanel {
         let panel = Self {
             root,
             list_box,
-            empty_label,
+            empty_box,
             manager: manager.clone(),
             parent_window,
             on_retry,
@@ -127,7 +157,7 @@ impl DownloadsPanel {
         let snap = self.manager.snapshot();
 
         let is_empty = snap.active.is_empty() && snap.completed.is_empty();
-        self.empty_label.set_visible(is_empty);
+        self.empty_box.set_visible(is_empty);
 
         for active in &snap.active {
             let row = self.build_active_row(active);
@@ -324,7 +354,65 @@ impl DownloadsPanel {
         remove_btn.connect_clicked(move || mgr.remove_history(&id));
         hbox.append(&remove_btn);
 
+        if !rec.url.is_empty() {
+            let more_pop = Popover::new();
+            let more_box = BoxWidget::new(Orientation::Vertical, 2);
+            more_box.set_margins(4, 4, 4, 4);
+
+            let copy_url_btn = Button::with_label("Copiar URL de descarga");
+            copy_url_btn.add_css_class("flat");
+            {
+                let pop = more_pop.clone();
+                let url = rec.url.clone();
+                copy_url_btn.connect_clicked(move || {
+                    pop.popdown();
+                    if let Some(disp) = gdk::Display::default_display() {
+                        disp.set_clipboard_text(&url);
+                    }
+                });
+            }
+            more_box.append(&copy_url_btn);
+
+            if exists {
+                let retry_btn = Button::with_label("Volver a descargar");
+                retry_btn.add_css_class("flat");
+                let pop = more_pop.clone();
+                let retry = self.on_retry.clone();
+                let url = rec.url.clone();
+                retry_btn.connect_clicked(move || {
+                    pop.popdown();
+                    retry(url.clone());
+                });
+                more_box.append(&retry_btn);
+            }
+
+            more_pop.set_child(Some(&more_box));
+            let more_btn = MenuButton::new();
+            more_btn.add_css_class("flat");
+            more_btn.add_css_class("search-tab-mini-btn");
+            more_btn.set_child(Some(&icons::image(IconId::MoreVert, 14)));
+            more_btn.set_tooltip_text(Some("Más acciones de descarga"));
+            more_btn.set_popover(Some(&more_pop));
+            hbox.append(&more_btn);
+        }
+
         row.set_child(Some(&hbox));
         row
     }
+}
+
+fn default_downloads_dir() -> PathBuf {
+    if let Some(home) = std::env::var_os("HOME") {
+        let base = PathBuf::from(home);
+        let es = base.join("Descargas");
+        if es.is_dir() {
+            return es;
+        }
+        let en = base.join("Downloads");
+        if en.is_dir() {
+            return en;
+        }
+        return base;
+    }
+    PathBuf::from("/tmp")
 }
