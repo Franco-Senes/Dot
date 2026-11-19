@@ -3725,7 +3725,7 @@ impl BrowserWindow {
                 if let Some(w) = weak.upgrade() {
                     let css = format!(
                         ".space-pill.active {{ border-color: {accent_hex}; background-color: alpha({accent_hex}, 0.18); }} \
-                         .search-sidebar {{ border-inline-start: 2px solid alpha({accent_hex}, 0.55); }}"
+                         .search-sidebar {{ border-left: 2px solid alpha({accent_hex}, 0.55); }}"
                     );
                     w.inner.space_accent_provider.load_from_string(&css);
                     w.show_toast(&format!("Espacio: {ws_id}"), Some(1800));
