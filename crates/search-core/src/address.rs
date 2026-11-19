@@ -52,10 +52,12 @@ pub enum InternalPage {
     History,
     Bookmarks,
     Downloads,
+    NewTab,
 }
 
 /// Reconoce una URL interna (`plasma://settings`, `plasma://settings/privacy`,
-/// `plasma://history`, `plasma://bookmarks`, `plasma://downloads` y sus alias `search://`).
+/// `plasma://history`, `plasma://bookmarks`, `plasma://downloads`, `plasma://newtab`
+/// y sus alias `search://`).
 pub fn parse_internal_page(raw_url: &str) -> Option<InternalPage> {
     let trimmed = raw_url.trim();
     let (scheme_raw, rest_raw) = trimmed.split_once("://")?;
@@ -74,6 +76,7 @@ pub fn parse_internal_page(raw_url: &str) -> Option<InternalPage> {
         "history" => Some(InternalPage::History),
         "bookmarks" => Some(InternalPage::Bookmarks),
         "downloads" => Some(InternalPage::Downloads),
+        "newtab" => Some(InternalPage::NewTab),
         _ => None,
     }
 }
@@ -88,6 +91,7 @@ pub fn canonical_internal_url(page: &InternalPage) -> String {
         InternalPage::History => "plasma://history".to_string(),
         InternalPage::Bookmarks => "plasma://bookmarks".to_string(),
         InternalPage::Downloads => "plasma://downloads".to_string(),
+        InternalPage::NewTab => "plasma://newtab".to_string(),
     }
 }
 

@@ -23,6 +23,7 @@ use anyhow::{anyhow, Result};
 use gnome_platform::adw::Application;
 use gnome_platform::gio::ApplicationFlags;
 use gnome_platform::glib::{self, SourceId};
+use search_core::boosts::BoostStore;
 use search_core::paths::SearchPaths;
 use search_core::session::{ClosedTabStack, SessionState, SessionTab, SessionWindow};
 use std::cell::{Cell, RefCell};
@@ -87,6 +88,7 @@ impl AppController {
             shield: ShieldManager::new_async(paths.filters_cache_dir(), &settings),
             curtain: CurtainManager::load(paths.curtain_file()),
             vault: VaultService::start(paths.clone()),
+            boosts: Rc::new(RefCell::new(BoostStore::load(&paths.boosts_file()))),
         };
         let stack_cap = settings.with(|s| s.closed_tab_stack_size);
         Self {

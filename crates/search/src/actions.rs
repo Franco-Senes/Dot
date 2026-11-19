@@ -120,13 +120,14 @@ pub fn install_app_actions_and_accels(app: &Application, settings: &SettingsStor
     app.set_accels_for_action("win.open-passwords", &["<Control><Alt>l"]);
 
     // Fase 6 — Split View y Picture-in-Picture.
-    app.set_accels_for_action(
-        "win.split-tab",
-        &["<Control><Shift>backslash", "<Control><Alt>n"],
-    );
+    app.set_accels_for_action("win.split-tab", &["<Control><Shift>backslash"]);
     app.set_accels_for_action("win.split-focus-other", &["<Control><Alt>backslash"]);
     app.set_accels_for_action("win.split-separate", &["<Control><Alt>s"]);
     app.set_accels_for_action("win.toggle-pip", &["<Control><Shift>p"]);
+
+    // Fase 7 — Arc Boosts, Arc Peek y Little Arc.
+    app.set_accels_for_action("win.boost-site", &["<Control><Alt>b"]);
+    app.set_accels_for_action("win.little-arc", &["<Control><Alt>n"]);
 }
 
 /// Registra todas las acciones de ventana (`win.*`) sobre `gtk_win`.
@@ -307,6 +308,13 @@ pub fn install_window_actions(gtk_win: &ApplicationWindow, win: &BrowserWindow) 
     add_win_action(gtk_win, "toggle-force-dark", win, |w| {
         w.toggle_force_dark_active_tab()
     });
+
+    // Fase 7 — Arc Boosts, Arc Peek y Little Arc.
+    add_win_action(gtk_win, "boost-site", win, |w| {
+        w.open_boost_for_active_tab()
+    });
+    add_win_action(gtk_win, "peek-url", win, |w| w.open_peek_for_active_tab());
+    add_win_action(gtk_win, "little-arc", win, |w| w.open_little_arc());
 }
 
 /// Muestra el diálogo nativo `AdwShortcutsDialog` (`Ctrl+?`) con todos los atajos activos.
@@ -397,6 +405,8 @@ pub fn present_shortcuts_dialog(parent: &ApplicationWindow) {
         ("Exportar página a PDF", "<Control>p"),
         ("Captura de pantalla PNG", "<Control><Shift>x"),
         ("Forzar modo oscuro CSS", "<Alt><Shift>d"),
+        ("Arc Boosts (personalizar sitio)", "<Control><Alt>b"),
+        ("Little Arc (ventana rápida)", "<Control><Alt>n"),
         ("Ajustes (plasma://settings)", "<Control>comma"),
         ("Atajos de teclado", "<Control>question"),
         ("Salir de Search", "<Control>q"),

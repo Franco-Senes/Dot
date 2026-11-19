@@ -11,6 +11,7 @@
 use crate::actions;
 use crate::address::AddressBar;
 use crate::bookmarks_ui::{self, BookmarksManager, BookmarksPanel};
+use crate::boosts_ui;
 use crate::browser_view::{BrowserCallbacks, BrowserView, PageContextMenuInfo};
 use crate::curtain::{CurtainManager, CurtainPanel, CurtainPanelCallbacks};
 use crate::downloads::DownloadManager;
@@ -18,6 +19,7 @@ use crate::downloads_ui::DownloadsPanel;
 use crate::find_bar::FindBar;
 use crate::history_ui::{HistoryManager, HistoryPanel};
 use crate::icons::{self, IconId};
+use crate::peek;
 use crate::pip::PipController;
 use crate::reader::ReaderToolbar;
 use crate::settings::SettingsStore;
@@ -36,19 +38,23 @@ use gnome_platform::adw::{
     Application, ApplicationWindow, CenteringPolicy, HeaderBar, OverlaySplitView, TabBar, TabPage,
     TabView, TabViewShortcuts, Toast, ToastOverlay, ToolbarStyle, ToolbarView,
 };
-use gnome_platform::gdk::{Rectangle, Texture};
+use gnome_platform::gdk::{Display, Rectangle, Texture};
 use gnome_platform::gio::{Menu, SimpleAction, SimpleActionGroup};
 use gnome_platform::glib;
 use gnome_platform::gtk::{
-    Align, AsWidget, BoxWidget, Button, FileDialog, GestureDrag, Label, Orientation, Overflow,
-    Overlay, PackType, Popover, PopoverMenu, PositionType, ProgressBar, Revealer,
-    RevealerTransitionType,
+    Align, AsWidget, BoxWidget, Button, CssProvider, FileDialog, GestureDrag, Label, Orientation,
+    Overflow, Overlay, PackType, Popover, PopoverMenu, PositionType, ProgressBar, Revealer,
+    RevealerTransitionType, STYLE_PROVIDER_PRIORITY_APPLICATION,
 };
 use search_core::address::{
     canonical_internal_url, display_at_rest, parse_internal_page, resolve_address,
     sanitize_url_for_ui, InternalPage,
 };
+use search_core::boosts::{compile_boost_css, normalize_origin, BoostStore};
 use search_core::history::{suggest_omnibox, OpenTabInfo};
+use search_core::newtab::{
+    default_shortcuts, render_newtab_html, NewTabData, NewTabTheme, WorkspacePill,
+};
 use search_core::paths::SearchPaths;
 use search_core::reader::render_reader_document;
 use search_core::session::{now_unix_secs, ClosedTab, PinStyle, SessionTab, SessionWindow};
@@ -72,6 +78,7 @@ pub struct SharedDataStores {
     pub shield: ShieldManager,
     pub curtain: CurtainManager,
     pub vault: VaultService,
+    pub boosts: Rc<RefCell<BoostStore>>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -220,6 +227,7 @@ struct WindowState {
     reader_toolbar: RefCell<Option<ReaderToolbar>>,
     toast_overlay: ToastOverlay,
     active_toast: RefCell<Option<Toast>>,
+    space_accent_provider: CssProvider,
     bookmark_popover: RefCell<Option<Popover>>,
     site_card_popover: RefCell<Option<Popover>>,
     vault_ui: VaultWindowUi,
@@ -485,6 +493,10 @@ impl BrowserWindow {
         window.set_content(Some(&toast_overlay));
 
         let tab_close_action = SimpleAction::new("close");
+        let space_accent_provider = CssProvider::new();
+        if let Some(display) = Display::default_display() {
+            space_accent_provider.add_to_display(&display, STYLE_PROVIDER_PRIORITY_APPLICATION + 2);
+        }
 
         let bw = Self {
             inner: Rc::new(WindowState {
@@ -510,6 +522,7 @@ impl BrowserWindow {
                 reader_toolbar: RefCell::new(None),
                 toast_overlay,
                 active_toast: RefCell::new(None),
+                space_accent_provider,
                 bookmark_popover: RefCell::new(None),
                 site_card_popover: RefCell::new(None),
                 vault_ui,
@@ -865,7 +878,17 @@ impl BrowserWindow {
             rec.slot.append(sp.widget());
             rec.settings_page = Some(sp);
         } else if !lazy {
-            let bv = self.create_browser_view_for_tab(tab_id, &rec.url, rec.muted)?;
+            let is_newtab = matches!(parse_internal_page(&rec.url), Some(InternalPage::NewTab));
+            let initial = if is_newtab {
+                "about:blank"
+            } else {
+                rec.url.as_str()
+            };
+            let bv = self.create_browser_view_for_tab(tab_id, initial, rec.muted)?;
+            if is_newtab {
+                let html = self.render_newtab_page_html();
+                bv.load_internal_html("plasma://newtab", &html);
+            }
             rec.slot.append(bv.widget());
             rec.browser = Some(bv);
         }
@@ -1102,6 +1125,151 @@ impl BrowserWindow {
         if let Some(prev) = self.inner.active_toast.borrow_mut().take() {
             prev.dismiss();
         }
+    }
+
+    pub fn show_undo_toast(&self, text: &str, action_name: &str) {
+        if let Some(prev) = self.inner.active_toast.borrow_mut().take() {
+            prev.dismiss();
+        }
+        let toast = Toast::new(text);
+        toast.set_timeout(5);
+        toast.set_button_label(Some("Deshacer"));
+        toast.set_action_name(Some(action_name));
+        self.inner.toast_overlay.add_toast(&toast);
+        *self.inner.active_toast.borrow_mut() = Some(toast);
+    }
+
+    pub fn open_boost_for_active_tab(&self) {
+        let Some(bv) = self.active_browser_view() else {
+            self.show_toast("No hay ninguna pestaña activa", Some(2200));
+            return;
+        };
+        let url = bv.current_url();
+        if url.is_empty()
+            || url == "about:blank"
+            || url.starts_with("plasma://")
+            || url.starts_with("search://")
+        {
+            self.show_toast("Arc Boosts solo funciona en páginas web", Some(2400));
+            return;
+        }
+        let weak = self.downgrade();
+        boosts_ui::open_boost_dialog(
+            &self.inner.window,
+            &url,
+            self.inner.stores.boosts.clone(),
+            self.inner.stores.paths.boosts_file(),
+            Rc::new(move |origin, css| {
+                let Some(w) = weak.upgrade() else {
+                    return;
+                };
+                let tabs = w.inner.tabs.borrow();
+                for tab in tabs.iter() {
+                    let matches = normalize_origin(&tab.url)
+                        .map(|o| o == origin)
+                        .unwrap_or(false);
+                    if matches {
+                        if let Some(ref tab_bv) = tab.browser {
+                            tab_bv.apply_boost_css(&css);
+                        }
+                    }
+                }
+            }),
+        );
+    }
+
+    pub fn open_peek_url(&self, url: &str) {
+        let dark_bg = self.inner.app.style_manager().is_dark();
+        let weak = self.downgrade();
+        if let Err(err) = peek::open_peek_dialog(
+            &self.inner.window,
+            self.inner.request_context.clone(),
+            self.inner.settings.clone(),
+            self.inner.stores.shield.clone(),
+            self.inner.stores.curtain.clone(),
+            url,
+            dark_bg,
+            move |open_url| {
+                if let Some(w) = weak.upgrade() {
+                    let _ = w.open_tab(Some(&open_url), true, false, false);
+                }
+            },
+        ) {
+            self.show_toast(&format!("No se pudo abrir vista rápida: {err}"), Some(2600));
+        }
+    }
+
+    pub fn open_peek_for_active_tab(&self) {
+        let Some(bv) = self.active_browser_view() else {
+            return;
+        };
+        let url = bv.current_url();
+        if !url.is_empty() && url != "about:blank" {
+            self.open_peek_url(&url);
+        }
+    }
+
+    pub fn open_little_arc(&self) {
+        let dark_bg = self.inner.app.style_manager().is_dark();
+        let initial_url = self
+            .active_browser_view()
+            .map(|bv| bv.current_url())
+            .filter(|u| !u.is_empty() && !u.starts_with("plasma://"))
+            .unwrap_or_else(|| "about:blank".to_string());
+        let weak = self.downgrade();
+        if let Err(err) = peek::open_little_arc_window(
+            &self.inner.app,
+            self.inner.request_context.clone(),
+            self.inner.settings.clone(),
+            self.inner.stores.shield.clone(),
+            self.inner.stores.curtain.clone(),
+            &initial_url,
+            dark_bg,
+            move |expand_url| {
+                if let Some(w) = weak.upgrade() {
+                    let _ = w.open_tab(Some(&expand_url), true, false, false);
+                    w.inner.window.present();
+                }
+            },
+        ) {
+            self.show_toast(&format!("No se pudo abrir Little Arc: {err}"), Some(2600));
+        }
+    }
+
+    fn render_newtab_page_html(&self) -> String {
+        let dark = self.inner.app.style_manager().is_dark();
+        let (engine_name, action_url) = self.inner.settings.with(|s| {
+            let name = format!("{:?}", s.search_engine);
+            let url = resolve_address("search", s.search_engine, &s.custom_search_url).url;
+            let base = url
+                .split('?')
+                .next()
+                .unwrap_or("https://duckduckgo.com/")
+                .to_string();
+            (name, base)
+        });
+        let tab_count = self.inner.tabs.borrow().len();
+        let data = NewTabData {
+            theme: if dark {
+                NewTabTheme::Dark
+            } else {
+                NewTabTheme::Light
+            },
+            search_engine_name: engine_name,
+            search_action_url: action_url,
+            speed_dial: Vec::new(),
+            workspaces: vec![WorkspacePill {
+                id: "personal".to_string(),
+                name: "Personal".to_string(),
+                color_id: "blue".to_string(),
+                active: true,
+                tab_count,
+            }],
+            recently_closed_count: 0,
+            reading_list_preview: Vec::new(),
+            shortcuts: default_shortcuts(),
+        };
+        render_newtab_html(&data)
     }
 
     fn refresh_curtain_css_for_host(&self, host: &str) {
@@ -1364,6 +1532,30 @@ impl BrowserWindow {
                         self.mount_settings_page_in_tab(tab_id, &resolved.url, section.as_deref());
                     } else {
                         self.open_settings_tab(section.as_deref());
+                    }
+                    return;
+                }
+                InternalPage::NewTab => {
+                    self.inner.address_bar.set_committed_url("plasma://newtab");
+                    if let Some(tab_id) = self.selected_tab_id() {
+                        self.unmount_settings_page_in_tab(tab_id);
+                        {
+                            let mut tabs = self.inner.tabs.borrow_mut();
+                            if let Some(t) = tabs.iter_mut().find(|t| t.id == tab_id) {
+                                t.url = "plasma://newtab".to_string();
+                                t.title = "Nueva pestaña".to_string();
+                                t.touched = now_unix_secs();
+                                t.page.set_title("Nueva pestaña");
+                                t.page.set_tooltip(Some("plasma://newtab"));
+                            }
+                        }
+                        if let Some(bv) = self.ensure_tab_awake(tab_id) {
+                            let html = self.render_newtab_page_html();
+                            bv.load_internal_html("plasma://newtab", &html);
+                            bv.grab_focus();
+                        }
+                        self.sync_sidebar();
+                        self.notify_session_dirty();
                     }
                     return;
                 }
@@ -2270,12 +2462,22 @@ impl BrowserWindow {
             let w = self.clone();
             let bv_ref = bv.clone();
             cbs.on_load_finished = Some(Box::new(move |url, status| {
-                if w.inner.is_private || bv_ref.last_load_was_error() {
-                    return;
-                }
                 if status == 0 || (200..400).contains(&status) {
-                    let title = bv_ref.title();
-                    w.inner.stores.history.record_visit(&url, &title);
+                    if let Some(css) = w
+                        .inner
+                        .stores
+                        .boosts
+                        .borrow()
+                        .get(&url)
+                        .map(compile_boost_css)
+                        .filter(|c| !c.is_empty())
+                    {
+                        bv_ref.apply_boost_css(&css);
+                    }
+                    if !w.inner.is_private && !bv_ref.last_load_was_error() {
+                        let title = bv_ref.title();
+                        w.inner.stores.history.record_visit(&url, &title);
+                    }
                 }
             }));
         }
@@ -3517,6 +3719,49 @@ impl BrowserWindow {
                 }
             }));
         }
+        {
+            let weak = self.downgrade();
+            scbs.on_workspace_changed = Some(Box::new(move |ws_id, accent_hex| {
+                if let Some(w) = weak.upgrade() {
+                    let css = format!(
+                        ".space-pill.active {{ border-color: {accent_hex}; background-color: alpha({accent_hex}, 0.18); }} \
+                         .search-sidebar {{ border-inline-start: 2px solid alpha({accent_hex}, 0.55); }}"
+                    );
+                    w.inner.space_accent_provider.load_from_string(&css);
+                    w.show_toast(&format!("Espacio: {ws_id}"), Some(1800));
+                }
+            }));
+        }
+        {
+            let weak = self.downgrade();
+            scbs.on_clear_today = Some(Box::new(move |ids| {
+                let Some(w) = weak.upgrade() else {
+                    return;
+                };
+                let mut closed = 0usize;
+                for id in ids {
+                    if w.close_tab_by_id(id) {
+                        closed += 1;
+                    }
+                }
+                if closed > 0 {
+                    let msg = if closed == 1 {
+                        "1 pestaña de Hoy cerrada".to_string()
+                    } else {
+                        format!("{closed} pestañas de Hoy cerradas")
+                    };
+                    w.show_undo_toast(&msg, "win.reopen-tab");
+                }
+            }));
+        }
+        {
+            let weak = self.downgrade();
+            scbs.on_tidy_tabs = Some(Box::new(move || {
+                if let Some(w) = weak.upgrade() {
+                    w.show_toast("Pestañas ordenadas por dominio", Some(2000));
+                }
+            }));
+        }
         self.inner.sidebar_tabs.set_callbacks(scbs);
 
         // Al cerrarse la ventana: avisar al controlador (guarda sesión antes de destruir) y cerrar CEF.
@@ -4021,6 +4266,20 @@ impl BrowserWindow {
                 });
             }
             menu_box.append(&open_side);
+
+            let peek_btn = add_btn("Vista rápida (Arc Peek)");
+            {
+                let weak = self.downgrade();
+                let u = link.clone();
+                let p = pop.clone();
+                peek_btn.connect_clicked(move || {
+                    p.popdown();
+                    if let Some(w) = weak.upgrade() {
+                        w.open_peek_url(&u);
+                    }
+                });
+            }
+            menu_box.append(&peek_btn);
         }
 
         if info.is_video {

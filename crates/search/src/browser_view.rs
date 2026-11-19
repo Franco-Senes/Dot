@@ -556,6 +556,37 @@ impl BrowserView {
         }
     }
 
+    /// Carga HTML interno generado en memoria asociándolo a `virtual_url` (p. ej. `plasma://newtab`).
+    pub fn load_internal_html(&self, virtual_url: &str, rendered_html: &str) {
+        *self.shared.current_url.borrow_mut() = virtual_url.to_string();
+        if let Some(frame) = self.main_frame() {
+            let data_url = html_to_internal_data_url(rendered_html);
+            let cs = CefString::from(data_url.as_str());
+            frame.load_url(Some(&cs));
+        }
+    }
+
+    /// Inyecta o actualiza CSS de **Arc Boosts** en el documento principal del fotograma activo.
+    pub fn apply_boost_css(&self, css: &str) {
+        let Some(frame) = self.main_frame() else {
+            return;
+        };
+        let js = if css.trim().is_empty() {
+            "(()=>{const el=document.getElementById('__search_boost__');if(el)el.remove();})();"
+                .to_string()
+        } else {
+            let Ok(encoded) = serde_json::to_string(css) else {
+                return;
+            };
+            format!(
+                "(()=>{{const id='__search_boost__';let st=document.getElementById(id);if(!st){{st=document.createElement('style');st.id=id;(document.head||document.documentElement).appendChild(st);}}st.textContent={encoded};}})();"
+            )
+        };
+        let cef_js = CefString::from(js.as_str());
+        let src = CefString::from("search://boost");
+        frame.execute_java_script(Some(&cef_js), Some(&src), 1);
+    }
+
     pub fn exit_reader_mode(&self) {
         if let Some(orig) = self.shared.reader_original_url.borrow_mut().take() {
             if let Some(ref cb) = self.shared.callbacks.borrow().on_reader_state_changed {
