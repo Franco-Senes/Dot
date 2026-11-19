@@ -19,9 +19,15 @@ use gnome_platform::gtk::{
     Orientation, Popover, PositionType, SelectionMode, Separator,
 };
 use search_core::address::{clean_link, display_at_rest, sanitize_url_for_ui};
+use search_core::features_50::{
+    feat_11_search_engine_bangs::{BangMatch, BangParseOptions, BangRegistry, BangSuggestion},
+    feat_13_omnibox_calculator::{CalcResult, CalcResultKind, OmniboxCalculator},
+    feat_15_omnibox_color_preview::{ColorRgba, OmniboxColorPreview, OmniboxColorPreviewer},
+};
 use search_core::history::{inline_completion, OmniboxSuggestion, OmniboxSuggestionKind};
 use std::cell::RefCell;
 use std::rc::Rc;
+use std::time::Duration;
 
 type SubmitCallback = Rc<dyn Fn(String)>;
 type EscapeCallback = Rc<dyn Fn()>;
@@ -48,7 +54,15 @@ pub struct AddressBar {
     state: Rc<RefCell<AddressState>>,
 }
 
-#[derive(Default)]
+#[derive(Clone)]
+enum OmniboxRowItem {
+    Calc(CalcResult),
+    Color(OmniboxColorPreview),
+    Bang(BangMatch),
+    BangHint(BangSuggestion),
+    Suggestion(OmniboxSuggestion),
+}
+
 struct AddressState {
     committed_url: String,
     user_typed: String,
@@ -59,8 +73,13 @@ struct AddressState {
     reader_active: bool,
     #[allow(dead_code)]
     bookmarked: bool,
-    suggestions: Vec<OmniboxSuggestion>,
+    items: Vec<OmniboxRowItem>,
+    row_badges: Vec<Option<Label>>,
+    feedback_seq: u64,
     selected_index: Option<usize>,
+    calculator: OmniboxCalculator,
+    color_previewer: OmniboxColorPreviewer,
+    bang_registry: BangRegistry,
     on_submit: Option<SubmitCallback>,
     on_escape: Option<EscapeCallback>,
     suggest_provider: Option<SuggestProvider>,
@@ -69,6 +88,36 @@ struct AddressState {
     on_reset_zoom: Option<ResetZoomCallback>,
     on_toggle_reader: Option<ToggleReaderCallback>,
     on_toggle_bookmark: Option<ToggleBookmarkCallback>,
+}
+
+impl Default for AddressState {
+    fn default() -> Self {
+        Self {
+            committed_url: String::new(),
+            user_typed: String::new(),
+            editing: false,
+            suppress_change: false,
+            last_was_delete: false,
+            popover_open: false,
+            reader_active: false,
+            bookmarked: false,
+            items: Vec::new(),
+            row_badges: Vec::new(),
+            feedback_seq: 0,
+            selected_index: None,
+            calculator: OmniboxCalculator::default(),
+            color_previewer: OmniboxColorPreviewer::with_defaults(),
+            bang_registry: BangRegistry::with_defaults(),
+            on_submit: None,
+            on_escape: None,
+            suggest_provider: None,
+            on_switch_tab: None,
+            on_delete_history: None,
+            on_reset_zoom: None,
+            on_toggle_reader: None,
+            on_toggle_bookmark: None,
+        }
+    }
 }
 
 impl AddressBar {
@@ -334,7 +383,7 @@ impl AddressBar {
             list_box.connect_row_activated(move |row| {
                 let idx = row.index();
                 if idx >= 0 {
-                    bar_row.activate_suggestion_at(idx as usize);
+                    bar_row.activate_item_at(idx as usize);
                 }
             });
         }
@@ -544,10 +593,11 @@ impl AddressBar {
 
     fn on_entry_changed(&self) {
         let (should_run, was_delete, provider) = {
-            let st = self.state.borrow();
+            let mut st = self.state.borrow_mut();
             if st.suppress_change || !st.editing {
                 return;
             }
+            st.feedback_seq = st.feedback_seq.wrapping_add(1);
             (true, st.last_was_delete, st.suggest_provider.clone())
         };
         if !should_run {
@@ -566,20 +616,25 @@ impl AddressBar {
             return;
         }
 
-        let Some(provider) = provider else {
-            self.close_popover();
-            return;
+        let superpowers = {
+            let st = self.state.borrow();
+            evaluate_superpowers(
+                &typed,
+                &st.calculator,
+                &st.color_previewer,
+                &st.bang_registry,
+            )
         };
 
-        let suggestions = provider(&typed);
-        if suggestions.is_empty() {
+        let suggestions = provider.map(|p| p(&typed)).unwrap_or_default();
+        if superpowers.is_empty() && suggestions.is_empty() {
             self.close_popover();
             return;
         }
 
-        // Completado inline del dominio más probable solo al escribir hacia delante
-        // y cuando el cursor está al final del texto.
-        if !was_delete {
+        // Completado inline del dominio más probable solo al escribir hacia delante,
+        // cuando el cursor está al final y no hay un superpower activo.
+        if !was_delete && superpowers.is_empty() {
             let typed_len_chars = typed.chars().count() as i32;
             let cursor_at_end =
                 self.entry.position() >= typed_len_chars && self.entry.selection_bounds().is_none();
@@ -595,13 +650,16 @@ impl AddressBar {
             }
         }
 
-        self.render_suggestions(suggestions);
+        let mut items = superpowers;
+        items.extend(suggestions.into_iter().map(OmniboxRowItem::Suggestion));
+        self.render_items(items);
     }
 
-    fn render_suggestions(&self, suggestions: Vec<OmniboxSuggestion>) {
+    fn render_items(&self, items: Vec<OmniboxRowItem>) {
         self.list_box.remove_all();
+        let mut row_badges = Vec::with_capacity(items.len());
 
-        for item in &suggestions {
+        for item in &items {
             let row = ListBoxRow::new();
             row.add_css_class("search-omnibox-row");
             row.set_focusable(false);
@@ -609,45 +667,189 @@ impl AddressBar {
             let hbox = BoxWidget::new(Orientation::Horizontal, 8);
             hbox.set_margins(10, 10, 6, 6);
 
-            let icon_id = match item.kind {
-                OmniboxSuggestionKind::OpenTab { .. } => IconId::LayoutTabs,
-                OmniboxSuggestionKind::Bookmark { .. } => IconId::Star,
-                OmniboxSuggestionKind::History { .. } => IconId::History,
-            };
-            let icon = icons::image(icon_id, 15);
-            hbox.append(&icon);
+            let mut badge_opt: Option<Label> = None;
 
-            let col = BoxWidget::new(Orientation::Vertical, 1);
-            col.set_hexpand(true);
+            match item {
+                OmniboxRowItem::Calc(calc) => {
+                    row.add_css_class("omnibox-calc-row");
+                    let icon = icons::image(IconId::Cpu, 15);
+                    hbox.append(&icon);
 
-            let title = Label::new(Some(&item.title));
-            title.set_xalign(0.0);
-            title.set_ellipsize(EllipsizeMode::End);
-            col.append(&title);
+                    let col = BoxWidget::new(Orientation::Vertical, 1);
+                    col.set_hexpand(true);
 
-            let url_lbl = Label::new(Some(&item.display_url));
-            url_lbl.add_css_class("search-omnibox-url");
-            url_lbl.set_xalign(0.0);
-            url_lbl.set_ellipsize(EllipsizeMode::End);
-            col.append(&url_lbl);
+                    let title = Label::new(Some(&format!("= {}", calc.formatted)));
+                    title.set_xalign(0.0);
+                    title.set_ellipsize(EllipsizeMode::End);
+                    col.append(&title);
 
-            hbox.append(&col);
+                    let subtitle_text = format_calc_subtitle(calc);
+                    let sub_lbl = Label::new(Some(&subtitle_text));
+                    sub_lbl.add_css_class("search-omnibox-url");
+                    sub_lbl.set_xalign(0.0);
+                    sub_lbl.set_ellipsize(EllipsizeMode::End);
+                    col.append(&sub_lbl);
 
-            if matches!(item.kind, OmniboxSuggestionKind::OpenTab { .. }) {
-                let badge = Label::new(Some("Cambiar a pestaña"));
-                badge.add_css_class("search-omnibox-badge");
-                badge.set_valign(Align::Center);
-                hbox.append(&badge);
+                    hbox.append(&col);
+
+                    let badge_text = match calc.kind {
+                        CalcResultKind::UnitConversion => "Conversor",
+                        CalcResultKind::Percentage | CalcResultKind::Arithmetic => "Calculadora",
+                    };
+                    let badge = Label::new(Some(badge_text));
+                    badge.add_css_class("search-omnibox-badge");
+                    badge.set_valign(Align::Center);
+                    hbox.append(&badge);
+                    badge_opt = Some(badge);
+                }
+                OmniboxRowItem::Color(preview) => {
+                    row.add_css_class("omnibox-calc-row");
+                    let swatch = Image::new();
+                    swatch.set_pixel_size(24);
+                    swatch.set_from_texture(Some(
+                        &build_color_swatch_texture(preview.rgba, 24).to_texture(),
+                    ));
+                    swatch.add_css_class("color-swatch");
+                    hbox.append(&swatch);
+
+                    let col = BoxWidget::new(Orientation::Vertical, 1);
+                    col.set_hexpand(true);
+
+                    let title_text = match &preview.matched_name {
+                        Some(name) => format!("{} ({})", preview.swatch_hex, name),
+                        None => preview.swatch_hex.clone(),
+                    };
+                    let title = Label::new(Some(&title_text));
+                    title.set_xalign(0.0);
+                    title.set_ellipsize(EllipsizeMode::End);
+                    col.append(&title);
+
+                    let sub_text = format_color_subtitle(preview);
+                    let sub_lbl = Label::new(Some(&sub_text));
+                    sub_lbl.add_css_class("search-omnibox-url");
+                    sub_lbl.set_xalign(0.0);
+                    sub_lbl.set_ellipsize(EllipsizeMode::End);
+                    col.append(&sub_lbl);
+
+                    hbox.append(&col);
+
+                    let badge = Label::new(Some("Color"));
+                    badge.add_css_class("search-omnibox-badge");
+                    badge.set_valign(Align::Center);
+                    hbox.append(&badge);
+                    badge_opt = Some(badge);
+                }
+                OmniboxRowItem::Bang(matched) => {
+                    row.add_css_class("omnibox-calc-row");
+                    let icon = icons::image(IconId::Search, 15);
+                    hbox.append(&icon);
+
+                    let col = BoxWidget::new(Orientation::Vertical, 1);
+                    col.set_hexpand(true);
+
+                    let title_text = if matched.remaining_query.is_empty() {
+                        format!("Abrir {}", matched.bang_name)
+                    } else {
+                        format!(
+                            "Buscar \"{}\" en {}",
+                            matched.remaining_query, matched.bang_name
+                        )
+                    };
+                    let title = Label::new(Some(&title_text));
+                    title.set_xalign(0.0);
+                    title.set_ellipsize(EllipsizeMode::End);
+                    col.append(&title);
+
+                    let url_lbl = Label::new(Some(&matched.resolved_url));
+                    url_lbl.add_css_class("search-omnibox-url");
+                    url_lbl.set_xalign(0.0);
+                    url_lbl.set_ellipsize(EllipsizeMode::End);
+                    col.append(&url_lbl);
+
+                    hbox.append(&col);
+
+                    let badge = Label::new(Some(&format!(
+                        "!{} · {}",
+                        matched.canonical_trigger, matched.bang_name
+                    )));
+                    badge.add_css_class("search-omnibox-badge");
+                    badge.set_valign(Align::Center);
+                    hbox.append(&badge);
+                    badge_opt = Some(badge);
+                }
+                OmniboxRowItem::BangHint(suggestion) => {
+                    let icon = icons::image(IconId::Search, 15);
+                    hbox.append(&icon);
+
+                    let col = BoxWidget::new(Orientation::Vertical, 1);
+                    col.set_hexpand(true);
+
+                    let title = Label::new(Some(&format!(
+                        "!{} - {}",
+                        suggestion.trigger, suggestion.name
+                    )));
+                    title.set_xalign(0.0);
+                    title.set_ellipsize(EllipsizeMode::End);
+                    col.append(&title);
+
+                    let sub_lbl = Label::new(Some("Pulsa Enter o haz clic para completar bang"));
+                    sub_lbl.add_css_class("search-omnibox-url");
+                    sub_lbl.set_xalign(0.0);
+                    sub_lbl.set_ellipsize(EllipsizeMode::End);
+                    col.append(&sub_lbl);
+
+                    hbox.append(&col);
+
+                    let badge = Label::new(Some("Bang"));
+                    badge.add_css_class("search-omnibox-badge");
+                    badge.set_valign(Align::Center);
+                    hbox.append(&badge);
+                    badge_opt = Some(badge);
+                }
+                OmniboxRowItem::Suggestion(s) => {
+                    let icon_id = match s.kind {
+                        OmniboxSuggestionKind::OpenTab { .. } => IconId::LayoutTabs,
+                        OmniboxSuggestionKind::Bookmark { .. } => IconId::Star,
+                        OmniboxSuggestionKind::History { .. } => IconId::History,
+                    };
+                    let icon = icons::image(icon_id, 15);
+                    hbox.append(&icon);
+
+                    let col = BoxWidget::new(Orientation::Vertical, 1);
+                    col.set_hexpand(true);
+
+                    let title = Label::new(Some(&s.title));
+                    title.set_xalign(0.0);
+                    title.set_ellipsize(EllipsizeMode::End);
+                    col.append(&title);
+
+                    let url_lbl = Label::new(Some(&s.display_url));
+                    url_lbl.add_css_class("search-omnibox-url");
+                    url_lbl.set_xalign(0.0);
+                    url_lbl.set_ellipsize(EllipsizeMode::End);
+                    col.append(&url_lbl);
+
+                    hbox.append(&col);
+
+                    if matches!(s.kind, OmniboxSuggestionKind::OpenTab { .. }) {
+                        let badge = Label::new(Some("Cambiar a pestaña"));
+                        badge.add_css_class("search-omnibox-badge");
+                        badge.set_valign(Align::Center);
+                        hbox.append(&badge);
+                    }
+                }
             }
 
+            row_badges.push(badge_opt);
             row.set_child(Some(&hbox));
             self.list_box.append(&row);
         }
 
-        let is_empty = suggestions.is_empty();
+        let is_empty = items.is_empty();
         {
             let mut st = self.state.borrow_mut();
-            st.suggestions = suggestions;
+            st.items = items;
+            st.row_badges = row_badges;
             st.selected_index = None;
             st.popover_open = !is_empty;
         }
@@ -667,7 +869,9 @@ impl AddressBar {
             let prev = st.popover_open;
             st.popover_open = false;
             st.selected_index = None;
-            st.suggestions.clear();
+            st.feedback_seq = st.feedback_seq.wrapping_add(1);
+            st.items.clear();
+            st.row_badges.clear();
             prev
         };
         if was_open {
@@ -707,15 +911,18 @@ impl AddressBar {
         if keyval == gdk::keys::DELETE && mods.contains(ModifierType::SHIFT_MASK) {
             let delete_target = {
                 let st = self.state.borrow();
-                if st.popover_open && !st.suggestions.is_empty() {
+                if st.popover_open && !st.items.is_empty() {
                     let idx = st.selected_index.unwrap_or(0);
-                    st.suggestions.get(idx).and_then(|s| match &s.kind {
-                        OmniboxSuggestionKind::History { key } => Some((
-                            key.clone(),
-                            st.on_delete_history.clone(),
-                            st.user_typed.clone(),
-                            st.suggest_provider.clone(),
-                        )),
+                    st.items.get(idx).and_then(|item| match item {
+                        OmniboxRowItem::Suggestion(s) => match &s.kind {
+                            OmniboxSuggestionKind::History { key } => Some((
+                                key.clone(),
+                                st.on_delete_history.clone(),
+                                st.user_typed.clone(),
+                                st.suggest_provider.clone(),
+                            )),
+                            _ => None,
+                        },
                         _ => None,
                     })
                 } else {
@@ -724,13 +931,27 @@ impl AddressBar {
             };
             if let Some((key, Some(del_cb), user_typed, provider)) = delete_target {
                 del_cb(key);
+                let superpowers = {
+                    let st = self.state.borrow();
+                    evaluate_superpowers(
+                        &user_typed,
+                        &st.calculator,
+                        &st.color_previewer,
+                        &st.bang_registry,
+                    )
+                };
+                let mut items = superpowers;
                 if let Some(prov) = provider {
-                    let updated = prov(&user_typed);
-                    if updated.is_empty() {
-                        self.close_popover();
-                    } else {
-                        self.render_suggestions(updated);
-                    }
+                    items.extend(
+                        prov(&user_typed)
+                            .into_iter()
+                            .map(OmniboxRowItem::Suggestion),
+                    );
+                }
+                if items.is_empty() {
+                    self.close_popover();
+                } else {
+                    self.render_items(items);
                 }
                 return true;
             }
@@ -764,10 +985,10 @@ impl AddressBar {
     fn move_selection(&self, delta: isize) -> bool {
         let preview = {
             let mut st = self.state.borrow_mut();
-            if !st.popover_open || st.suggestions.is_empty() {
+            if !st.popover_open || st.items.is_empty() {
                 return false;
             }
-            let len = st.suggestions.len() as isize;
+            let len = st.items.len() as isize;
             let next = match st.selected_index {
                 None => {
                     if delta > 0 {
@@ -779,7 +1000,14 @@ impl AddressBar {
                 Some(cur) => ((cur as isize + delta).rem_euclid(len)) as usize,
             };
             st.selected_index = Some(next);
-            Some((next, st.suggestions[next].display_url.clone()))
+            let entry_text = match &st.items[next] {
+                OmniboxRowItem::Suggestion(s) => s.display_url.clone(),
+                OmniboxRowItem::BangHint(s) => format!("!{} ", s.trigger),
+                OmniboxRowItem::Calc(_) | OmniboxRowItem::Color(_) | OmniboxRowItem::Bang(_) => {
+                    st.user_typed.clone()
+                }
+            };
+            Some((next, entry_text))
         };
 
         if let Some((idx, text)) = preview {
@@ -796,9 +1024,25 @@ impl AddressBar {
     }
 
     fn activate_current(&self) {
-        let selected_idx = self.state.borrow().selected_index;
+        let (selected_idx, first_is_superpower) = {
+            let st = self.state.borrow();
+            let first_super = st.popover_open
+                && matches!(
+                    st.items.first(),
+                    Some(
+                        OmniboxRowItem::Calc(_)
+                            | OmniboxRowItem::Color(_)
+                            | OmniboxRowItem::Bang(_)
+                    )
+                );
+            (st.selected_index, first_super)
+        };
         if let Some(idx) = selected_idx {
-            self.activate_suggestion_at(idx);
+            self.activate_item_at(idx);
+            return;
+        }
+        if first_is_superpower {
+            self.activate_item_at(0);
             return;
         }
         let typed = self.entry.text();
@@ -809,30 +1053,76 @@ impl AddressBar {
         }
     }
 
-    fn activate_suggestion_at(&self, idx: usize) {
+    fn activate_item_at(&self, idx: usize) {
         let action = {
             let st = self.state.borrow();
-            st.suggestions
+            st.items
                 .get(idx)
                 .cloned()
-                .map(|s| (s, st.on_submit.clone(), st.on_switch_tab.clone()))
+                .map(|item| (item, st.on_submit.clone(), st.on_switch_tab.clone()))
         };
-        self.close_popover();
-        let Some((suggestion, on_submit, on_switch_tab)) = action else {
+        let Some((item, on_submit, on_switch_tab)) = action else {
+            self.close_popover();
             return;
         };
-        match suggestion.kind {
-            OmniboxSuggestionKind::OpenTab { window_id, tab_id } => {
-                if let Some(cb) = on_switch_tab {
-                    cb(window_id, tab_id);
+        match item {
+            OmniboxRowItem::Calc(calc) => {
+                self.copy_with_feedback(idx, &calc.copy_value);
+            }
+            OmniboxRowItem::Color(preview) => {
+                self.copy_with_feedback(idx, &preview.swatch_hex);
+            }
+            OmniboxRowItem::Bang(matched) => {
+                self.close_popover();
+                if let Some(cb) = on_submit {
+                    cb(matched.resolved_url);
                 }
             }
-            OmniboxSuggestionKind::Bookmark { .. } | OmniboxSuggestionKind::History { .. } => {
-                if let Some(cb) = on_submit {
-                    cb(suggestion.url);
+            OmniboxRowItem::BangHint(suggestion) => {
+                let completed = format!("!{} ", suggestion.trigger);
+                self.state.borrow_mut().suppress_change = true;
+                self.entry.set_text(&completed);
+                self.entry.set_position(-1);
+                self.state.borrow_mut().suppress_change = false;
+                self.on_entry_changed();
+            }
+            OmniboxRowItem::Suggestion(suggestion) => {
+                self.close_popover();
+                match suggestion.kind {
+                    OmniboxSuggestionKind::OpenTab { window_id, tab_id } => {
+                        if let Some(cb) = on_switch_tab {
+                            cb(window_id, tab_id);
+                        }
+                    }
+                    OmniboxSuggestionKind::Bookmark { .. }
+                    | OmniboxSuggestionKind::History { .. } => {
+                        if let Some(cb) = on_submit {
+                            cb(suggestion.url);
+                        }
+                    }
                 }
             }
         }
+    }
+
+    fn copy_with_feedback(&self, idx: usize, value: &str) {
+        if let Some(disp) = gdk::Display::default_display() {
+            disp.set_clipboard_text(value);
+        }
+        let seq = {
+            let mut st = self.state.borrow_mut();
+            st.feedback_seq = st.feedback_seq.wrapping_add(1);
+            if let Some(Some(badge)) = st.row_badges.get(idx) {
+                badge.set_text("Copiado");
+            }
+            st.feedback_seq
+        };
+        let bar = self.clone();
+        gnome_platform::glib::timeout_add_local_once(Duration::from_millis(650), move || {
+            if bar.state.borrow().feedback_seq == seq {
+                bar.close_popover();
+            }
+        });
     }
 }
 
@@ -920,4 +1210,167 @@ fn build_qr_preview_texture(data: &str, px_size: i32) -> MemoryTexture {
         &bytes,
         size * 4,
     )
+}
+
+fn evaluate_superpowers(
+    input: &str,
+    calculator: &OmniboxCalculator,
+    color_previewer: &OmniboxColorPreviewer,
+    bang_registry: &BangRegistry,
+) -> Vec<OmniboxRowItem> {
+    let mut out = Vec::new();
+    let trimmed = input.trim();
+    if trimmed.is_empty() {
+        return out;
+    }
+
+    if let Some(matched) = bang_registry.resolve(trimmed, &BangParseOptions::default()) {
+        out.push(OmniboxRowItem::Bang(matched));
+    } else if trimmed.starts_with('!') {
+        for suggestion in bang_registry.suggest(trimmed, 3) {
+            out.push(OmniboxRowItem::BangHint(suggestion));
+        }
+    }
+
+    if let Some(preview) = color_previewer.try_preview(trimmed) {
+        out.push(OmniboxRowItem::Color(preview));
+    }
+
+    if let Some(calc) = calculator.try_suggest(trimmed) {
+        out.push(OmniboxRowItem::Calc(calc));
+    }
+
+    out
+}
+
+fn format_calc_subtitle(calc: &CalcResult) -> String {
+    if calc.alternates.is_empty() {
+        format!(
+            "{}  ·  Enter o clic para copiar",
+            calc.normalized_expression
+        )
+    } else {
+        let alts: Vec<String> = calc
+            .alternates
+            .iter()
+            .take(2)
+            .map(|a| format!("{}: {}", a.label, a.value))
+            .collect();
+        format!("{}  ·  {}", calc.normalized_expression, alts.join(" · "))
+    }
+}
+
+fn wcag_grade(aa: bool, aaa: bool) -> &'static str {
+    if aaa {
+        "AAA"
+    } else if aa {
+        "AA"
+    } else {
+        "Bajo"
+    }
+}
+
+fn format_color_subtitle(preview: &OmniboxColorPreview) -> String {
+    let rgb = format!(
+        "rgb({}, {}, {})",
+        preview.rgba.r, preview.rgba.g, preview.rgba.b
+    );
+    let white_grade = wcag_grade(
+        preview.contrast.wcag_aa_on_white,
+        preview.contrast.wcag_aaa_on_white,
+    );
+    let black_grade = wcag_grade(
+        preview.contrast.wcag_aa_on_black,
+        preview.contrast.wcag_aaa_on_black,
+    );
+    format!(
+        "{rgb}  ·  WCAG blanco {:.2}:1 ({white_grade}) · negro {:.2}:1 ({black_grade})",
+        preview.contrast.vs_white, preview.contrast.vs_black
+    )
+}
+
+fn build_color_swatch_texture(rgba: ColorRgba, px_size: i32) -> MemoryTexture {
+    let size = px_size.max(8) as usize;
+    let buf = [rgba.r, rgba.g, rgba.b, rgba.a].repeat(size * size);
+    let bytes = Bytes::from_slice(&buf);
+    MemoryTexture::new(
+        size as i32,
+        size as i32,
+        MemoryFormat::R8g8b8a8,
+        &bytes,
+        size * 4,
+    )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn omnibox_superpowers_evaluate_math_percentage_and_units() {
+        let calc = OmniboxCalculator::default();
+        let color = OmniboxColorPreviewer::with_defaults();
+        let bangs = BangRegistry::with_defaults();
+
+        let math = evaluate_superpowers("25 * 4 + 10", &calc, &color, &bangs);
+        assert!(matches!(math.first(), Some(OmniboxRowItem::Calc(c)) if c.copy_value == "110"));
+
+        let pct = evaluate_superpowers("= 15% of 200", &calc, &color, &bangs);
+        assert!(matches!(pct.first(), Some(OmniboxRowItem::Calc(c)) if c.copy_value == "30"));
+
+        let unit = evaluate_superpowers("100 km to mi", &calc, &color, &bangs);
+        assert!(matches!(
+            unit.first(),
+            Some(OmniboxRowItem::Calc(c)) if c.kind == CalcResultKind::UnitConversion
+                && c.formatted.ends_with("mi")
+        ));
+    }
+
+    #[test]
+    fn omnibox_superpowers_evaluate_colors_and_wcag() {
+        let calc = OmniboxCalculator::default();
+        let color = OmniboxColorPreviewer::with_defaults();
+        let bangs = BangRegistry::with_defaults();
+
+        let hex = evaluate_superpowers("#ff6b6b", &calc, &color, &bangs);
+        assert!(matches!(
+            hex.first(),
+            Some(OmniboxRowItem::Color(p)) if p.swatch_hex == "#ff6b6b"
+        ));
+
+        let rgb = evaluate_superpowers("rgb(110, 168, 254)", &calc, &color, &bangs);
+        match rgb.first() {
+            Some(OmniboxRowItem::Color(p)) => {
+                assert_eq!(p.rgba.r, 110);
+                assert_eq!(p.rgba.g, 168);
+                assert_eq!(p.rgba.b, 254);
+                let sub = format_color_subtitle(p);
+                assert!(sub.contains("WCAG"));
+            }
+            _ => panic!("expected color preview"),
+        }
+    }
+
+    #[test]
+    fn omnibox_superpowers_evaluate_bangs() {
+        let calc = OmniboxCalculator::default();
+        let color = OmniboxColorPreviewer::with_defaults();
+        let bangs = BangRegistry::with_defaults();
+
+        for (query, expected_trigger) in [
+            ("!gh rust", "gh"),
+            ("!yt lofi", "yt"),
+            ("!w linux", "w"),
+            ("!ddg search", "ddg"),
+        ] {
+            let res = evaluate_superpowers(query, &calc, &color, &bangs);
+            assert!(
+                matches!(
+                    res.first(),
+                    Some(OmniboxRowItem::Bang(m)) if m.canonical_trigger == expected_trigger
+                ),
+                "failed for {query}"
+            );
+        }
+    }
 }
