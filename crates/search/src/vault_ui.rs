@@ -15,18 +15,21 @@
 use crate::browser_view::BrowserView;
 use crate::vault::{FieldRect, VaultService};
 use gnome_platform::adw::{
-    ActionRow, AlertDialog, ApplicationWindow, Dialog, HeaderBar, ResponseAppearance, ToolbarView,
+    ActionRow, AlertDialog, ApplicationWindow, Dialog, HeaderBar, ResponseAppearance, SwitchRow,
+    ToolbarView,
 };
 use gnome_platform::gdk::{ContentProvider, Display, Rectangle};
 use gnome_platform::glib;
 use gnome_platform::gtk::{
     self as gtk, Align, AsEditable, AsWidget, BoxWidget, Button, EllipsizeMode, Entry, Label,
-    ListBox, Orientation, PasswordEntry, PolicyType, Popover, PositionType, Revealer,
-    RevealerTransitionType, ScrolledWindow, SearchEntry, SelectionMode,
+    ListBox, Orientation, PasswordEntry, PolicyType, Popover, PositionType, ProgressBar, Revealer,
+    RevealerTransitionType, Scale, ScrolledWindow, SearchEntry, SelectionMode, Separator,
 };
+use search_core::shield::sha256_hex;
 use search_core::vault::{CredentialMeta, Origin, Password, VaultError, VaultStatus};
 use search_core::vault_import::{self, BrowserProfile, ChromiumKeys, ImportError, ProfileKind};
 use std::cell::{Cell, RefCell};
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::time::Duration;
@@ -495,6 +498,223 @@ fn user_label(username: &str) -> &str {
 }
 
 // ---------------------------------------------------------------------------------------------
+// Generador CSPRNG y salud del llavero
+// ---------------------------------------------------------------------------------------------
+
+const LOWERCASE_CHARS: &[u8] = b"abcdefghijklmnopqrstuvwxyz";
+const UPPERCASE_CHARS: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZ";
+const DIGIT_CHARS: &[u8] = b"0123456789";
+const SYMBOL_CHARS: &[u8] = b"!@#$%^&*()-_=+[]{};:,.?/";
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct GeneratorOptions {
+    length: usize,
+    uppercase: bool,
+    digits: bool,
+    symbols: bool,
+}
+
+impl Default for GeneratorOptions {
+    fn default() -> Self {
+        Self {
+            length: 20,
+            uppercase: true,
+            digits: true,
+            symbols: true,
+        }
+    }
+}
+
+fn csprng_fill(buf: &mut [u8]) {
+    let mut offset = 0;
+    while offset < buf.len() {
+        let rc =
+            unsafe { libc::getrandom(buf[offset..].as_mut_ptr().cast(), buf.len() - offset, 0) };
+        if rc > 0 {
+            offset += rc as usize;
+            continue;
+        }
+        let err = std::io::Error::last_os_error();
+        if err.kind() == std::io::ErrorKind::Interrupted {
+            continue;
+        }
+        // Respaldo con /dev/urandom si getrandom no estuviera disponible.
+        if let Ok(mut f) = std::fs::File::open("/dev/urandom") {
+            use std::io::Read;
+            if f.read_exact(&mut buf[offset..]).is_ok() {
+                return;
+            }
+        }
+        panic!("No se pudo obtener entropía CSPRNG del sistema: {err}");
+    }
+}
+
+/// Índice uniforme sin sesgo en `0..bound` mediante muestreo por rechazo.
+fn csprng_index(bound: usize) -> usize {
+    debug_assert!(bound > 0);
+    if bound <= 1 {
+        return 0;
+    }
+    let bound_u64 = bound as u64;
+    let limit = u64::MAX - (u64::MAX % bound_u64);
+    let mut bytes = [0u8; 8];
+    loop {
+        csprng_fill(&mut bytes);
+        let val = u64::from_le_bytes(bytes);
+        if val < limit {
+            return (val % bound_u64) as usize;
+        }
+    }
+}
+
+fn generate_password(opts: GeneratorOptions) -> Zeroizing<String> {
+    let length = opts.length.clamp(12, 48);
+    let mut classes: Vec<&[u8]> = vec![LOWERCASE_CHARS];
+    if opts.uppercase {
+        classes.push(UPPERCASE_CHARS);
+    }
+    if opts.digits {
+        classes.push(DIGIT_CHARS);
+    }
+    if opts.symbols {
+        classes.push(SYMBOL_CHARS);
+    }
+
+    let mut pool = Vec::with_capacity(96);
+    for cls in &classes {
+        pool.extend_from_slice(cls);
+    }
+
+    let mut chars = Vec::with_capacity(length);
+    // Garantizar al menos un carácter de cada clase activada.
+    for cls in &classes {
+        chars.push(cls[csprng_index(cls.len())]);
+    }
+    while chars.len() < length {
+        chars.push(pool[csprng_index(pool.len())]);
+    }
+
+    // Mezcla Fisher-Yates con CSPRNG.
+    for i in (1..chars.len()).rev() {
+        let j = csprng_index(i + 1);
+        chars.swap(i, j);
+    }
+
+    let s = String::from_utf8(chars).unwrap_or_default();
+    Zeroizing::new(s)
+}
+
+fn password_entropy_bits(password: &str) -> f64 {
+    let mut has_lower = false;
+    let mut has_upper = false;
+    let mut has_digit = false;
+    let mut has_symbol = false;
+    let mut char_count = 0usize;
+
+    for ch in password.chars() {
+        char_count += 1;
+        if ch.is_ascii_lowercase() {
+            has_lower = true;
+        } else if ch.is_ascii_uppercase() {
+            has_upper = true;
+        } else if ch.is_ascii_digit() {
+            has_digit = true;
+        } else {
+            has_symbol = true;
+        }
+    }
+
+    if char_count == 0 {
+        return 0.0;
+    }
+
+    let mut pool = 0usize;
+    if has_lower {
+        pool += LOWERCASE_CHARS.len();
+    }
+    if has_upper {
+        pool += UPPERCASE_CHARS.len();
+    }
+    if has_digit {
+        pool += DIGIT_CHARS.len();
+    }
+    if has_symbol {
+        pool += SYMBOL_CHARS.len();
+    }
+    if pool <= 1 {
+        return 0.0;
+    }
+
+    (char_count as f64) * (pool as f64).log2()
+}
+
+fn password_strength_summary(password: &str) -> (&'static str, f64, f64) {
+    let bits = password_entropy_bits(password);
+    let (label, fraction) = if bits < 50.0 {
+        ("Débil", 0.25)
+    } else if bits < 75.0 {
+        ("Aceptable", 0.55)
+    } else if bits < 105.0 {
+        ("Fuerte", 0.8)
+    } else {
+        ("Muy fuerte", 1.0)
+    };
+    (label, fraction, bits)
+}
+
+fn is_weak_password(password: &str) -> bool {
+    let char_count = password.chars().count();
+    if char_count < 12 {
+        return true;
+    }
+    let unique: HashSet<char> = password.chars().collect();
+    if unique.len() < 4 {
+        return true;
+    }
+    password_entropy_bits(password) < 50.0
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+struct PasswordHealthSummary {
+    total: usize,
+    reused: usize,
+    weak: usize,
+}
+
+fn compute_vault_health(vault: &search_core::vault::Vault) -> PasswordHealthSummary {
+    let Ok(all) = vault.list("") else {
+        return PasswordHealthSummary::default();
+    };
+    let mut counts: HashMap<String, usize> = HashMap::new();
+    let mut hashes: Vec<String> = Vec::with_capacity(all.len());
+    let mut weak = 0usize;
+    let mut total = 0usize;
+
+    for meta in &all {
+        if let Ok(Some(pw)) = vault.password(&meta.origin, &meta.username) {
+            total += 1;
+            if is_weak_password(pw.expose()) {
+                weak += 1;
+            }
+            let digest = sha256_hex(pw.expose().as_bytes());
+            *counts.entry(digest.clone()).or_insert(0) += 1;
+            hashes.push(digest);
+        }
+    }
+
+    let reused = hashes
+        .iter()
+        .filter(|h| counts.get(*h).copied().unwrap_or(0) > 1)
+        .count();
+
+    PasswordHealthSummary {
+        total,
+        reused,
+        weak,
+    }
+}
+
+// ---------------------------------------------------------------------------------------------
 // Gestor de contraseñas (`Ctrl+Alt+L`)
 // ---------------------------------------------------------------------------------------------
 
@@ -503,6 +723,9 @@ struct PanelInner {
     service: VaultService,
     dialog: Dialog,
     search: SearchEntry,
+    health_box: BoxWidget,
+    health_icon: gtk::Image,
+    health_label: Label,
     list: ListBox,
     count: Label,
     status: Label,
@@ -546,6 +769,17 @@ impl PasswordsPanel {
         search.set_placeholder_text("Buscar sitios y cuentas");
         search.set_hexpand(true);
 
+        let health_icon = gtk::Image::from_icon_name("security-high-symbolic");
+        let health_label = Label::new(None);
+        health_label.set_xalign(0.0);
+        health_label.set_wrap(true);
+        health_label.add_css_class("caption");
+        let health_box = BoxWidget::new(Orientation::Horizontal, 6);
+        health_box.set_margins(2, 2, 4, 4);
+        health_box.append(&health_icon);
+        health_box.append(&health_label);
+        health_box.set_visible(false);
+
         let list = ListBox::new();
         list.set_selection_mode(SelectionMode::None);
         list.add_css_class("boxed-list");
@@ -573,15 +807,19 @@ impl PasswordsPanel {
         count.set_hexpand(true);
         count.set_xalign(1.0);
 
+        let gen_btn = Button::with_label("Generar contraseña");
+        gen_btn.add_css_class("suggested-action");
         let import_btn = Button::with_label("Importar…");
         let export_btn = Button::with_label("Exportar CSV…");
         let footer = BoxWidget::new(Orientation::Horizontal, 8);
+        footer.append(&gen_btn);
         footer.append(&import_btn);
         footer.append(&export_btn);
         footer.append(&count);
 
         let body = BoxWidget::new(Orientation::Vertical, 12);
         body.append(&search);
+        body.append(&health_box);
         body.append(&scroller);
         body.append(&status);
         body.append(&footer);
@@ -602,6 +840,9 @@ impl PasswordsPanel {
                 service: service.clone(),
                 dialog,
                 search: search.clone(),
+                health_box,
+                health_icon,
+                health_label,
                 list,
                 count,
                 status,
@@ -611,6 +852,16 @@ impl PasswordsPanel {
                 refresh_seq: Cell::new(0),
             }),
         };
+
+        {
+            let w = panel.weak();
+            let anchor = gen_btn.clone();
+            gen_btn.connect_clicked(move || {
+                if let Some(p) = w.upgrade() {
+                    p.open_generator_popover(&anchor);
+                }
+            });
+        }
 
         {
             let w = panel.weak();
@@ -673,17 +924,73 @@ impl PasswordsPanel {
         let query = self.inner.search.text();
         let panel = self.clone();
         self.inner.service.run(
-            move |vault| (vault.status(), vault.list(&query)),
-            move |(status, list)| {
+            move |vault| {
+                let status = vault.status();
+                let list = vault.list(&query);
+                let health = if !matches!(status, VaultStatus::Disabled { .. }) {
+                    compute_vault_health(vault)
+                } else {
+                    PasswordHealthSummary::default()
+                };
+                (status, list, health)
+            },
+            move |(status, list, health)| {
                 if panel.inner.refresh_seq.get() != seq {
                     return;
                 }
-                panel.populate(status, list);
+                panel.populate(status, list, health);
             },
         );
     }
 
-    fn populate(&self, status: VaultStatus, list: Result<Vec<CredentialMeta>, VaultError>) {
+    fn update_health_badge(&self, health: PasswordHealthSummary) {
+        if health.total == 0 {
+            self.inner.health_box.set_visible(false);
+            return;
+        }
+        self.inner.health_label.remove_css_class("warning");
+        self.inner.health_label.remove_css_class("dim-label");
+        if health.reused == 0 && health.weak == 0 {
+            self.inner
+                .health_icon
+                .set_from_icon_name(Some("security-high-symbolic"));
+            self.inner
+                .health_label
+                .set_text("Salud del llavero: todas las contraseñas son fuertes y únicas");
+            self.inner.health_label.add_css_class("dim-label");
+        } else {
+            self.inner
+                .health_icon
+                .set_from_icon_name(Some("dialog-warning-symbolic"));
+            let mut parts = Vec::new();
+            if health.reused > 0 {
+                parts.push(if health.reused == 1 {
+                    "1 reutilizada".to_string()
+                } else {
+                    format!("{} reutilizadas", health.reused)
+                });
+            }
+            if health.weak > 0 {
+                parts.push(if health.weak == 1 {
+                    "1 débil".to_string()
+                } else {
+                    format!("{} débiles", health.weak)
+                });
+            }
+            self.inner
+                .health_label
+                .set_text(&format!("Salud del llavero: {}", parts.join(" · ")));
+            self.inner.health_label.add_css_class("warning");
+        }
+        self.inner.health_box.set_visible(true);
+    }
+
+    fn populate(
+        &self,
+        status: VaultStatus,
+        list: Result<Vec<CredentialMeta>, VaultError>,
+        health: PasswordHealthSummary,
+    ) {
         if let VaultStatus::Disabled { reason } = status {
             self.inner.disabled.set_text(&format!(
                 "Vault desactivado: no hay Secret Service.\n{reason}\n\nSearch nunca guarda \
@@ -691,6 +998,7 @@ impl PasswordsPanel {
                  KWallet o el portal de secretos) y vuelve a abrir Search."
             ));
             self.inner.disabled.set_visible(true);
+            self.inner.health_box.set_visible(false);
             self.inner.body.set_visible(false);
             self.inner.footer.set_visible(false);
             return;
@@ -698,6 +1006,7 @@ impl PasswordsPanel {
         self.inner.disabled.set_visible(false);
         self.inner.body.set_visible(true);
         self.inner.footer.set_visible(true);
+        self.update_health_badge(health);
         self.inner.list.remove_all();
         let entries = match list {
             Ok(entries) => entries,
@@ -972,6 +1281,173 @@ impl PasswordsPanel {
                 );
             },
         );
+    }
+
+    fn open_generator_popover(&self, anchor: &impl AsWidget) {
+        let pop = Popover::new();
+        pop.set_parent(anchor);
+        pop.set_has_arrow(true);
+        pop.set_autohide(true);
+        pop.set_position(PositionType::Top);
+
+        let root = BoxWidget::new(Orientation::Vertical, 10);
+        root.set_margins(12, 12, 12, 12);
+        root.set_size_request(330, -1);
+
+        let title = Label::new(Some("Generador de contraseñas"));
+        title.add_css_class("heading");
+        title.set_xalign(0.0);
+        root.append(&title);
+
+        let opts = Rc::new(RefCell::new(GeneratorOptions::default()));
+        let current_pw = Rc::new(RefCell::new(generate_password(*opts.borrow())));
+
+        let preview = Label::new(Some(&current_pw.borrow()));
+        preview.add_css_class("monospace");
+        preview.set_selectable(true);
+        preview.set_wrap(true);
+        preview.set_xalign(0.0);
+        preview.set_margins(6, 6, 8, 8);
+        root.append(&preview);
+
+        let strength_bar = ProgressBar::new();
+        let strength_lbl = Label::new(None);
+        strength_lbl.add_css_class("caption");
+        strength_lbl.add_css_class("dim-label");
+        strength_lbl.set_xalign(0.0);
+        root.append(&strength_bar);
+        root.append(&strength_lbl);
+
+        let len_header = BoxWidget::new(Orientation::Horizontal, 8);
+        let len_title = Label::new(Some("Longitud"));
+        len_title.set_xalign(0.0);
+        len_title.set_hexpand(true);
+        let len_value = Label::new(Some("20 caracteres"));
+        len_value.add_css_class("dim-label");
+        len_value.add_css_class("caption");
+        len_header.append(&len_title);
+        len_header.append(&len_value);
+        root.append(&len_header);
+
+        let slider = Scale::with_range(Orientation::Horizontal, 12.0, 48.0, 1.0);
+        slider.set_digits(0);
+        slider.set_draw_value(false);
+        slider.set_value(20.0);
+        root.append(&slider);
+
+        let toggles_list = ListBox::new();
+        toggles_list.set_selection_mode(SelectionMode::None);
+        toggles_list.add_css_class("boxed-list");
+
+        let upper_row = SwitchRow::new();
+        upper_row.set_title("Incluir mayúsculas (A-Z)");
+        upper_row.set_active(true);
+
+        let digits_row = SwitchRow::new();
+        digits_row.set_title("Incluir dígitos (0-9)");
+        digits_row.set_active(true);
+
+        let symbols_row = SwitchRow::new();
+        symbols_row.set_title("Incluir símbolos (!@#$…)");
+        symbols_row.set_active(true);
+
+        toggles_list.append(&upper_row);
+        toggles_list.append(&digits_row);
+        toggles_list.append(&symbols_row);
+        root.append(&toggles_list);
+
+        root.append(&Separator::new(Orientation::Horizontal));
+
+        let actions = BoxWidget::new(Orientation::Horizontal, 8);
+        let regen_btn = Button::with_label("Generar otra");
+        regen_btn.add_css_class("flat");
+        let copy_btn = Button::with_label("Copiar contraseña");
+        copy_btn.add_css_class("suggested-action");
+        copy_btn.set_hexpand(true);
+        actions.append(&regen_btn);
+        actions.append(&copy_btn);
+        root.append(&actions);
+
+        let update_ui: Rc<dyn Fn()> = {
+            let opts = opts.clone();
+            let current_pw = current_pw.clone();
+            let preview = preview.clone();
+            let strength_bar = strength_bar.clone();
+            let strength_lbl = strength_lbl.clone();
+            let len_value = len_value.clone();
+            Rc::new(move || {
+                let o = *opts.borrow();
+                len_value.set_text(&format!("{} caracteres", o.length));
+                let pw = generate_password(o);
+                let (label, fraction, bits) = password_strength_summary(&pw);
+                preview.set_text(&pw);
+                strength_bar.set_fraction(fraction);
+                strength_lbl.set_text(&format!("Seguridad: {label} ({:.0} bits)", bits));
+                *current_pw.borrow_mut() = pw;
+            })
+        };
+        update_ui();
+
+        {
+            let opts = opts.clone();
+            let slider_ref = slider.clone();
+            let update = update_ui.clone();
+            slider.connect_value_changed(move || {
+                opts.borrow_mut().length = (slider_ref.value().round() as usize).clamp(12, 48);
+                update();
+            });
+        }
+        {
+            let opts = opts.clone();
+            let row_ref = upper_row.clone();
+            let update = update_ui.clone();
+            upper_row.connect_active_notify(move || {
+                opts.borrow_mut().uppercase = row_ref.is_active();
+                update();
+            });
+        }
+        {
+            let opts = opts.clone();
+            let row_ref = digits_row.clone();
+            let update = update_ui.clone();
+            digits_row.connect_active_notify(move || {
+                opts.borrow_mut().digits = row_ref.is_active();
+                update();
+            });
+        }
+        {
+            let opts = opts.clone();
+            let row_ref = symbols_row.clone();
+            let update = update_ui.clone();
+            symbols_row.connect_active_notify(move || {
+                opts.borrow_mut().symbols = row_ref.is_active();
+                update();
+            });
+        }
+        {
+            let update = update_ui.clone();
+            regen_btn.connect_clicked(move || update());
+        }
+        {
+            let current_pw = current_pw.clone();
+            let panel = self.clone();
+            let pop_ref = pop.clone();
+            copy_btn.connect_clicked(move || {
+                let pw = Password::new(current_pw.borrow().as_str().to_owned());
+                if copy_secret_to_clipboard(&pw) {
+                    panel.set_status(&format!(
+                        "Contraseña generada copiada. Se borrará del portapapeles en {} segundos.",
+                        CLIPBOARD_CLEAR_AFTER.as_secs()
+                    ));
+                    pop_ref.popdown();
+                } else {
+                    panel.set_status("No se pudo acceder al portapapeles.");
+                }
+            });
+        }
+
+        pop.set_child(Some(&root));
+        pop.popup();
     }
 
     fn export(&self) {
@@ -1250,5 +1726,58 @@ impl ImportCtx {
             }
             Err(err) => alert(&self.parent, "No se pudo importar", &err.to_string()),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn csprng_password_generator_respects_length_and_character_classes() {
+        let opts = GeneratorOptions {
+            length: 24,
+            uppercase: true,
+            digits: true,
+            symbols: true,
+        };
+        let pw1 = generate_password(opts);
+        let pw2 = generate_password(opts);
+        assert_eq!(pw1.len(), 24);
+        assert_ne!(*pw1, *pw2);
+        assert!(pw1.chars().any(|c| c.is_ascii_lowercase()));
+        assert!(pw1.chars().any(|c| c.is_ascii_uppercase()));
+        assert!(pw1.chars().any(|c| c.is_ascii_digit()));
+        assert!(pw1.chars().any(|c| SYMBOL_CHARS.contains(&(c as u8))));
+
+        // Clamping fuera de rango [12, 48].
+        let short = generate_password(GeneratorOptions {
+            length: 4,
+            uppercase: false,
+            digits: false,
+            symbols: false,
+        });
+        assert_eq!(short.len(), 12);
+        assert!(short.chars().all(|c| c.is_ascii_lowercase()));
+
+        let long = generate_password(GeneratorOptions {
+            length: 99,
+            uppercase: true,
+            digits: true,
+            symbols: false,
+        });
+        assert_eq!(long.len(), 48);
+        assert!(!long.chars().any(|c| SYMBOL_CHARS.contains(&(c as u8))));
+    }
+
+    #[test]
+    fn password_strength_and_weakness_checks_work() {
+        assert!(is_weak_password("short123"));
+        assert!(is_weak_password("aaaaaaaaaaaa"));
+        assert!(!is_weak_password("Correct-Horse-99!"));
+        let (label, frac, bits) = password_strength_summary("Correct-Horse-99!");
+        assert!(bits >= 75.0);
+        assert!(frac >= 0.8);
+        assert!(label == "Fuerte" || label == "Muy fuerte");
     }
 }

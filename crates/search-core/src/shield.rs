@@ -130,6 +130,183 @@ pub const YOUTUBE_AD_PATHS: &[&str] = &[
     "/pcs/activeview",
 ];
 
+/// Categorías de bloqueo de Shield para estadísticas y conmutadores por tipo.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum ShieldCategory {
+    Ads,
+    Trackers,
+    SocialAnnoyances,
+    YouTube,
+}
+
+impl ShieldCategory {
+    pub const ALL: [Self; 4] = [
+        Self::Ads,
+        Self::Trackers,
+        Self::SocialAnnoyances,
+        Self::YouTube,
+    ];
+
+    pub fn label_es(self) -> &'static str {
+        match self {
+            Self::Ads => "Anuncios",
+            Self::Trackers => "Rastreadores",
+            Self::SocialAnnoyances => "Redes sociales y avisos",
+            Self::YouTube => "Anuncios de YouTube",
+        }
+    }
+}
+
+/// Estado de activación por categoría de Shield.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CategoryToggles {
+    pub ads: bool,
+    pub trackers: bool,
+    pub social_annoyances: bool,
+    pub youtube: bool,
+}
+
+impl Default for CategoryToggles {
+    fn default() -> Self {
+        Self {
+            ads: true,
+            trackers: true,
+            social_annoyances: true,
+            youtube: true,
+        }
+    }
+}
+
+impl CategoryToggles {
+    pub fn is_enabled(self, category: ShieldCategory) -> bool {
+        match category {
+            ShieldCategory::Ads => self.ads,
+            ShieldCategory::Trackers => self.trackers,
+            ShieldCategory::SocialAnnoyances => self.social_annoyances,
+            ShieldCategory::YouTube => self.youtube,
+        }
+    }
+
+    pub fn set_enabled(&mut self, category: ShieldCategory, enabled: bool) {
+        match category {
+            ShieldCategory::Ads => self.ads = enabled,
+            ShieldCategory::Trackers => self.trackers = enabled,
+            ShieldCategory::SocialAnnoyances => self.social_annoyances = enabled,
+            ShieldCategory::YouTube => self.youtube = enabled,
+        }
+    }
+}
+
+/// Contadores de elementos bloqueados por categoría.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CategoryStats {
+    pub ads: u64,
+    pub trackers: u64,
+    pub social_annoyances: u64,
+    pub youtube: u64,
+}
+
+impl CategoryStats {
+    pub fn increment(&mut self, category: ShieldCategory) {
+        match category {
+            ShieldCategory::Ads => self.ads = self.ads.saturating_add(1),
+            ShieldCategory::Trackers => self.trackers = self.trackers.saturating_add(1),
+            ShieldCategory::SocialAnnoyances => {
+                self.social_annoyances = self.social_annoyances.saturating_add(1);
+            }
+            ShieldCategory::YouTube => self.youtube = self.youtube.saturating_add(1),
+        }
+    }
+
+    pub fn get(self, category: ShieldCategory) -> u64 {
+        match category {
+            ShieldCategory::Ads => self.ads,
+            ShieldCategory::Trackers => self.trackers,
+            ShieldCategory::SocialAnnoyances => self.social_annoyances,
+            ShieldCategory::YouTube => self.youtube,
+        }
+    }
+
+    pub fn total(self) -> u64 {
+        self.ads
+            .saturating_add(self.trackers)
+            .saturating_add(self.social_annoyances)
+            .saturating_add(self.youtube)
+    }
+}
+
+const SOCIAL_ANNOYANCE_DOMAINS: &[&str] = &[
+    "connect.facebook.net",
+    "ads-twitter.com",
+    "analytics.twitter.com",
+    "analytics.tiktok.com",
+];
+
+const TRACKER_DOMAINS: &[&str] = &[
+    "google-analytics.com",
+    "googletagmanager.com",
+    "scorecardresearch.com",
+    "quantserve.com",
+    "chartbeat.com",
+    "hotjar.com",
+    "mouseflow.com",
+    "fullstory.com",
+    "clarity.ms",
+    "mixpanel.com",
+    "amplitude.com",
+    "segment.com",
+    "segment.io",
+    "branch.io",
+    "appsflyer.com",
+    "adjust.com",
+];
+
+/// Clasifica un dominio de `UNWANTED_DOMAINS` en su categoría de Shield.
+pub fn categorize_domain(domain: &str) -> ShieldCategory {
+    let lower = domain.trim().to_ascii_lowercase();
+    if SOCIAL_ANNOYANCE_DOMAINS
+        .iter()
+        .any(|d| lower == *d || lower.ends_with(&format!(".{d}")))
+    {
+        ShieldCategory::SocialAnnoyances
+    } else if TRACKER_DOMAINS
+        .iter()
+        .any(|d| lower == *d || lower.ends_with(&format!(".{d}")))
+    {
+        ShieldCategory::Trackers
+    } else {
+        ShieldCategory::Ads
+    }
+}
+
+fn categorize_rule(rule: &ContentRule) -> ShieldCategory {
+    if rule.trigger.url_filter.contains(r"youtube\.com")
+        || rule
+            .trigger
+            .if_domain
+            .iter()
+            .any(|d| d.contains("youtube.com") || d.contains("youtube-nocookie.com"))
+    {
+        return ShieldCategory::YouTube;
+    }
+    if rule.action.action_type == "css-display-none" {
+        return ShieldCategory::Ads;
+    }
+    for domain in SOCIAL_ANNOYANCE_DOMAINS {
+        let escaped = domain.replace('.', r"\.");
+        if rule.trigger.url_filter.contains(&escaped) {
+            return ShieldCategory::SocialAnnoyances;
+        }
+    }
+    for domain in TRACKER_DOMAINS {
+        let escaped = domain.replace('.', r"\.");
+        if rule.trigger.url_filter.contains(&escaped) {
+            return ShieldCategory::Trackers;
+        }
+    }
+    ShieldCategory::Ads
+}
+
 /// Regla declarativa compatible con `WKContentRuleList`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ContentRule {
@@ -324,6 +501,7 @@ struct CompiledNetworkRule {
     if_domain: Vec<String>,
     unless_domain: Vec<String>,
     action: NetworkAction,
+    category: ShieldCategory,
 }
 
 #[derive(Debug, Clone)]
@@ -331,6 +509,7 @@ struct CompiledCosmeticRule {
     if_domain: Vec<String>,
     unless_domain: Vec<String>,
     selector: String,
+    category: ShieldCategory,
 }
 
 /// Motor compilado en memoria de Shield (inmutable y `Send + Sync`, apto para el hilo IO de CEF).
@@ -412,6 +591,7 @@ impl CompiledShield {
         let mut cosmetic_rules = Vec::new();
 
         for rule in rules {
+            let category = categorize_rule(&rule);
             match rule.action.action_type.as_str() {
                 "block" | "ignore-previous-rules" => {
                     let load_type = parse_load_type(&rule.trigger.load_type);
@@ -426,6 +606,7 @@ impl CompiledShield {
                         if_domain: rule.trigger.if_domain,
                         unless_domain: rule.trigger.unless_domain,
                         action,
+                        category,
                     });
                 }
                 "css-display-none" => {
@@ -436,6 +617,7 @@ impl CompiledShield {
                                 if_domain: rule.trigger.if_domain,
                                 unless_domain: rule.trigger.unless_domain,
                                 selector: trimmed.to_string(),
+                                category,
                             });
                         }
                     }
@@ -495,25 +677,45 @@ impl CompiledShield {
         paused_hosts: &[String],
         shield_enabled: bool,
     ) -> bool {
+        self.evaluate_request(
+            request_url,
+            top_level_url,
+            paused_hosts,
+            shield_enabled,
+            CategoryToggles::default(),
+        )
+        .is_some()
+    }
+
+    /// Evalúa si una petición de red debe cancelarse respetando los conmutadores por categoría
+    /// y devuelve la categoría que provocó el bloqueo.
+    pub fn evaluate_request(
+        &self,
+        request_url: &str,
+        top_level_url: &str,
+        paused_hosts: &[String],
+        shield_enabled: bool,
+        categories: CategoryToggles,
+    ) -> Option<ShieldCategory> {
         if !shield_enabled {
-            return false;
+            return None;
         }
         if !request_url.starts_with("http://") && !request_url.starts_with("https://") {
-            return false;
+            return None;
         }
         if let Some(top_site) = site_host(top_level_url) {
             if is_host_paused(&top_site, paused_hosts) {
-                return false;
+                return None;
             }
         }
 
         let top_raw = raw_url_host(top_level_url);
         let matches = self.network_set.matches(request_url);
         if !matches.matched_any() {
-            return false;
+            return None;
         }
 
-        let mut blocked = false;
+        let mut blocked_category: Option<ShieldCategory> = None;
         let mut same_site_cached: Option<bool> = None;
 
         for idx in matches.iter() {
@@ -541,12 +743,16 @@ impl CompiledShield {
             }
 
             match rule.action {
-                NetworkAction::Block => blocked = true,
-                NetworkAction::IgnorePrevious => blocked = false,
+                NetworkAction::Block => {
+                    if categories.is_enabled(rule.category) {
+                        blocked_category = Some(rule.category);
+                    }
+                }
+                NetworkAction::IgnorePrevious => blocked_category = None,
             }
         }
 
-        blocked
+        blocked_category
     }
 
     /// Genera la hoja CSS cosmética aplicable a `page_url` (`<style id="office-shield">`).
@@ -555,6 +761,22 @@ impl CompiledShield {
         page_url: &str,
         paused_hosts: &[String],
         shield_enabled: bool,
+    ) -> Option<String> {
+        self.cosmetic_css_for_url_with_categories(
+            page_url,
+            paused_hosts,
+            shield_enabled,
+            CategoryToggles::default(),
+        )
+    }
+
+    /// Genera la hoja CSS cosmética aplicable a `page_url` respetando las categorías activas.
+    pub fn cosmetic_css_for_url_with_categories(
+        &self,
+        page_url: &str,
+        paused_hosts: &[String],
+        shield_enabled: bool,
+        categories: CategoryToggles,
     ) -> Option<String> {
         if !shield_enabled {
             return None;
@@ -568,6 +790,9 @@ impl CompiledShield {
 
         let mut rules_css = Vec::new();
         for rule in &self.cosmetic_rules {
+            if !categories.is_enabled(rule.category) {
+                continue;
+            }
             if domain_conditions_match(Some(&top_raw), &rule.if_domain, &rule.unless_domain) {
                 rules_css.push(format!("{} {{ display: none !important; }}", rule.selector));
             }
@@ -1058,5 +1283,94 @@ mod tests {
         assert!(page_js.contains("ytInitialPlayerResponse"));
         assert!(skip_js.contains("ad-showing"));
         assert!(skip_js.contains("playbackRate = 16"));
+    }
+
+    #[test]
+    fn category_classification_and_toggles_work() {
+        let shield = CompiledShield::compile_embedded_in_memory().expect("compile shield");
+        let empty: Vec<String> = Vec::new();
+
+        // Ads
+        assert_eq!(
+            shield.evaluate_request(
+                "https://pagead2.googlesyndication.com/pagead/js/adsbygoogle.js",
+                "https://example.com/",
+                &empty,
+                true,
+                CategoryToggles::default()
+            ),
+            Some(ShieldCategory::Ads)
+        );
+        // Trackers
+        assert_eq!(
+            shield.evaluate_request(
+                "https://www.google-analytics.com/analytics.js",
+                "https://example.com/",
+                &empty,
+                true,
+                CategoryToggles::default()
+            ),
+            Some(ShieldCategory::Trackers)
+        );
+        // Social / Annoyances
+        assert_eq!(
+            shield.evaluate_request(
+                "https://connect.facebook.net/en_US/sdk.js",
+                "https://example.com/",
+                &empty,
+                true,
+                CategoryToggles::default()
+            ),
+            Some(ShieldCategory::SocialAnnoyances)
+        );
+        // YouTube
+        assert_eq!(
+            shield.evaluate_request(
+                "https://www.youtube.com/api/stats/ads?ver=2",
+                "https://www.youtube.com/watch?v=123",
+                &empty,
+                true,
+                CategoryToggles::default()
+            ),
+            Some(ShieldCategory::YouTube)
+        );
+
+        // Desactivar solo Trackers permite Trackers pero mantiene Ads.
+        let mut toggles = CategoryToggles::default();
+        toggles.set_enabled(ShieldCategory::Trackers, false);
+        assert_eq!(
+            shield.evaluate_request(
+                "https://www.google-analytics.com/analytics.js",
+                "https://example.com/",
+                &empty,
+                true,
+                toggles
+            ),
+            None
+        );
+        assert_eq!(
+            shield.evaluate_request(
+                "https://pagead2.googlesyndication.com/pagead/js/adsbygoogle.js",
+                "https://example.com/",
+                &empty,
+                true,
+                toggles
+            ),
+            Some(ShieldCategory::Ads)
+        );
+
+        // Desactivar Ads desactiva también el CSS cosmético de anuncios.
+        toggles.set_enabled(ShieldCategory::Ads, false);
+        assert!(shield
+            .cosmetic_css_for_url_with_categories("https://elpais.com/", &empty, true, toggles)
+            .is_none());
+
+        // CategoryStats suma e incrementa correctamente.
+        let mut stats = CategoryStats::default();
+        stats.increment(ShieldCategory::Ads);
+        stats.increment(ShieldCategory::Trackers);
+        stats.increment(ShieldCategory::SocialAnnoyances);
+        stats.increment(ShieldCategory::YouTube);
+        assert_eq!(stats.total(), 4);
     }
 }
