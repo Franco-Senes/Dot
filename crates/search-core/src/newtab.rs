@@ -1,13 +1,13 @@
-//! Generador HTML para la página de nueva pestaña `plasma://newtab` / `dot://newtab`.
+//! Generador HTML para la página de nueva pestaña `dot://newtab` / `plasma://newtab`.
 //!
-//! Produce HTML5 autocontenido con estética editorial minimalista en blanco, negro y carbón
-//! propia de Dot (sin emojis), barra de búsqueda limpia, Speed Dial minimalista, píldoras
-//! de espacios de trabajo, vista previa de lista de lectura y referencia discreta de atajos.
+//! Estética minimalista pura para Dot: espacio negativo real, un único punto geométrico,
+//! una barra de búsqueda limpia sin botones redundantes y elementos secundarios discretos
+//! solo cuando existen.
 
 use serde::{Deserialize, Serialize};
 use std::fmt::Write as _;
 
-/// Tema visual para `plasma://newtab` / `dot://newtab`.
+/// Tema visual para `dot://newtab` / `plasma://newtab`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum NewTabTheme {
@@ -26,7 +26,7 @@ pub struct SpeedDialItem {
     pub accent_color: Option<String>,
 }
 
-/// Píldora resumen de un espacio de trabajo para la barra superior.
+/// Píldora resumen de un espacio de trabajo.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct WorkspacePill {
     pub id: String,
@@ -44,14 +44,14 @@ pub struct ReadingListPreview {
     pub estimated_minutes: u32,
 }
 
-/// Atajo de teclado documentado en la guía rápida.
+/// Atajo de teclado documentado en el pie discreto.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ShortcutRef {
     pub keys: String,
     pub description: String,
 }
 
-/// Datos de entrada para renderizar `plasma://newtab` / `dot://newtab`.
+/// Datos de entrada para renderizar `dot://newtab` / `plasma://newtab`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct NewTabData {
     #[serde(default)]
@@ -85,32 +85,24 @@ impl Default for NewTabData {
     }
 }
 
-/// Devuelve la tabla estándar de atajos de teclado del navegador.
+/// Atajos mínimos para referencia discreta en el pie.
 pub fn default_shortcuts() -> Vec<ShortcutRef> {
     vec![
         ShortcutRef {
-            keys: "Ctrl+T".to_string(),
-            description: "Nueva pestaña".to_string(),
+            keys: "Ctrl+K".to_string(),
+            description: "Comandos".to_string(),
         },
         ShortcutRef {
-            keys: "Ctrl+W".to_string(),
-            description: "Cerrar pestaña actual".to_string(),
+            keys: "Ctrl+S".to_string(),
+            description: "Barra lateral".to_string(),
         },
         ShortcutRef {
             keys: "Ctrl+Shift+T".to_string(),
-            description: "Reabrir última pestaña cerrada".to_string(),
+            description: "Reabrir".to_string(),
         },
         ShortcutRef {
-            keys: "Ctrl+L".to_string(),
-            description: "Enfocar barra de direcciones".to_string(),
-        },
-        ShortcutRef {
-            keys: "Ctrl+K".to_string(),
-            description: "Paleta de comandos y búsqueda".to_string(),
-        },
-        ShortcutRef {
-            keys: "Ctrl+Shift+S".to_string(),
-            description: "Alternar vista dividida".to_string(),
+            keys: "Ctrl+,".to_string(),
+            description: "Ajustes".to_string(),
         },
     ]
 }
@@ -130,35 +122,33 @@ fn escape_html(input: &str) -> String {
     out
 }
 
-fn sanitize_monochrome_indicator(raw: Option<&str>) -> &'static str {
-    match raw.map(str::trim) {
-        Some(c) if c.starts_with('#') && (c.len() == 4 || c.len() == 7) => {
-            if c[1..].chars().all(|ch| ch.is_ascii_hexdigit()) {
-                return "var(--border-strong)";
-            }
-            "var(--border)"
-        }
-        _ => "var(--border)",
-    }
+fn short_host(raw: &str) -> String {
+    let trimmed = raw
+        .trim()
+        .strip_prefix("https://")
+        .or_else(|| raw.trim().strip_prefix("http://"))
+        .unwrap_or(raw.trim());
+    let host = trimmed.split('/').next().unwrap_or(trimmed);
+    host.strip_prefix("www.").unwrap_or(host).to_string()
 }
 
 fn theme_css(theme: NewTabTheme) -> &'static str {
     match theme {
         NewTabTheme::Dark => {
-            ":root { --bg: #0a0a0b; --surface: #111113; --surface-2: #18181b; --border: #242428; --border-strong: #3f3f46; --text: #f4f4f5; --muted: #8e8e93; --accent: #f4f4f5; --accent-fg: #0a0a0b; }"
+            ":root { --bg: #0c0c0d; --field: #141416; --field-hover: #19191c; --line: rgba(255,255,255,0.08); --line-focus: rgba(255,255,255,0.22); --fg: #ededee; --muted: #7e7e86; --faint: #4b4b52; }"
         }
         NewTabTheme::Light => {
-            ":root { --bg: #fafafa; --surface: #ffffff; --surface-2: #f4f4f5; --border: #e4e4e7; --border-strong: #a1a1aa; --text: #09090b; --muted: #71717a; --accent: #09090b; --accent-fg: #ffffff; }"
+            ":root { --bg: #f8f8f7; --field: #ffffff; --field-hover: #f2f2f0; --line: rgba(0,0,0,0.08); --line-focus: rgba(0,0,0,0.24); --fg: #111112; --muted: #6e6e73; --faint: #a1a1a8; }"
         }
         NewTabTheme::System => {
-            ":root { --bg: #fafafa; --surface: #ffffff; --surface-2: #f4f4f5; --border: #e4e4e7; --border-strong: #a1a1aa; --text: #09090b; --muted: #71717a; --accent: #09090b; --accent-fg: #ffffff; }\n@media (prefers-color-scheme: dark) { :root { --bg: #0a0a0b; --surface: #111113; --surface-2: #18181b; --border: #242428; --border-strong: #3f3f46; --text: #f4f4f5; --muted: #8e8e93; --accent: #f4f4f5; --accent-fg: #0a0a0b; } }"
+            ":root { --bg: #f8f8f7; --field: #ffffff; --field-hover: #f2f2f0; --line: rgba(0,0,0,0.08); --line-focus: rgba(0,0,0,0.24); --fg: #111112; --muted: #6e6e73; --faint: #a1a1a8; }\n@media (prefers-color-scheme: dark) { :root { --bg: #0c0c0d; --field: #141416; --field-hover: #19191c; --line: rgba(255,255,255,0.08); --line-focus: rgba(255,255,255,0.22); --fg: #ededee; --muted: #7e7e86; --faint: #4b4b52; } }"
         }
     }
 }
 
-/// Renderiza la página HTML completa para `plasma://newtab` / `dot://newtab`.
+/// Renderiza la página HTML minimalista para `dot://newtab` / `plasma://newtab`.
 pub fn render_newtab_html(data: &NewTabData) -> String {
-    let mut html = String::with_capacity(4096);
+    let mut html = String::with_capacity(3072);
     let engine_name = escape_html(&data.search_engine_name);
     let action_url = escape_html(&data.search_action_url);
     let shortcuts = if data.shortcuts.is_empty() {
@@ -169,88 +159,216 @@ pub fn render_newtab_html(data: &NewTabData) -> String {
 
     let _ = write!(
         html,
-        "<!DOCTYPE html>\n<html lang=\"es\">\n<head>\n<meta charset=\"utf-8\">\n<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">\n<title>Dot</title>\n<style>\n{}\n* {{ box-sizing: border-box; }}\nbody {{ margin: 0; font-family: \"Inter\", system-ui, -apple-system, sans-serif; background: var(--bg); color: var(--text); line-height: 1.5; -webkit-font-smoothing: antialiased; }}\nmain {{ max-width: 760px; margin: 0 auto; padding: 32px 24px 64px; }}\n.topbar {{ display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; gap: 12px; min-height: 32px; margin-bottom: 44px; }}\n.pills {{ display: flex; flex-wrap: wrap; gap: 6px; }}\n.pill {{ padding: 4px 10px; border-radius: 999px; border: 1px solid var(--border); background: transparent; color: var(--muted); font-size: 12px; letter-spacing: 0.01em; }}\n.pill.active {{ border-color: var(--border-strong); background: var(--surface-2); color: var(--text); font-weight: 500; }}\n.closed-meta {{ font-size: 12px; color: var(--muted); }}\n.hero {{ display: flex; flex-direction: column; align-items: center; gap: 10px; margin: 24px 0 28px; }}\n.dot-mark {{ display: block; color: var(--text); }}\n.wordmark {{ font-size: 13px; font-weight: 500; letter-spacing: 0.22em; text-transform: uppercase; color: var(--muted); }}\n.search-form {{ display: flex; gap: 8px; max-width: 560px; margin: 0 auto 44px; }}\n.search-input {{ flex: 1; padding: 12px 16px; border-radius: 10px; border: 1px solid var(--border); background: var(--surface); color: var(--text); font-size: 15px; transition: border-color 120ms ease; }}\n.search-input::placeholder {{ color: var(--muted); }}\n.search-input:focus {{ outline: none; border-color: var(--border-strong); }}\n.search-btn {{ padding: 0 18px; border-radius: 10px; border: 1px solid var(--border); background: var(--accent); color: var(--accent-fg); font-size: 14px; font-weight: 500; cursor: pointer; }}\n.search-btn:hover {{ opacity: 0.9; }}\nh2 {{ font-size: 11px; font-weight: 500; text-transform: uppercase; letter-spacing: 0.12em; color: var(--muted); margin: 32px 0 12px; }}\n.grid {{ display: grid; grid-template-columns: repeat(auto-fill, minmax(156px, 1fr)); gap: 10px; }}\n.card {{ display: block; padding: 12px 14px; border-radius: 10px; border: 1px solid var(--border); background: var(--surface); color: var(--text); text-decoration: none; transition: background 120ms ease, border-color 120ms ease; }}\n.card:hover {{ background: var(--surface-2); border-color: var(--border-strong); }}\n.card-title {{ font-weight: 500; font-size: 13px; margin-bottom: 3px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }}\n.card-url {{ font-size: 11px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }}\n.list {{ list-style: none; padding: 0; margin: 0; display: grid; gap: 6px; }}\n.list-item {{ display: flex; justify-content: space-between; align-items: center; padding: 10px 14px; border-radius: 8px; border: 1px solid var(--border); background: var(--surface); }}\n.list-item a {{ color: var(--text); text-decoration: none; font-size: 13px; font-weight: 500; }}\n.list-item a:hover {{ text-decoration: underline; }}\n.meta {{ font-size: 12px; color: var(--muted); }}\n.shortcuts {{ display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 6px; }}\n.shortcut {{ display: flex; justify-content: space-between; align-items: center; padding: 7px 10px; border-radius: 8px; border: 1px solid var(--border); background: transparent; color: var(--muted); font-size: 12px; }}\nkbd {{ font-family: ui-monospace, monospace; font-size: 11px; padding: 2px 6px; border-radius: 4px; background: var(--surface); border: 1px solid var(--border); color: var(--text); }}\n</style>\n</head>\n<body>\n<main>\n",
+        r#"<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Dot</title>
+<style>
+{}
+*, *::before, *::after {{ box-sizing: border-box; }}
+html, body {{
+  margin: 0;
+  height: 100%;
+  background: var(--bg);
+  color: var(--fg);
+  font-family: -apple-system, BlinkMacSystemFont, "Inter", "Segoe UI", system-ui, sans-serif;
+  font-size: 14px;
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+}}
+body {{
+  display: grid;
+  grid-template-rows: 1fr auto;
+  min-height: 100dvh;
+}}
+main {{
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  max-width: 540px;
+  margin: 0 auto;
+  padding: 24px 20px 64px;
+}}
+.dot-mark {{
+  display: block;
+  margin-bottom: 30px;
+  color: var(--fg);
+}}
+.search-form {{
+  width: 100%;
+  position: relative;
+}}
+.search-ico {{
+  position: absolute;
+  left: 16px;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 15px;
+  height: 15px;
+  stroke: var(--muted);
+  stroke-width: 1.7;
+  fill: none;
+  pointer-events: none;
+}}
+.search-input {{
+  width: 100%;
+  height: 44px;
+  padding: 0 18px 0 42px;
+  border-radius: 999px;
+  border: 1px solid var(--line);
+  background: var(--field);
+  color: var(--fg);
+  font: inherit;
+  font-size: 14.5px;
+  outline: none;
+  transition: border-color 140ms ease, background-color 140ms ease;
+}}
+.search-input::placeholder {{ color: var(--muted); }}
+.search-input:hover {{ background: var(--field-hover); }}
+.search-input:focus {{ border-color: var(--line-focus); background: var(--field); }}
+.dial {{
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 6px;
+  margin-top: 24px;
+  width: 100%;
+}}
+.dial-item {{
+  display: inline-flex;
+  align-items: baseline;
+  gap: 6px;
+  padding: 6px 12px;
+  border-radius: 999px;
+  color: var(--fg);
+  text-decoration: none;
+  font-size: 13px;
+  font-weight: 450;
+  transition: background-color 120ms ease;
+}}
+.dial-item:hover {{ background: var(--field-hover); }}
+.dial-host {{ color: var(--muted); font-size: 11.5px; font-weight: 400; }}
+.reading {{
+  width: 100%;
+  margin-top: 28px;
+  list-style: none;
+  padding: 0;
+}}
+.reading li {{
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 12px;
+  padding: 6px 10px;
+  border-radius: 8px;
+}}
+.reading li:hover {{ background: var(--field-hover); }}
+.reading a {{
+  color: var(--fg);
+  text-decoration: none;
+  font-size: 13px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}}
+.reading span {{ color: var(--muted); font-size: 12px; font-variant-numeric: tabular-nums; flex-shrink: 0; }}
+footer {{
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px 20px;
+  padding: 14px 24px;
+  font-size: 11.5px;
+  color: var(--faint);
+}}
+.foot-group {{
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 14px;
+}}
+.ws-active {{ color: var(--muted); font-weight: 500; }}
+.hint {{ display: inline-flex; align-items: center; gap: 5px; }}
+.hint kbd {{
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 10.5px;
+  color: var(--muted);
+}}
+</style>
+</head>
+<body>
+<main>
+  <svg class="dot-mark" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="22" height="22" role="img" aria-label="Dot"><circle cx="12" cy="12" r="9" fill="currentColor"/></svg>
+  <form class="search-form" method="get" action="{action_url}">
+    <svg class="search-ico" viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="M20 20l-3.5-3.5"/></svg>
+    <input class="search-input" type="search" name="q" placeholder="Buscar con {engine_name}…" autofocus autocomplete="off" aria-label="Buscar">
+  </form>
+"#,
         theme_css(data.theme)
     );
 
-    // Topbar: minimal Workspaces pills + quiet Recently Closed indicator
-    html.push_str(
-        "<div class=\"topbar\">\n<div class=\"pills\" aria-label=\"Espacios de trabajo\">\n",
-    );
-    for ws in &data.workspaces {
-        let cls = if ws.active { "pill active" } else { "pill" };
-        let _ = writeln!(
-            html,
-            "<span class=\"{cls}\" data-workspace-id=\"{}\" data-color=\"{}\">{} ({})</span>",
-            escape_html(&ws.id),
-            escape_html(&ws.color_id),
-            escape_html(&ws.name),
-            ws.tab_count
-        );
-    }
-    html.push_str("</div>\n");
-    if data.recently_closed_count > 0 {
-        let _ = writeln!(
-            html,
-            "<div class=\"closed-meta\">Cerradas recientemente: {}</div>",
-            data.recently_closed_count
-        );
-    }
-    html.push_str("</div>\n");
-
-    // Centered Dot mark + subtle wordmark
-    html.push_str(
-        "<header class=\"hero\">\n<svg class=\"dot-mark\" xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 36 36\" width=\"32\" height=\"32\" role=\"img\" aria-label=\"Dot\"><circle cx=\"18\" cy=\"18\" r=\"10\" fill=\"currentColor\"/></svg>\n<div class=\"wordmark\">Dot</div>\n</header>\n",
-    );
-
-    // Clean search form
-    let _ = writeln!(
-        html,
-        "<form class=\"search-form\" method=\"get\" action=\"{action_url}\">\n<input class=\"search-input\" type=\"search\" name=\"q\" placeholder=\"Buscar con {engine_name} o escribir una dirección\" autofocus aria-label=\"Buscar\">\n<button class=\"search-btn\" type=\"submit\">Buscar</button>\n</form>\n"
-    );
-
-    // Minimal Speed Dial
     if !data.speed_dial.is_empty() {
-        html.push_str("<h2>Speed Dial</h2>\n<div class=\"grid\">\n");
+        html.push_str("  <nav class=\"dial\" aria-label=\"Accesos rápidos\">\n");
         for item in &data.speed_dial {
-            let border_top = sanitize_monochrome_indicator(item.accent_color.as_deref());
+            let host = short_host(&item.url);
             let _ = writeln!(
                 html,
-                "<a class=\"card\" href=\"{}\" style=\"border-top: 2px solid {border_top};\"><div class=\"card-title\">{}</div><div class=\"card-url\">{}</div></a>",
+                "    <a class=\"dial-item\" href=\"{}\"><span>{}</span><span class=\"dial-host\">{}</span></a>",
                 escape_html(&item.url),
                 escape_html(&item.title),
-                escape_html(&item.url)
+                escape_html(&host)
             );
         }
-        html.push_str("</div>\n");
+        html.push_str("  </nav>\n");
     }
 
-    // Reading List preview
     if !data.reading_list_preview.is_empty() {
-        html.push_str("<h2>Lista de lectura</h2>\n<ul class=\"list\">\n");
+        html.push_str("  <ul class=\"reading\" aria-label=\"Lista de lectura\">\n");
         for item in &data.reading_list_preview {
             let _ = writeln!(
                 html,
-                "<li class=\"list-item\"><a href=\"{}\">{}</a><span class=\"meta\">{} min</span></li>",
+                "    <li><a href=\"{}\">{}</a><span>{} min</span></li>",
                 escape_html(&item.url),
                 escape_html(&item.title),
                 item.estimated_minutes
             );
         }
-        html.push_str("</ul>\n");
+        html.push_str("  </ul>\n");
     }
 
-    // Quiet keyboard shortcuts reference
-    html.push_str("<h2>Atajos</h2>\n<div class=\"shortcuts\">\n");
-    for sc in &shortcuts {
+    html.push_str("</main>\n<footer>\n  <div class=\"foot-group\">\n");
+    for ws in &data.workspaces {
+        let cls = if ws.active { "ws-active" } else { "" };
         let _ = writeln!(
             html,
-            "<div class=\"shortcut\"><span>{}</span><kbd>{}</kbd></div>",
-            escape_html(&sc.description),
-            escape_html(&sc.keys)
+            "    <span class=\"{cls}\" data-workspace-id=\"{}\">{} ({})</span>",
+            escape_html(&ws.id),
+            escape_html(&ws.name),
+            ws.tab_count
         );
     }
-    html.push_str("</div>\n</main>\n</body>\n</html>\n");
+    if data.recently_closed_count > 0 {
+        let _ = writeln!(
+            html,
+            "    <span>Cerradas: {}</span>",
+            data.recently_closed_count
+        );
+    }
+    html.push_str("  </div>\n  <div class=\"foot-group\">\n");
+    for sc in shortcuts.iter().take(4) {
+        let _ = writeln!(
+            html,
+            "    <span class=\"hint\"><kbd>{}</kbd> {}</span>",
+            escape_html(&sc.keys),
+            escape_html(&sc.description)
+        );
+    }
+    html.push_str("  </div>\n</footer>\n</body>\n</html>\n");
     html
 }
 
@@ -259,14 +377,14 @@ mod tests {
     use super::*;
 
     #[test]
-    fn renders_dot_editorial_sections_and_escapes_html() {
+    fn renders_dot_minimal_newtab_and_escapes_html() {
         let data = NewTabData {
             theme: NewTabTheme::Dark,
             search_engine_name: "Search <Test>".to_string(),
             search_action_url: "https://duckduckgo.com/".to_string(),
             speed_dial: vec![SpeedDialItem {
                 title: "Docs & <Rust>".to_string(),
-                url: "https://docs.rs".to_string(),
+                url: "https://docs.rs/tokio".to_string(),
                 accent_color: Some("#4f8cff".to_string()),
             }],
             workspaces: vec![WorkspacePill {
@@ -289,18 +407,17 @@ mod tests {
         assert!(html.contains("<!DOCTYPE html>"));
         assert!(html.contains("<title>Dot</title>"));
         assert!(html.contains("class=\"dot-mark\""));
-        assert!(html.contains("<circle cx=\"18\" cy=\"18\" r=\"10\" fill=\"currentColor\"/>"));
-        assert!(html.contains("<div class=\"wordmark\">Dot</div>"));
         assert!(html.contains("Search &lt;Test&gt;"));
         assert!(html.contains("Docs &amp; &lt;Rust&gt;"));
+        assert!(html.contains("docs.rs"));
         assert!(html.contains("Dev (4)"));
-        assert!(html.contains("Cerradas recientemente: 3"));
+        assert!(html.contains("Cerradas: 3"));
         assert!(html.contains("Async Rust"));
         assert!(html.contains("6 min"));
         assert!(html.contains("<kbd>Ctrl+Shift+T</kbd>"));
-        assert!(html.contains("--bg: #0a0a0b;"));
+        assert!(html.contains("--bg: #0c0c0d;"));
         assert!(!html.contains("#4f8cff"));
-        assert!(!html.contains("#3b82f6"));
+        assert!(!html.contains("<h2>"));
     }
 
     #[test]
@@ -309,9 +426,9 @@ mod tests {
             theme: NewTabTheme::Light,
             ..Default::default()
         });
-        assert!(light.contains("--bg: #fafafa;"));
+        assert!(light.contains("--bg: #f8f8f7;"));
         assert!(!light.contains("prefers-color-scheme: dark"));
-        assert!(!light.contains("Cerradas recientemente:"));
+        assert!(!light.contains("Cerradas:"));
 
         let system = render_newtab_html(&NewTabData::default());
         assert!(system.contains("prefers-color-scheme: dark"));
