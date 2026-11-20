@@ -91,6 +91,7 @@ pub enum IconId {
     Note,
     Spaces,
     Broom,
+    DotBrand,
 }
 
 thread_local! {
@@ -932,6 +933,11 @@ fn rasterize_icon(id: IconId, dark: bool) -> Texture {
             c.line(4.4, 11.6, 5.8, 9.4, 1.1);
             c.line(6.2, 12.6, 7.6, 10.4, 1.1);
         }
+        IconId::DotBrand => {
+            // Ultra-minimalist Dot brand mark: solid centered dot inside a subtle squircle.
+            c.rounded_rect_stroke(2.0, 2.0, 12.0, 12.0, 3.0, 1.15);
+            c.circle_fill(8.0, 8.0, 3.0);
+        }
     }
 
     if dark {
@@ -1018,6 +1024,7 @@ mod tests {
         IconId::Note,
         IconId::Spaces,
         IconId::Broom,
+        IconId::DotBrand,
     ];
 
     #[test]
