@@ -43,9 +43,11 @@ const RFC3986_UNRESERVED_SET: &AsciiSet = &CONTROLS
     .add(b'|')
     .add(b'}');
 
-const ALLOWED_SCHEMES: &[&str] = &["http", "https", "file", "about", "data", "search", "plasma"];
+const ALLOWED_SCHEMES: &[&str] = &[
+    "http", "https", "file", "about", "data", "search", "plasma", "dot",
+];
 
-/// Página interna del navegador reconocida bajo los esquemas `plasma://` y `search://`.
+/// Página interna del navegador reconocida bajo los esquemas `plasma://`, `dot://` y `search://`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum InternalPage {
     Settings { section: Option<String> },
@@ -57,12 +59,12 @@ pub enum InternalPage {
 
 /// Reconoce una URL interna (`plasma://settings`, `plasma://settings/privacy`,
 /// `plasma://history`, `plasma://bookmarks`, `plasma://downloads`, `plasma://newtab`
-/// y sus alias `search://`).
+/// y sus alias `dot://` y `search://`).
 pub fn parse_internal_page(raw_url: &str) -> Option<InternalPage> {
     let trimmed = raw_url.trim();
     let (scheme_raw, rest_raw) = trimmed.split_once("://")?;
     let scheme = scheme_raw.to_ascii_lowercase();
-    if scheme != "plasma" && scheme != "search" {
+    if scheme != "plasma" && scheme != "search" && scheme != "dot" {
         return None;
     }
     let rest = rest_raw.trim_matches('/');
@@ -332,7 +334,7 @@ fn try_resolve_explicit_scheme(text: &str) -> Option<(AddressKind, String)> {
         if !ALLOWED_SCHEMES.contains(&scheme.as_str()) {
             return None;
         }
-        if scheme == "plasma" || scheme == "search" {
+        if scheme == "plasma" || scheme == "search" || scheme == "dot" {
             if let Some(internal) = parse_internal_page(text) {
                 return Some((AddressKind::Url, canonical_internal_url(&internal)));
             }
@@ -1043,5 +1045,46 @@ mod tests {
             "plasma://downloads"
         );
         assert_eq!(display_at_rest("plasma://settings"), "plasma://settings");
+    }
+
+    #[test]
+    fn resolves_dot_internal_scheme_aliases_to_plasma() {
+        let cases = [
+            (
+                "dot://settings",
+                "plasma://settings",
+                InternalPage::Settings { section: None },
+            ),
+            (
+                "dot://settings/privacy/",
+                "plasma://settings/privacy",
+                InternalPage::Settings {
+                    section: Some("privacy".to_string()),
+                },
+            ),
+            ("dot://newtab", "plasma://newtab", InternalPage::NewTab),
+            ("dot://history", "plasma://history", InternalPage::History),
+            (
+                "dot://bookmarks",
+                "plasma://bookmarks",
+                InternalPage::Bookmarks,
+            ),
+            (
+                "dot://downloads",
+                "plasma://downloads",
+                InternalPage::Downloads,
+            ),
+            ("DOT://NewTab", "plasma://newtab", InternalPage::NewTab),
+        ];
+
+        for (input, expected_url, expected_page) in cases {
+            assert_eq!(parse_internal_page(input), Some(expected_page.clone()));
+            let resolved = resolve_address_with_options(input, SearchEngine::DuckDuckGo, "", false);
+            assert_eq!(resolved.kind, AddressKind::Url);
+            assert_eq!(resolved.url, expected_url);
+            assert_eq!(parse_internal_page(&resolved.url), Some(expected_page));
+        }
+
+        assert_eq!(display_at_rest("dot://settings"), "dot://settings");
     }
 }
