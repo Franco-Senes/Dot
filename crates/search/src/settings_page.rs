@@ -2175,7 +2175,7 @@ fn build_about_section(
     info_group.set_title("Información de versión");
 
     let app_row = ActionRow::new();
-    app_row.set_title("Velo");
+    app_row.set_title("Dot");
     app_row.set_subtitle(
         "Port nativo a Linux inspirado en driceroland/Search (Office Commun) · Licencia MIT",
     );
