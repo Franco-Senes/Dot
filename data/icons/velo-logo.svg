@@ -1,0 +1,21 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" width="128" height="128" role="img" aria-label="Velo">
+  <defs>
+    <linearGradient id="velo-bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#1c1d24" />
+      <stop offset="100%" stop-color="#111216" />
+    </linearGradient>
+    <linearGradient id="velo-wing-left" x1="0.2" y1="0.1" x2="0.8" y2="0.95">
+      <stop offset="0%" stop-color="#a5c9ff" />
+      <stop offset="100%" stop-color="#4e8df5" />
+    </linearGradient>
+    <linearGradient id="velo-wing-right" x1="0.8" y1="0.1" x2="0.2" y2="0.95">
+      <stop offset="0%" stop-color="#eef5ff" />
+      <stop offset="100%" stop-color="#7eb3ff" />
+    </linearGradient>
+  </defs>
+  <rect x="8" y="8" width="112" height="112" rx="28" fill="url(#velo-bg)" stroke="#ffffff" stroke-opacity="0.09" stroke-width="1.5" />
+  <!-- Left translucent wing -->
+  <path d="M33 36 L52 36 L67 88 L56 94 Z" fill="url(#velo-wing-left)" opacity="0.92" />
+  <!-- Right crisp foreground sail -->
+  <path d="M95 36 L76 36 L56 94 L67 94 Z" fill="url(#velo-wing-right)" />
+</svg>
