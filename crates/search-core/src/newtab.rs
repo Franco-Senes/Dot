@@ -1,14 +1,13 @@
-//! Generador HTML para la página de nueva pestaña `plasma://newtab`.
+//! Generador HTML para la página de nueva pestaña `plasma://newtab` / `dot://newtab`.
 //!
-//! Produce HTML5 autocontenido con CSS oscuro/claro limpio (sin emojis), barra de búsqueda
-//! hacia el omnibox/motor configurado, Speed Dial de accesos fijados, píldoras de espacios
-//! de trabajo, contador de pestañas cerradas, vista previa de lista de lectura y referencia
-//! de atajos de teclado.
+//! Produce HTML5 autocontenido con estética editorial minimalista en blanco, negro y carbón
+//! propia de Dot (sin emojis), barra de búsqueda limpia, Speed Dial minimalista, píldoras
+//! de espacios de trabajo, vista previa de lista de lectura y referencia discreta de atajos.
 
 use serde::{Deserialize, Serialize};
 use std::fmt::Write as _;
 
-/// Tema visual para `plasma://newtab`.
+/// Tema visual para `plasma://newtab` / `dot://newtab`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum NewTabTheme {
@@ -37,7 +36,7 @@ pub struct WorkspacePill {
     pub tab_count: usize,
 }
 
-/// Elemento resumido de la lista de lectura mostrado en `plasma://newtab`.
+/// Elemento resumido de la lista de lectura mostrado en la nueva pestaña.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ReadingListPreview {
     pub title: String,
@@ -52,7 +51,7 @@ pub struct ShortcutRef {
     pub description: String,
 }
 
-/// Datos de entrada para renderizar `plasma://newtab`.
+/// Datos de entrada para renderizar `plasma://newtab` / `dot://newtab`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct NewTabData {
     #[serde(default)]
@@ -131,35 +130,33 @@ fn escape_html(input: &str) -> String {
     out
 }
 
-fn sanitize_hex_color(raw: Option<&str>) -> &'static str {
+fn sanitize_monochrome_indicator(raw: Option<&str>) -> &'static str {
     match raw.map(str::trim) {
         Some(c) if c.starts_with('#') && (c.len() == 4 || c.len() == 7) => {
-            // Solo permitimos valores seguros predefinidos o usamos acento neutro;
-            // para evitar inyección CSS devolvemos un acento seguro si no es hex puro.
             if c[1..].chars().all(|ch| ch.is_ascii_hexdigit()) {
-                return "#3b82f6";
+                return "var(--border-strong)";
             }
-            "#3b82f6"
+            "var(--border)"
         }
-        _ => "#3b82f6",
+        _ => "var(--border)",
     }
 }
 
 fn theme_css(theme: NewTabTheme) -> &'static str {
     match theme {
         NewTabTheme::Dark => {
-            ":root { --bg: #0f1115; --surface: #171a21; --surface-2: #1f242e; --border: #2b3240; --text: #eef2f7; --muted: #9aa4b2; --accent: #4f8cff; }"
+            ":root { --bg: #0a0a0b; --surface: #111113; --surface-2: #18181b; --border: #242428; --border-strong: #3f3f46; --text: #f4f4f5; --muted: #8e8e93; --accent: #f4f4f5; --accent-fg: #0a0a0b; }"
         }
         NewTabTheme::Light => {
-            ":root { --bg: #f6f7f9; --surface: #ffffff; --surface-2: #eef1f6; --border: #d8dee9; --text: #161b22; --muted: #57606a; --accent: #2563eb; }"
+            ":root { --bg: #fafafa; --surface: #ffffff; --surface-2: #f4f4f5; --border: #e4e4e7; --border-strong: #a1a1aa; --text: #09090b; --muted: #71717a; --accent: #09090b; --accent-fg: #ffffff; }"
         }
         NewTabTheme::System => {
-            ":root { --bg: #f6f7f9; --surface: #ffffff; --surface-2: #eef1f6; --border: #d8dee9; --text: #161b22; --muted: #57606a; --accent: #2563eb; }\n@media (prefers-color-scheme: dark) { :root { --bg: #0f1115; --surface: #171a21; --surface-2: #1f242e; --border: #2b3240; --text: #eef2f7; --muted: #9aa4b2; --accent: #4f8cff; } }"
+            ":root { --bg: #fafafa; --surface: #ffffff; --surface-2: #f4f4f5; --border: #e4e4e7; --border-strong: #a1a1aa; --text: #09090b; --muted: #71717a; --accent: #09090b; --accent-fg: #ffffff; }\n@media (prefers-color-scheme: dark) { :root { --bg: #0a0a0b; --surface: #111113; --surface-2: #18181b; --border: #242428; --border-strong: #3f3f46; --text: #f4f4f5; --muted: #8e8e93; --accent: #f4f4f5; --accent-fg: #0a0a0b; } }"
         }
     }
 }
 
-/// Renderiza la página HTML completa para `plasma://newtab`.
+/// Renderiza la página HTML completa para `plasma://newtab` / `dot://newtab`.
 pub fn render_newtab_html(data: &NewTabData) -> String {
     let mut html = String::with_capacity(4096);
     let engine_name = escape_html(&data.search_engine_name);
@@ -172,11 +169,11 @@ pub fn render_newtab_html(data: &NewTabData) -> String {
 
     let _ = write!(
         html,
-        "<!DOCTYPE html>\n<html lang=\"es\">\n<head>\n<meta charset=\"utf-8\">\n<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">\n<title>Nueva pestaña</title>\n<style>\n{}\n* {{ box-sizing: border-box; }}\nbody {{ margin: 0; font-family: system-ui, -apple-system, sans-serif; background: var(--bg); color: var(--text); line-height: 1.5; }}\nmain {{ max-width: 960px; margin: 0 auto; padding: 48px 24px 64px; }}\n.topbar {{ display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; gap: 12px; margin-bottom: 32px; }}\n.pills {{ display: flex; flex-wrap: wrap; gap: 8px; }}\n.pill {{ padding: 6px 12px; border-radius: 999px; border: 1px solid var(--border); background: var(--surface); color: var(--muted); font-size: 13px; text-decoration: none; }}\n.pill.active {{ border-color: var(--accent); color: var(--text); font-weight: 600; }}\n.badge {{ font-size: 13px; color: var(--muted); background: var(--surface); border: 1px solid var(--border); padding: 6px 12px; border-radius: 8px; }}\n.search-form {{ display: flex; gap: 8px; margin-bottom: 36px; }}\n.search-input {{ flex: 1; padding: 14px 16px; border-radius: 10px; border: 1px solid var(--border); background: var(--surface); color: var(--text); font-size: 16px; }}\n.search-input:focus {{ outline: 2px solid var(--accent); outline-offset: 1px; }}\n.search-btn {{ padding: 0 20px; border-radius: 10px; border: none; background: var(--accent); color: #ffffff; font-size: 15px; font-weight: 600; cursor: pointer; }}\nh2 {{ font-size: 14px; text-transform: uppercase; letter-spacing: 0.06em; color: var(--muted); margin: 28px 0 12px; }}\n.grid {{ display: grid; grid-template-columns: repeat(auto-fill, minmax(160px, 1fr)); gap: 12px; }}\n.card {{ display: block; padding: 14px; border-radius: 10px; border: 1px solid var(--border); background: var(--surface); color: var(--text); text-decoration: none; }}\n.card:hover {{ background: var(--surface-2); border-color: var(--accent); }}\n.card-title {{ font-weight: 600; font-size: 14px; margin-bottom: 4px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }}\n.card-url {{ font-size: 12px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }}\n.list {{ list-style: none; padding: 0; margin: 0; display: grid; gap: 8px; }}\n.list-item {{ display: flex; justify-content: space-between; align-items: center; padding: 10px 14px; border-radius: 8px; border: 1px solid var(--border); background: var(--surface); }}\n.list-item a {{ color: var(--text); text-decoration: none; font-weight: 500; }}\n.meta {{ font-size: 12px; color: var(--muted); }}\n.shortcuts {{ display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: 8px; }}\n.shortcut {{ display: flex; justify-content: space-between; align-items: center; padding: 8px 12px; border-radius: 8px; border: 1px solid var(--border); background: var(--surface); font-size: 13px; }}\nkbd {{ font-family: ui-monospace, monospace; font-size: 12px; padding: 2px 6px; border-radius: 4px; background: var(--surface-2); border: 1px solid var(--border); }}\n</style>\n</head>\n<body>\n<main>\n",
+        "<!DOCTYPE html>\n<html lang=\"es\">\n<head>\n<meta charset=\"utf-8\">\n<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">\n<title>Dot</title>\n<style>\n{}\n* {{ box-sizing: border-box; }}\nbody {{ margin: 0; font-family: \"Inter\", system-ui, -apple-system, sans-serif; background: var(--bg); color: var(--text); line-height: 1.5; -webkit-font-smoothing: antialiased; }}\nmain {{ max-width: 760px; margin: 0 auto; padding: 32px 24px 64px; }}\n.topbar {{ display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; gap: 12px; min-height: 32px; margin-bottom: 44px; }}\n.pills {{ display: flex; flex-wrap: wrap; gap: 6px; }}\n.pill {{ padding: 4px 10px; border-radius: 999px; border: 1px solid var(--border); background: transparent; color: var(--muted); font-size: 12px; letter-spacing: 0.01em; }}\n.pill.active {{ border-color: var(--border-strong); background: var(--surface-2); color: var(--text); font-weight: 500; }}\n.closed-meta {{ font-size: 12px; color: var(--muted); }}\n.hero {{ display: flex; flex-direction: column; align-items: center; gap: 10px; margin: 24px 0 28px; }}\n.dot-mark {{ display: block; color: var(--text); }}\n.wordmark {{ font-size: 13px; font-weight: 500; letter-spacing: 0.22em; text-transform: uppercase; color: var(--muted); }}\n.search-form {{ display: flex; gap: 8px; max-width: 560px; margin: 0 auto 44px; }}\n.search-input {{ flex: 1; padding: 12px 16px; border-radius: 10px; border: 1px solid var(--border); background: var(--surface); color: var(--text); font-size: 15px; transition: border-color 120ms ease; }}\n.search-input::placeholder {{ color: var(--muted); }}\n.search-input:focus {{ outline: none; border-color: var(--border-strong); }}\n.search-btn {{ padding: 0 18px; border-radius: 10px; border: 1px solid var(--border); background: var(--accent); color: var(--accent-fg); font-size: 14px; font-weight: 500; cursor: pointer; }}\n.search-btn:hover {{ opacity: 0.9; }}\nh2 {{ font-size: 11px; font-weight: 500; text-transform: uppercase; letter-spacing: 0.12em; color: var(--muted); margin: 32px 0 12px; }}\n.grid {{ display: grid; grid-template-columns: repeat(auto-fill, minmax(156px, 1fr)); gap: 10px; }}\n.card {{ display: block; padding: 12px 14px; border-radius: 10px; border: 1px solid var(--border); background: var(--surface); color: var(--text); text-decoration: none; transition: background 120ms ease, border-color 120ms ease; }}\n.card:hover {{ background: var(--surface-2); border-color: var(--border-strong); }}\n.card-title {{ font-weight: 500; font-size: 13px; margin-bottom: 3px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }}\n.card-url {{ font-size: 11px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }}\n.list {{ list-style: none; padding: 0; margin: 0; display: grid; gap: 6px; }}\n.list-item {{ display: flex; justify-content: space-between; align-items: center; padding: 10px 14px; border-radius: 8px; border: 1px solid var(--border); background: var(--surface); }}\n.list-item a {{ color: var(--text); text-decoration: none; font-size: 13px; font-weight: 500; }}\n.list-item a:hover {{ text-decoration: underline; }}\n.meta {{ font-size: 12px; color: var(--muted); }}\n.shortcuts {{ display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 6px; }}\n.shortcut {{ display: flex; justify-content: space-between; align-items: center; padding: 7px 10px; border-radius: 8px; border: 1px solid var(--border); background: transparent; color: var(--muted); font-size: 12px; }}\nkbd {{ font-family: ui-monospace, monospace; font-size: 11px; padding: 2px 6px; border-radius: 4px; background: var(--surface); border: 1px solid var(--border); color: var(--text); }}\n</style>\n</head>\n<body>\n<main>\n",
         theme_css(data.theme)
     );
 
-    // Topbar: Workspaces pills + Recently Closed count
+    // Topbar: minimal Workspaces pills + quiet Recently Closed indicator
     html.push_str(
         "<div class=\"topbar\">\n<div class=\"pills\" aria-label=\"Espacios de trabajo\">\n",
     );
@@ -192,26 +189,34 @@ pub fn render_newtab_html(data: &NewTabData) -> String {
         );
     }
     html.push_str("</div>\n");
-    let _ = writeln!(
-        html,
-        "<div class=\"badge\">Cerradas recientemente: {}</div>\n</div>\n",
-        data.recently_closed_count
+    if data.recently_closed_count > 0 {
+        let _ = writeln!(
+            html,
+            "<div class=\"closed-meta\">Cerradas recientemente: {}</div>",
+            data.recently_closed_count
+        );
+    }
+    html.push_str("</div>\n");
+
+    // Centered Dot mark + subtle wordmark
+    html.push_str(
+        "<header class=\"hero\">\n<svg class=\"dot-mark\" xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 36 36\" width=\"32\" height=\"32\" role=\"img\" aria-label=\"Dot\"><circle cx=\"18\" cy=\"18\" r=\"10\" fill=\"currentColor\"/></svg>\n<div class=\"wordmark\">Dot</div>\n</header>\n",
     );
 
-    // Search form
+    // Clean search form
     let _ = writeln!(
         html,
         "<form class=\"search-form\" method=\"get\" action=\"{action_url}\">\n<input class=\"search-input\" type=\"search\" name=\"q\" placeholder=\"Buscar con {engine_name} o escribir una dirección\" autofocus aria-label=\"Buscar\">\n<button class=\"search-btn\" type=\"submit\">Buscar</button>\n</form>\n"
     );
 
-    // Speed Dial
+    // Minimal Speed Dial
     if !data.speed_dial.is_empty() {
         html.push_str("<h2>Speed Dial</h2>\n<div class=\"grid\">\n");
         for item in &data.speed_dial {
-            let accent = sanitize_hex_color(item.accent_color.as_deref());
+            let border_top = sanitize_monochrome_indicator(item.accent_color.as_deref());
             let _ = writeln!(
                 html,
-                "<a class=\"card\" href=\"{}\" style=\"border-top: 3px solid {accent};\"><div class=\"card-title\">{}</div><div class=\"card-url\">{}</div></a>",
+                "<a class=\"card\" href=\"{}\" style=\"border-top: 2px solid {border_top};\"><div class=\"card-title\">{}</div><div class=\"card-url\">{}</div></a>",
                 escape_html(&item.url),
                 escape_html(&item.title),
                 escape_html(&item.url)
@@ -235,8 +240,8 @@ pub fn render_newtab_html(data: &NewTabData) -> String {
         html.push_str("</ul>\n");
     }
 
-    // Keyboard shortcuts reference
-    html.push_str("<h2>Atajos de teclado</h2>\n<div class=\"shortcuts\">\n");
+    // Quiet keyboard shortcuts reference
+    html.push_str("<h2>Atajos</h2>\n<div class=\"shortcuts\">\n");
     for sc in &shortcuts {
         let _ = writeln!(
             html,
@@ -254,7 +259,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn renders_all_sections_and_escapes_html() {
+    fn renders_dot_editorial_sections_and_escapes_html() {
         let data = NewTabData {
             theme: NewTabTheme::Dark,
             search_engine_name: "Search <Test>".to_string(),
@@ -282,6 +287,10 @@ mod tests {
 
         let html = render_newtab_html(&data);
         assert!(html.contains("<!DOCTYPE html>"));
+        assert!(html.contains("<title>Dot</title>"));
+        assert!(html.contains("class=\"dot-mark\""));
+        assert!(html.contains("<circle cx=\"18\" cy=\"18\" r=\"10\" fill=\"currentColor\"/>"));
+        assert!(html.contains("<div class=\"wordmark\">Dot</div>"));
         assert!(html.contains("Search &lt;Test&gt;"));
         assert!(html.contains("Docs &amp; &lt;Rust&gt;"));
         assert!(html.contains("Dev (4)"));
@@ -289,7 +298,9 @@ mod tests {
         assert!(html.contains("Async Rust"));
         assert!(html.contains("6 min"));
         assert!(html.contains("<kbd>Ctrl+Shift+T</kbd>"));
-        assert!(html.contains("--bg: #0f1115;"));
+        assert!(html.contains("--bg: #0a0a0b;"));
+        assert!(!html.contains("#4f8cff"));
+        assert!(!html.contains("#3b82f6"));
     }
 
     #[test]
@@ -298,8 +309,9 @@ mod tests {
             theme: NewTabTheme::Light,
             ..Default::default()
         });
-        assert!(light.contains("--bg: #f6f7f9;"));
+        assert!(light.contains("--bg: #fafafa;"));
         assert!(!light.contains("prefers-color-scheme: dark"));
+        assert!(!light.contains("Cerradas recientemente:"));
 
         let system = render_newtab_html(&NewTabData::default());
         assert!(system.contains("prefers-color-scheme: dark"));
