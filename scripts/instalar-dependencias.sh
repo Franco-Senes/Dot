@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Instala las dependencias para compilar Search para Linux.
+# Instala las dependencias para compilar Dot para Linux.
 # Compatible con Debian/Ubuntu, Fedora, Arch y openSUSE.
 set -euo pipefail
 

@@ -4,12 +4,12 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-const APP_ID: &str = "io.github.searchlinux.Search";
+const APP_ID: &str = "dev.senes.Dot";
 
 #[derive(Debug, Parser)]
 #[command(
     name = "xtask",
-    about = "Utilidades de compilación e instalación de Search"
+    about = "Utilidades de compilación e instalación de Dot"
 )]
 struct Cli {
     #[command(subcommand)]
@@ -104,7 +104,7 @@ fn copy_dir_recursive(src: &Path, dst: &Path) -> Result<()> {
 fn install(root: &Path, destdir: &str, prefix: &Path) -> Result<()> {
     let dest_prefix = staged_root(destdir, prefix);
     let bin_dir = dest_prefix.join("bin");
-    let lib_dir = dest_prefix.join("lib").join("search");
+    let lib_dir = dest_prefix.join("lib").join("dot");
     let apps_dir = dest_prefix.join("share").join("applications");
     let metainfo_dir = dest_prefix.join("share").join("metainfo");
     let icons_scalable_dir = dest_prefix
@@ -183,9 +183,9 @@ fn install(root: &Path, destdir: &str, prefix: &Path) -> Result<()> {
         .with_context(|| format!("No se pudo instalar '{}'", schema_src.display()))?;
     compile_schemas(&schemas_dir)?;
 
-    let release_bin = root.join("target").join("release").join("search");
+    let release_bin = root.join("target").join("release").join("dot");
     if release_bin.is_file() {
-        let installed_bin = lib_dir.join("search");
+        let installed_bin = lib_dir.join("dot");
         fs::copy(&release_bin, &installed_bin)
             .with_context(|| format!("No se pudo instalar '{}'", release_bin.display()))?;
         #[cfg(unix)]
@@ -193,12 +193,12 @@ fn install(root: &Path, destdir: &str, prefix: &Path) -> Result<()> {
             use std::os::unix::fs::PermissionsExt;
             fs::set_permissions(&installed_bin, fs::Permissions::from_mode(0o755))?;
         }
-        let wrapper_bin = bin_dir.join("search");
+        let wrapper_bin = bin_dir.join("dot");
         if wrapper_bin.exists() {
             fs::remove_file(&wrapper_bin)?;
         }
         #[cfg(unix)]
-        std::os::unix::fs::symlink("../lib/search/search", &wrapper_bin)
+        std::os::unix::fs::symlink("../lib/dot/dot", &wrapper_bin)
             .with_context(|| format!("No se pudo crear enlace '{}'", wrapper_bin.display()))?;
     }
 

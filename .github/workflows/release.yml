@@ -21,23 +21,23 @@ jobs:
 
       - name: Validate metadata
         run: |
-          desktop-file-validate data/io.github.searchlinux.Search.desktop
-          appstreamcli validate --no-net data/io.github.searchlinux.Search.metainfo.xml
+          desktop-file-validate data/dev.senes.Dot.desktop
+          appstreamcli validate --no-net data/dev.senes.Dot.metainfo.xml
 
       - name: Build Flatpak bundle
         uses: flatpak/flatpak-github-actions/flatpak-builder@v6
         with:
-          bundle: io.github.searchlinux.Search.flatpak
-          manifest-path: build-aux/flatpak/io.github.searchlinux.Search.yml
+          bundle: dev.senes.Dot.flatpak
+          manifest-path: build-aux/flatpak/dev.senes.Dot.yml
           cache-key: flatpak-release-${{ github.ref_name }}
 
       - name: Generate SHA-256 checksums
-        run: sha256sum io.github.searchlinux.Search.flatpak > SHA256SUMS.txt
+        run: sha256sum dev.senes.Dot.flatpak > SHA256SUMS.txt
 
       - name: Publish GitHub Release
         uses: softprops/action-gh-release@v2
         with:
           files: |
-            io.github.searchlinux.Search.flatpak
+            dev.senes.Dot.flatpak
             SHA256SUMS.txt
           generate_release_notes: true

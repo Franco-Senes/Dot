@@ -9,13 +9,13 @@ PROFILE="${CARGO_PROFILE:-release}"
 CARGO_FLAGS=(--manifest-path "$WORKTREE_ROOT/Cargo.toml" --target-dir "$WORKTREE_ROOT/target")
 
 if [[ "$PROFILE" == "release" ]]; then
-  "$TOOLCHAIN_ROOT/sdk" cargo build --release -p search "${CARGO_FLAGS[@]}"
+  "$TOOLCHAIN_ROOT/sdk" cargo build --release -p dot "${CARGO_FLAGS[@]}"
 else
-  "$TOOLCHAIN_ROOT/sdk" cargo build -p search "${CARGO_FLAGS[@]}"
+  "$TOOLCHAIN_ROOT/sdk" cargo build -p dot "${CARGO_FLAGS[@]}"
 fi
 
-export SEARCH_BIN="$WORKTREE_ROOT/target/$PROFILE/search"
+export DOT_BIN="$WORKTREE_ROOT/target/$PROFILE/dot"
 
 "$TOOLCHAIN_ROOT/sdk-xvfb" \
-  cargo test -p search-bench --test headless_integration "${CARGO_FLAGS[@]}" -- \
+  cargo test -p dot-bench --test headless_integration "${CARGO_FLAGS[@]}" -- \
   --ignored --nocapture --test-threads=1

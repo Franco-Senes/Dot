@@ -2,9 +2,9 @@
 resolver = "2"
 members = [
     "crates/gnome-platform",
-    "crates/search-core",
-    "crates/search",
-    "crates/search-bench",
+    "crates/dot-core",
+    "crates/dot",
+    "crates/dot-bench",
     "crates/xtask",
 ]
 
@@ -12,7 +12,7 @@ members = [
 version = "0.1.0"
 edition = "2021"
 license = "MIT"
-authors = ["Office Commun", "search-linux contributors"]
+authors = ["Office Commun", "Dot contributors"]
 repository = "https://github.com/driceroland/Search"
 
 [workspace.dependencies]
@@ -42,4 +42,4 @@ url = "2"
 zeroize = "1"
 
 gnome-platform = { path = "crates/gnome-platform" }
-search-core = { path = "crates/search-core" }
+dot-core = { path = "crates/dot-core" }
