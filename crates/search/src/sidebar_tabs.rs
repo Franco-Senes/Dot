@@ -556,6 +556,23 @@ impl SidebarTabsInner {
         root.set_size_request(clamped_width, -1);
         root.set_vexpand(true);
 
+        // Marca minimalista de cabecera ("Dot").
+        let brand_header = BoxWidget::new(Orientation::Horizontal, 8);
+        brand_header.add_css_class("dot-brand-header");
+        brand_header.set_halign(Align::Start);
+        brand_header.set_valign(Align::Center);
+
+        let brand_dot = BoxWidget::new(Orientation::Horizontal, 0);
+        brand_dot.add_css_class("dot-brand-mark");
+        brand_dot.set_valign(Align::Center);
+
+        let brand_wordmark = Label::new(Some("Dot"));
+        brand_wordmark.add_css_class("dot-brand-wordmark");
+        brand_wordmark.set_xalign(0.0);
+
+        brand_header.append(&brand_dot);
+        brand_header.append(&brand_wordmark);
+
         // 0. Filtro en vivo de pestañas.
         let filter_entry = SearchEntry::new();
         filter_entry.set_placeholder_text("Filtrar pestañas…");
@@ -733,6 +750,7 @@ impl SidebarTabsInner {
         footer.append(&new_tab_btn);
         footer.append(&settings_btn);
 
+        root.append(&brand_header);
         root.append(&filter_entry);
         root.append(&favorites_box);
         root.append(&scrolled);

@@ -284,11 +284,7 @@ impl BrowserWindow {
     ) -> Result<Self> {
         let id = NEXT_WINDOW_ID.fetch_add(1, Ordering::Relaxed);
         let window = ApplicationWindow::new(app);
-        window.set_title(if is_private {
-            "Search — Privada"
-        } else {
-            "Search"
-        });
+        window.set_title(if is_private { "Dot — Privada" } else { "Dot" });
         window.set_default_size(1180, 780);
         if is_private {
             window.add_css_class("search-private-window");
@@ -2828,14 +2824,14 @@ impl BrowserWindow {
         let clean = page_title.trim();
         let full = if self.inner.is_private {
             if clean.is_empty() || clean == "Nueva pestaña" {
-                "Search — Privada".to_string()
+                "Dot — Privada".to_string()
             } else {
-                format!("{clean} — Privada")
+                format!("{clean} — Dot (Privada)")
             }
         } else if clean.is_empty() || clean == "Nueva pestaña" {
-            "Search".to_string()
+            "Dot".to_string()
         } else {
-            clean.to_string()
+            format!("{clean} — Dot")
         };
         self.inner.window.set_title(&full);
     }
