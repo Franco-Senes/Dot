@@ -134,14 +134,16 @@ fn short_host(raw: &str) -> String {
 
 fn theme_css(theme: NewTabTheme) -> &'static str {
     match theme {
+        // Exact libadwaita dark palette (@view_bg_color = #1e1e1e)
         NewTabTheme::Dark => {
-            ":root { --bg: #0c0c0d; --field: #141416; --field-hover: #19191c; --line: rgba(255,255,255,0.08); --line-focus: rgba(255,255,255,0.22); --fg: #ededee; --muted: #7e7e86; --faint: #4b4b52; }"
+            ":root { --bg: #1e1e1e; --field: rgba(255,255,255,0.06); --field-hover: rgba(255,255,255,0.09); --field-focus: #262626; --line: rgba(255,255,255,0.09); --line-focus: rgba(255,255,255,0.28); --fg: rgba(255,255,255,0.92); --muted: rgba(255,255,255,0.55); --faint: rgba(255,255,255,0.36); }"
         }
+        // Exact libadwaita light palette (@view_bg_color = #ffffff)
         NewTabTheme::Light => {
-            ":root { --bg: #f8f8f7; --field: #ffffff; --field-hover: #f2f2f0; --line: rgba(0,0,0,0.08); --line-focus: rgba(0,0,0,0.24); --fg: #111112; --muted: #6e6e73; --faint: #a1a1a8; }"
+            ":root { --bg: #ffffff; --field: rgba(0,0,0,0.05); --field-hover: rgba(0,0,0,0.075); --field-focus: #ffffff; --line: rgba(0,0,0,0.09); --line-focus: rgba(0,0,0,0.28); --fg: rgba(0,0,0,0.84); --muted: rgba(0,0,0,0.55); --faint: rgba(0,0,0,0.38); }"
         }
         NewTabTheme::System => {
-            ":root { --bg: #f8f8f7; --field: #ffffff; --field-hover: #f2f2f0; --line: rgba(0,0,0,0.08); --line-focus: rgba(0,0,0,0.24); --fg: #111112; --muted: #6e6e73; --faint: #a1a1a8; }\n@media (prefers-color-scheme: dark) { :root { --bg: #0c0c0d; --field: #141416; --field-hover: #19191c; --line: rgba(255,255,255,0.08); --line-focus: rgba(255,255,255,0.22); --fg: #ededee; --muted: #7e7e86; --faint: #4b4b52; } }"
+            ":root { --bg: #ffffff; --field: rgba(0,0,0,0.05); --field-hover: rgba(0,0,0,0.075); --field-focus: #ffffff; --line: rgba(0,0,0,0.09); --line-focus: rgba(0,0,0,0.28); --fg: rgba(0,0,0,0.84); --muted: rgba(0,0,0,0.55); --faint: rgba(0,0,0,0.38); }\n@media (prefers-color-scheme: dark) { :root { --bg: #1e1e1e; --field: rgba(255,255,255,0.06); --field-hover: rgba(255,255,255,0.09); --field-focus: #262626; --line: rgba(255,255,255,0.09); --line-focus: rgba(255,255,255,0.28); --fg: rgba(255,255,255,0.92); --muted: rgba(255,255,255,0.55); --faint: rgba(255,255,255,0.36); } }"
         }
     }
 }
@@ -173,7 +175,7 @@ html, body {{
   height: 100%;
   background: var(--bg);
   color: var(--fg);
-  font-family: -apple-system, BlinkMacSystemFont, "Inter", "Segoe UI", system-ui, sans-serif;
+  font-family: "Adwaita Sans", "Cantarell", "Noto Sans", system-ui, -apple-system, sans-serif;
   font-size: 14px;
   line-height: 1.5;
   -webkit-font-smoothing: antialiased;
@@ -189,13 +191,13 @@ main {{
   align-items: center;
   justify-content: center;
   width: 100%;
-  max-width: 540px;
+  max-width: 520px;
   margin: 0 auto;
   padding: 24px 20px 64px;
 }}
 .dot-mark {{
   display: block;
-  margin-bottom: 30px;
+  margin-bottom: 26px;
   color: var(--fg);
 }}
 .search-form {{
@@ -204,7 +206,7 @@ main {{
 }}
 .search-ico {{
   position: absolute;
-  left: 16px;
+  left: 15px;
   top: 50%;
   transform: translateY(-50%);
   width: 15px;
@@ -216,20 +218,20 @@ main {{
 }}
 .search-input {{
   width: 100%;
-  height: 44px;
-  padding: 0 18px 0 42px;
+  height: 40px;
+  padding: 0 16px 0 40px;
   border-radius: 999px;
   border: 1px solid var(--line);
   background: var(--field);
   color: var(--fg);
   font: inherit;
-  font-size: 14.5px;
+  font-size: 14px;
   outline: none;
   transition: border-color 140ms ease, background-color 140ms ease;
 }}
 .search-input::placeholder {{ color: var(--muted); }}
 .search-input:hover {{ background: var(--field-hover); }}
-.search-input:focus {{ border-color: var(--line-focus); background: var(--field); }}
+.search-input:focus {{ border-color: var(--line-focus); background: var(--field-focus); }}
 .dial {{
   display: flex;
   flex-wrap: wrap;
@@ -415,7 +417,7 @@ mod tests {
         assert!(html.contains("Async Rust"));
         assert!(html.contains("6 min"));
         assert!(html.contains("<kbd>Ctrl+Shift+T</kbd>"));
-        assert!(html.contains("--bg: #0c0c0d;"));
+        assert!(html.contains("--bg: #1e1e1e;"));
         assert!(!html.contains("#4f8cff"));
         assert!(!html.contains("<h2>"));
     }
@@ -426,7 +428,7 @@ mod tests {
             theme: NewTabTheme::Light,
             ..Default::default()
         });
-        assert!(light.contains("--bg: #f8f8f7;"));
+        assert!(light.contains("--bg: #ffffff;"));
         assert!(!light.contains("prefers-color-scheme: dark"));
         assert!(!light.contains("Cerradas:"));
 
