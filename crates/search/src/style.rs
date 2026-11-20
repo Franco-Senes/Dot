@@ -26,7 +26,7 @@ entry:focus-visible,
 row:focus-visible {
     outline-style: solid;
     outline-width: 2px;
-    outline-color: alpha(@accent_bg_color, 0.72);
+    outline-color: alpha(currentColor, 0.42);
     outline-offset: 1px;
 }
 
@@ -115,9 +115,9 @@ button.workspace-pill:hover {
 
 .workspace-pill.active,
 button.workspace-pill.active {
-    background-color: alpha(@accent_bg_color, 0.18);
-    border-color: alpha(@accent_bg_color, 0.45);
-    color: @accent_color;
+    background-color: alpha(currentColor, 0.14);
+    border-color: alpha(currentColor, 0.28);
+    color: @window_fg_color;
     font-weight: 600;
 }
 
@@ -165,16 +165,57 @@ button.destructive:hover,
 }
 
 /* ============================================================================
- * Cabecera minimalista y barra de direcciones (Omnibox)
+ * Cabecera minimalista, marca Dot y barra de direcciones (Omnibox)
  * ============================================================================ */
+.dot-brand-header {
+    padding: 4px 6px 2px 6px;
+}
+
+.dot-brand-mark {
+    min-width: 9px;
+    min-height: 9px;
+    border-radius: 999px;
+    background-color: currentColor;
+    opacity: 0.92;
+}
+
+.dot-brand-wordmark {
+    font-size: 0.92rem;
+    font-weight: 700;
+    letter-spacing: -0.02em;
+    opacity: 0.92;
+}
+
 headerbar.search-headerbar {
     min-height: 42px;
     padding-top: 3px;
     padding-bottom: 3px;
+    box-shadow: none;
+    border-bottom: 1px solid alpha(currentColor, 0.055);
+}
+
+headerbar.search-headerbar button,
+headerbar.search-headerbar togglebutton {
+    background-color: transparent;
+    border-color: transparent;
+    box-shadow: none;
+    opacity: 0.68;
+}
+
+headerbar.search-headerbar button:hover,
+headerbar.search-headerbar togglebutton:hover {
+    opacity: 1.0;
+    background-color: alpha(currentColor, 0.07);
+}
+
+headerbar.search-headerbar button.active,
+headerbar.search-headerbar togglebutton:checked {
+    opacity: 1.0;
+    background-color: alpha(currentColor, 0.11);
 }
 
 window.search-private-window headerbar.search-headerbar {
-    background-color: mix(@headerbar_bg_color, @accent_bg_color, 0.08);
+    background-color: mix(@headerbar_bg_color, currentColor, 0.04);
 }
 
 label.search-private-badge {
@@ -182,19 +223,19 @@ label.search-private-badge {
     font-weight: 600;
     padding: 2px 9px;
     border-radius: 999px;
-    background-color: alpha(@accent_bg_color, 0.16);
-    color: @accent_color;
+    background-color: alpha(currentColor, 0.10);
+    color: @window_fg_color;
     margin-left: 6px;
 }
 
 entry.search-address-entry {
     min-height: 31px;
-    border-radius: 10px;
-    padding-left: 12px;
-    padding-right: 12px;
-    font-size: 0.94rem;
-    background-color: alpha(currentColor, 0.055);
-    border: 1px solid alpha(currentColor, 0.08);
+    border-radius: 999px;
+    padding-left: 14px;
+    padding-right: 14px;
+    font-size: 0.93rem;
+    background-color: alpha(currentColor, 0.045);
+    border: 1px solid alpha(currentColor, 0.065);
     box-shadow: none;
     transition: background-color 140ms cubic-bezier(0.2, 0, 0, 1),
                 border-color 140ms cubic-bezier(0.2, 0, 0, 1),
@@ -202,13 +243,14 @@ entry.search-address-entry {
 }
 
 entry.search-address-entry:hover {
-    background-color: alpha(currentColor, 0.085);
+    background-color: alpha(currentColor, 0.075);
+    border-color: alpha(currentColor, 0.11);
 }
 
 entry.search-address-entry:focus-within {
     background-color: @view_bg_color;
-    border-color: alpha(@accent_bg_color, 0.65);
-    box-shadow: 0 0 0 2px alpha(@accent_bg_color, 0.24);
+    border-color: alpha(currentColor, 0.28);
+    box-shadow: 0 0 0 2px alpha(currentColor, 0.08);
 }
 
 entry.search-address-entry.insecure-http {
@@ -246,8 +288,8 @@ box.search-stage-card {
 
 box.search-main-hbox.cards-enabled box.search-stage-card {
     border-radius: 11px;
-    border: 1px solid alpha(currentColor, 0.10);
-    box-shadow: 0 2px 10px alpha(#000000, 0.08), 0 0 1px alpha(#000000, 0.12);
+    border: 1px solid alpha(currentColor, 0.07);
+    box-shadow: 0 2px 10px alpha(#000000, 0.07), 0 0 1px alpha(#000000, 0.09);
 }
 
 /* Barra superior compacta opcional */
@@ -285,7 +327,7 @@ label.search-status-pill {
 
 box.search-find-bar {
     background-color: @headerbar_bg_color;
-    border-bottom: 1px solid alpha(currentColor, 0.10);
+    border-bottom: 1px solid alpha(currentColor, 0.06);
     padding: 6px 10px;
 }
 
@@ -348,7 +390,7 @@ label.search-find-count.no-matches {
  * ============================================================================ */
 box.search-sidebar {
     background-color: @sidebar_bg_color;
-    border-right: 1px solid alpha(currentColor, 0.08);
+    border-right: 1px solid alpha(currentColor, 0.055);
     padding: 7px 7px 6px 7px;
 }
 
@@ -365,7 +407,7 @@ box.search-sidebar-resize-handle {
 
 box.search-sidebar-resize-handle:hover,
 box.search-sidebar-resize-handle.dragging {
-    border-right-color: alpha(@accent_bg_color, 0.55);
+    border-right-color: alpha(currentColor, 0.28);
 }
 
 box.search-sidebar-favorites {
@@ -394,8 +436,8 @@ button.search-fav-tile:hover {
 
 button.search-fav-tile.active {
     background-color: @view_bg_color;
-    border-color: alpha(@accent_bg_color, 0.55);
-    box-shadow: 0 2px 8px alpha(#000000, 0.10), 0 1px 2px alpha(#000000, 0.06);
+    border-color: alpha(currentColor, 0.28);
+    box-shadow: 0 2px 8px alpha(#000000, 0.08), 0 1px 2px alpha(#000000, 0.05);
 }
 
 box.search-sidebar-section-header {
@@ -515,7 +557,7 @@ box.search-sidebar box.search-tab-row button.search-tab-mini-btn:focus-visible {
 
 box.search-sidebar-footer {
     padding-top: 4px;
-    border-top: 1px solid alpha(currentColor, 0.07);
+    border-top: 1px solid alpha(currentColor, 0.055);
 }
 
 button.search-sidebar-new-tab {
@@ -750,7 +792,7 @@ label.search-omnibox-badge {
 
 box.search-side-panel {
     background-color: @sidebar_bg_color;
-    border-left: 1px solid alpha(currentColor, 0.09);
+    border-left: 1px solid alpha(currentColor, 0.06);
 }
 
 label.search-panel-title {
@@ -914,9 +956,9 @@ button.space-pill:hover {
 
 .space-pill.active,
 button.space-pill.active {
-    background-color: alpha(@accent_bg_color, 0.18);
-    border-color: alpha(@accent_bg_color, 0.45);
-    color: @accent_color;
+    background-color: alpha(currentColor, 0.14);
+    border-color: alpha(currentColor, 0.28);
+    color: @window_fg_color;
     font-weight: 600;
 }
 
@@ -961,17 +1003,17 @@ button.tidy-btn {
     font-weight: 600;
     padding: 3px 10px;
     border-radius: 999px;
-    border: 1px solid alpha(@accent_bg_color, 0.28);
-    background-color: alpha(@accent_bg_color, 0.10);
-    color: @accent_color;
+    border: 1px solid alpha(currentColor, 0.14);
+    background-color: alpha(currentColor, 0.06);
+    color: @window_fg_color;
     transition: background-color 120ms cubic-bezier(0.2, 0, 0, 1),
                 border-color 120ms cubic-bezier(0.2, 0, 0, 1);
 }
 
 .tidy-btn:hover,
 button.tidy-btn:hover {
-    background-color: alpha(@accent_bg_color, 0.18);
-    border-color: alpha(@accent_bg_color, 0.45);
+    background-color: alpha(currentColor, 0.11);
+    border-color: alpha(currentColor, 0.24);
 }
 "#;
 
@@ -1025,6 +1067,8 @@ mod tests {
         assert!(!BASE_CSS.contains("margin-end"));
         assert!(!BASE_CSS.contains("padding-start"));
         assert!(!BASE_CSS.contains("padding-end"));
+        assert!(!BASE_CSS.contains("border-inline-start"));
+        assert!(!BASE_CSS.contains("border-inline-end"));
         assert!(!BASE_CSS.contains("transition: all"));
         assert!(!BASE_CSS.contains("transition-property: all"));
     }
@@ -1044,6 +1088,9 @@ mod tests {
     #[test]
     fn base_css_contains_arc_and_omnibox_superpower_classes() {
         for selector in [
+            ".dot-brand-header",
+            ".dot-brand-mark",
+            ".dot-brand-wordmark",
             ".space-pill",
             ".space-pill.active",
             ".omnibox-calc-row",

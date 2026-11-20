@@ -614,6 +614,16 @@ impl AppController {
     }
 }
 
+fn set_glib_application_name(name: &std::ffi::CStr) {
+    unsafe extern "C" {
+        fn g_set_application_name(application_name: *const libc::c_char);
+    }
+    // Safety: `name` is a valid NUL-terminated CStr; `g_set_application_name` copies it internally.
+    unsafe {
+        g_set_application_name(name.as_ptr());
+    }
+}
+
 /// Ejecuta la aplicación GTK4/libadwaita + CEF y devuelve el código de salida del proceso.
 pub fn run(
     startup_instant: Instant,
@@ -629,6 +639,7 @@ pub fn run(
         ApplicationFlags::HANDLES_OPEN
     };
 
+    set_glib_application_name(c"Dot");
     let app = Application::new(APP_ID, flags);
     let session_enabled = !matches!(cli.smoke_mode, SmokeMode::SingleUrl(_));
     let controller = AppController::new(
