@@ -189,6 +189,63 @@ dependencies = [
 ]
 
 [[package]]
+name = "dot"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "cef",
+ "dot-core",
+ "gnome-platform",
+ "libc",
+ "once_cell",
+ "percent-encoding",
+ "serde",
+ "serde_json",
+ "url",
+ "zeroize",
+]
+
+[[package]]
+name = "dot-bench"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "clap",
+ "dot-core",
+ "serde",
+ "serde_json",
+ "thiserror",
+]
+
+[[package]]
+name = "dot-core"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "base64",
+ "crc32fast",
+ "flate2",
+ "form_urlencoded",
+ "gnome-platform",
+ "idna",
+ "indexmap",
+ "libc",
+ "memchr",
+ "once_cell",
+ "percent-encoding",
+ "regex",
+ "ring",
+ "semver",
+ "serde",
+ "serde_json",
+ "strsim",
+ "thiserror",
+ "time",
+ "url",
+ "zeroize",
+]
+
+[[package]]
 name = "equivalent"
 version = "1.0.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -504,63 +561,6 @@ dependencies = [
  "libc",
  "untrusted",
  "windows-sys 0.52.0",
-]
-
-[[package]]
-name = "search"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "cef",
- "gnome-platform",
- "libc",
- "once_cell",
- "percent-encoding",
- "search-core",
- "serde",
- "serde_json",
- "url",
- "zeroize",
-]
-
-[[package]]
-name = "search-bench"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "clap",
- "search-core",
- "serde",
- "serde_json",
- "thiserror",
-]
-
-[[package]]
-name = "search-core"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "base64",
- "crc32fast",
- "flate2",
- "form_urlencoded",
- "gnome-platform",
- "idna",
- "indexmap",
- "libc",
- "memchr",
- "once_cell",
- "percent-encoding",
- "regex",
- "ring",
- "semver",
- "serde",
- "serde_json",
- "strsim",
- "thiserror",
- "time",
- "url",
- "zeroize",
 ]
 
 [[package]]

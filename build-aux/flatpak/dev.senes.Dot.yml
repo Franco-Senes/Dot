@@ -1,0 +1,65 @@
+id: dev.senes.Dot
+runtime: org.gnome.Platform
+runtime-version: '51'
+sdk: org.gnome.Sdk
+sdk-extensions:
+  - org.freedesktop.Sdk.Extension.rust-stable
+command: dot
+
+finish-args:
+  # User-initiated HTTP/HTTPS/DNS/WebSocket browsing traffic (zero background telemetry)
+  - --share=network
+  # POSIX/SYSV shared memory required between main process and CEF/Chromium subprocesses
+  - --share=ipc
+  # Native Wayland presentation
+  - --socket=wayland
+  # Fallback for X11-only desktop sessions
+  - --socket=fallback-x11
+  # GPU acceleration and VA-API hardware video decoding
+  - --device=dri
+  # Web audio playback via PipeWire/PulseAudio
+  - --socket=pulseaudio
+  # Secret Service D-Bus access for Vault password storage (no plaintext passwords on disk)
+  - --talk-name=org.freedesktop.secrets
+  # Standard Downloads folder only (never --filesystem=home or --filesystem=host)
+  - --filesystem=xdg-download
+
+build-options:
+  append-path: /usr/lib/sdk/rust-stable/bin
+  env:
+    CARGO_HOME: /run/build/dot/cargo
+    CEF_PATH: /app/lib/dot
+
+modules:
+  - name: cef-prebuilt
+    buildsystem: simple
+    build-commands:
+      - mkdir -p /app/lib/dot/locales
+      - install -Dm755 Release/libcef.so /app/lib/dot/libcef.so
+      - install -Dm755 Release/libEGL.so /app/lib/dot/libEGL.so
+      - install -Dm755 Release/libGLESv2.so /app/lib/dot/libGLESv2.so
+      - install -Dm755 Release/libvk_swiftshader.so /app/lib/dot/libvk_swiftshader.so
+      - install -Dm755 Release/libvulkan.so.1 /app/lib/dot/libvulkan.so.1
+      - install -Dm644 Release/vk_swiftshader_icd.json /app/lib/dot/vk_swiftshader_icd.json
+      - install -Dm644 Release/v8_context_snapshot.bin /app/lib/dot/v8_context_snapshot.bin
+      - install -Dm644 Resources/icudtl.dat /app/lib/dot/icudtl.dat
+      - install -Dm644 Resources/resources.pak /app/lib/dot/resources.pak
+      - install -Dm644 Resources/chrome_100_percent.pak /app/lib/dot/chrome_100_percent.pak
+      - install -Dm644 Resources/chrome_200_percent.pak /app/lib/dot/chrome_200_percent.pak
+      - cp -a Resources/locales/. /app/lib/dot/locales/
+    sources:
+      - type: archive
+        url: https://cef-builds.spotifycdn.com/cef_binary_156.0.30%2Bg6028375%2Bchromium-156.0.8078.96_linux64_minimal.tar.bz2
+        # Update checksum before publishing to Flathub (matching the pinned CEF 156.0.30 tarball)
+        sha256: REPLACE_WITH_PINNED_CEF_156_0_30_LINUX64_MINIMAL_SHA256
+        strip-components: 1
+
+  - name: dot
+    buildsystem: simple
+    build-commands:
+      - cargo --offline build --release --package dot
+      - cargo --offline run --release --package xtask -- install --prefix /app
+    sources:
+      - type: dir
+        path: ../..
+      - cargo-sources.json

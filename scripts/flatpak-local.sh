@@ -1,13 +1,13 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Minimal bash wrapper to build and install the Search Flatpak locally.
+# Minimal bash wrapper to build and install the Dot Flatpak locally.
 # Usage:
 #   ./scripts/flatpak-local.sh            # build & install in --user scope
-#   ./scripts/flatpak-local.sh --bundle   # also export io.github.searchlinux.Search.flatpak
+#   ./scripts/flatpak-local.sh --bundle   # also export dev.senes.Dot.flatpak
 
 ROOT="$(cd -- "$(dirname -- "$0")/.." && pwd)"
-APP_ID="io.github.searchlinux.Search"
+APP_ID="dev.senes.Dot"
 MANIFEST="$ROOT/build-aux/flatpak/$APP_ID.yml"
 BUILD_DIR="$ROOT/target/flatpak-build"
 REPO_DIR="$ROOT/target/flatpak-repo"
