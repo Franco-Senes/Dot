@@ -358,7 +358,7 @@ impl HistoryPanel {
                     se.set_text("");
                     se.grab_focus();
                 } else {
-                    cb("plasma://newtab".to_string(), false);
+                    cb("dot://newtab".to_string(), false);
                 }
             });
         }

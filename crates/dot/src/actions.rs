@@ -405,7 +405,7 @@ pub fn present_shortcuts_dialog(parent: &ApplicationWindow) {
         ("Forzar modo oscuro CSS", "<Alt><Shift>d"),
         ("Arc Boosts (personalizar sitio)", "<Control><Alt>b"),
         ("Little Arc (ventana rápida)", "<Control><Alt>n"),
-        ("Ajustes (plasma://settings)", "<Control>comma"),
+        ("Ajustes (dot://settings)", "<Control>comma"),
         ("Atajos de teclado", "<Control>question"),
         ("Salir de Dot", "<Control>q"),
     ] {

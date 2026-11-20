@@ -717,9 +717,8 @@ fn build_general_section(
     }
     let start_page_row = SwitchRow::new();
     start_page_row.set_title("Abrir página de inicio (dot://newtab) al crear pestaña");
-    start_page_row.set_subtitle(
-        "Muestra la página de inicio Plasma con accesos rápidos en cada nueva pestaña",
-    );
+    start_page_row
+        .set_subtitle("Muestra la página de inicio Dot con accesos rápidos en cada nueva pestaña");
     start_page_row.set_active(START_PAGE_NEWTAB.with(|c| c.get()));
     {
         let row_ref = start_page_row.clone();
@@ -734,7 +733,7 @@ fn build_general_section(
         "general",
         "General",
         "Página de inicio (dot://newtab)",
-        "Mostrar página de inicio Plasma en cada nueva pestaña",
+        "Mostrar página de inicio Dot en cada nueva pestaña",
         "start page inicio newtab plasma",
     );
     col.append(&startup_group);
